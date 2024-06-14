@@ -1533,6 +1533,7 @@ def profile():
         oauth_status = None
         local_oauth_check = {}
 
+
     if request.method == "POST":
         change_profile(kobo_support, local_oauth_check, oauth_status, translations, languages)
     return render_title_template("user_edit.html",

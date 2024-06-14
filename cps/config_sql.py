@@ -96,6 +96,8 @@ class _Settings(_Base):
     config_remote_login = Column(Boolean, default=False)
     config_kobo_sync = Column(Boolean, default=False)
 
+    config_enable_edit_book_date = Column(Boolean, default=False);
+
     config_default_role = Column(SmallInteger, default=0)
     config_default_show = Column(SmallInteger, default=constants.ADMIN_USER_SIDEBAR)
     config_default_language = Column(String(3), default="all")
@@ -255,6 +257,9 @@ class ConfigSQL(object):
 
     def role_delete_books(self):
         return self._has_role(constants.ROLE_DELETE_BOOKS)
+    
+    def role_edit_book_date(self):
+        return self._has_role(constants.ROLE_EDIT_DATE)
 
     def show_element_new_user(self, value):
         return constants.has_flag(self.config_default_show, value)

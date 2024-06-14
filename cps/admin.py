@@ -1424,6 +1424,7 @@ def edit_user(user_id):
         resp = _handle_edit_user(to_save, content, languages, translations, kobo_support)
         if resp:
             return resp
+        
     return render_title_template("user_edit.html",
                                  translations=translations,
                                  languages=languages,
@@ -1772,6 +1773,7 @@ def _configuration_update_helper():
                             and config.config_login_type == constants.LOGIN_LDAP)
         _config_checkbox_int(to_save, "config_public_reg")
         _config_checkbox_int(to_save, "config_register_email")
+        _config_checkbox_int(to_save, "config_enable_edit_book_date")
         reboot_required |= _config_checkbox_int(to_save, "config_kobo_sync")
         _config_int(to_save, "config_external_port")
         _config_checkbox_int(to_save, "config_kobo_proxy")

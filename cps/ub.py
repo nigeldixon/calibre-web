@@ -159,6 +159,9 @@ class UserBase:
 
     def role_viewer(self):
         return self._has_role(constants.ROLE_VIEWER)
+    
+    def role_edit_date(self):
+        return self._has_role(constants.ROLE_EDIT_DATE)
 
     @property
     def is_active(self):

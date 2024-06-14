@@ -1,0 +1,2 @@
+# Kobo integration
+jsonschema>=3.2.0,<4.23.0

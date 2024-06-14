@@ -68,7 +68,13 @@
       <label for="description">{{_('Description')}}</label>
       <textarea class="form-control" name="description" id="description" rows="7">{% if book.comments %}{{book.comments[0].text}}{%endif%}</textarea>
     </div>
-
+    {% if (current_user.role_edit_date() or current_user.role_admin() ) and config.config_enable_edit_book_date %}
+    <label for="timestamp">{{_('Book Date')}} {{formatdateinput}}</label>
+    <div class="form-group relative">
+        <input type="text" class="datepicker form-control" name="timestamp" id="timestamp" value="{% if book.timestamp %}{{book.timestamp|formatdateinput}}{% endif %}">
+        <input type="text" class="form-control fake-input hidden" id="fake_timestamp" value="{% if book.timestamp %}{{book.timestamp|formatdate}}{% endif %}">
+      </div>
+    {% endif %}
     <div class="form-group">
       <label>{{_('Identifiers')}}</label>
       <table class="table" id="identifier-table">

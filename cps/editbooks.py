@@ -214,6 +214,9 @@ def edit_book(book_id):
         else:
             book.pubdate = db.Books.DEFAULT_PUBDATE
 
+        if to_save.get("timestamp", None):
+            book.timestamp = datetime.strptime(to_save["timestamp"], "%Y-%m-%d")
+
         if modify_date:
             book.last_modified = datetime.utcnow()
             kobo_sync_status.remove_synced_book(edited_books_id, all=True)
@@ -943,6 +946,7 @@ def render_edit_book(book_id):
                 allowed_conversion_formats.remove(file.format.lower())
     if kepub_possible:
         allowed_conversion_formats.append('kepub')
+
     return render_title_template('book_edit.html', book=book, authors=author_names, cc=cc,
                                  title=_("edit metadata"), page="editbook",
                                  conversion_formats=allowed_conversion_formats,
