@@ -309,7 +309,7 @@ def generate_sync_response(sync_token, sync_results, set_cont=False):
         # Merge in sync results from the official Kobo store.
         try:
             store_response = make_request_to_kobo_store(sync_token)
-
+            log.debug(store_response)
             store_sync_results = store_response.json()
             sync_results += store_sync_results
             sync_token.merge_from_store_response(store_response)
