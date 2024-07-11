@@ -768,6 +768,7 @@ def HandleStateRequest(book_uuid):
 
         try:
             request_data = request.json
+            log.debug(request_data)
             request_reading_state = request_data["ReadingStates"][0]
 
             request_bookmark = request_reading_state["CurrentBookmark"]
