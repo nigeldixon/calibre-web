@@ -48,7 +48,7 @@ import requests
 from . import config, logger, kobo_auth, db, calibre_db, helper, shelf as shelf_lib, ub, csrf, kobo_sync_status
 from . import isoLanguages
 from .epub import get_epub_layout
-from .constants import COVER_THUMBNAIL_SMALL
+from .constants import COVER_THUMBNAIL_SMALL #, sqlalchemy_version2
 from .helper import get_download_link
 from .services import SyncToken as SyncToken
 from .web import download_required
@@ -145,7 +145,7 @@ def HandleSyncRequest():
     sync_token = SyncToken.SyncToken.from_headers(request.headers)
     log.info("Kobo library sync request received")
     log.debug("SyncToken: {}".format(sync_token))
-    log.debug("Download link format {}".format(get_download_url_for_book('[bookid]', '[bookformat]')))
+    log.debug("Download link format {}".format(get_download_url_for_book('[bookid]','[bookformat]')))
     if not current_app.wsgi_app.is_proxied:
         log.debug('Kobo: Received unproxied request, changed request port to external server port')
 
@@ -212,7 +212,7 @@ def HandleSyncRequest():
 
         kobo_reading_state = get_or_create_reading_state(book.Books.id)
         entitlement = {
-            "BookEntitlement": create_book_entitlement(book.Books, archived=(book.is_archived==True)),
+            "BookEntitlement": create_book_entitlement(book.Books, archived=(book.is_archived == True)),
             "BookMetadata": get_metadata(book.Books),
         }
 
@@ -756,7 +756,7 @@ def create_kobo_tag(shelf):
 def HandleStateRequest(book_uuid):
     book = calibre_db.get_book_by_uuid(book_uuid)
     if not book or not book.data:
-        log.info("Book %s not found in database", book_uuid)
+        log.info("Book %s has issued status update", book_uuid)
         return redirect_or_proxy_request()
 
     kobo_reading_state = get_or_create_reading_state(book.id)
@@ -764,6 +764,8 @@ def HandleStateRequest(book_uuid):
     if request.method == "GET":
         return jsonify([get_kobo_reading_state_response(book, kobo_reading_state)])
     else:
+        log.info("Book %s not found in database", book_uuid)
+        
         update_results_response = {"EntitlementId": book_uuid}
 
         try:
@@ -922,8 +924,8 @@ def HandleCoverImageRequest(book_uuid, width, height, Quality, isGreyscale):
     log.debug("Redirecting request for cover image of unknown book %s to Kobo" % book_uuid)
     return redirect(KOBO_IMAGEHOST_URL +
                     "/{book_uuid}/{width}/{height}/false/image.jpg".format(book_uuid=book_uuid,
-                                                                           width=width,
-                                                                           height=height), 307)
+                                                                            width=width,
+                                                                            height=height), 307)
 
 
 @kobo.route("")
@@ -952,8 +954,7 @@ def HandleBookDeletionRequest(book_uuid):
 @csrf.exempt
 @kobo.route("/v1/library/<dummy>", methods=["DELETE", "GET"])
 def HandleUnimplementedRequest(dummy=None):
-    log.debug("Unimplemented Library Request received: %s (request is forwarded to kobo if configured)",
-              request.base_url)
+    log.debug("Unimplemented Library Request received: %s (request is forwarded to kobo if configured)", request.base_url)
     return redirect_or_proxy_request()
 
 
@@ -1006,8 +1007,7 @@ def handle_getests():
 @kobo.route("/v1/affiliate", methods=["GET", "POST"])
 @kobo.route("/v1/deals", methods=["GET", "POST"])
 def HandleProductsRequest(dummy=None):
-    log.debug("Unimplemented Products Request received: %s (request is forwarded to kobo if configured)",
-              request.base_url)
+    log.debug("Unimplemented Products Request received: %s (request is forwarded to kobo if configured)", request.base_url)
     return redirect_or_proxy_request()
 
 
@@ -1024,7 +1024,7 @@ def make_calibre_web_auth_response():
                 "RefreshToken": RefreshToken,
                 "TokenType": "Bearer",
                 "TrackingId": str(uuid.uuid4()),
-                "UserKey": content.get('UserKey', ""),
+                "UserKey": content.get('UserKey',""),
             }
         )
     )
