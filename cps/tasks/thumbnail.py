@@ -19,14 +19,14 @@
 import os
 from shutil import copyfile, copyfileobj
 from urllib.request import urlopen
+from io import BytesIO
+from datetime import datetime, timezone
 
 from .. import constants
 from cps import config, db, fs, gdriveutils, logger, ub
 from cps.services.worker import CalibreTask, STAT_CANCELLED, STAT_ENDED
-from datetime import datetime
 from sqlalchemy import func, text, or_
 from flask_babel import lazy_gettext as N_
-
 try:
     from wand.image import Image
     use_IM = True
@@ -69,7 +69,6 @@ class TaskGenerateCoverThumbnails(CalibreTask):
         self.log = logger.create()
         self.book_id = book_id
         self.app_db_session = ub.get_new_session_instance()
-        # self.calibre_db = db.CalibreDB(expire_on_commit=False, init=True)
         self.cache = fs.FileSystem()
         self.resolutions = [
             constants.COVER_THUMBNAIL_SMALL,
@@ -123,7 +122,7 @@ class TaskGenerateCoverThumbnails(CalibreTask):
             .query(ub.Thumbnail) \
             .filter(ub.Thumbnail.type == constants.THUMBNAIL_TYPE_COVER) \
             .filter(ub.Thumbnail.entity_id == book_id) \
-            .filter(or_(ub.Thumbnail.expiration.is_(None), ub.Thumbnail.expiration > datetime.utcnow())) \
+            .filter(or_(ub.Thumbnail.expiration.is_(None), ub.Thumbnail.expiration > datetime.now(timezone.utc))) \
             .all()
 
     def create_book_cover_thumbnails(self, book):
@@ -165,7 +164,7 @@ class TaskGenerateCoverThumbnails(CalibreTask):
             self.app_db_session.rollback()
 
     def update_book_cover_thumbnail(self, book, thumbnail):
-        thumbnail.generated_at = datetime.utcnow()
+        thumbnail.generated_at = datetime.now(timezone.utc)
 
         try:
             self.app_db_session.commit()
@@ -182,13 +181,11 @@ class TaskGenerateCoverThumbnails(CalibreTask):
                 if not gdriveutils.is_gdrive_ready():
                     raise Exception('Google Drive is configured but not ready')
 
-                web_content_link = gdriveutils.get_cover_via_gdrive(book.path)
-                if not web_content_link:
+                content = gdriveutils.get_cover_via_gdrive(book.path)
+                if not content:
                     raise Exception('Google Drive cover url not found')
-
-                stream = None
                 try:
-                    stream = urlopen(web_content_link)
+                    stream = BytesIO(content)
                     with Image(file=stream) as img:
                         filename = self.cache.get_cache_file_path(thumbnail.filename,
                                                                   constants.CACHE_TYPE_THUMBNAILS)
@@ -324,12 +321,12 @@ class TaskGenerateSeriesThumbnails(CalibreTask):
             .all()
 
     def get_series_thumbnails(self, series_id):
-        return self.app_db_session \
-            .query(ub.Thumbnail) \
-            .filter(ub.Thumbnail.type == constants.THUMBNAIL_TYPE_SERIES) \
-            .filter(ub.Thumbnail.entity_id == series_id) \
-            .filter(or_(ub.Thumbnail.expiration.is_(None), ub.Thumbnail.expiration > datetime.utcnow())) \
-            .all()
+        return (self.app_db_session
+            .query(ub.Thumbnail)
+            .filter(ub.Thumbnail.type == constants.THUMBNAIL_TYPE_SERIES)
+            .filter(ub.Thumbnail.entity_id == series_id)
+            .filter(or_(ub.Thumbnail.expiration.is_(None), ub.Thumbnail.expiration > datetime.now(timezone.utc)))
+            .all())
 
     def create_series_thumbnail(self, series, series_books, resolution):
         thumbnail = ub.Thumbnail()
@@ -348,7 +345,7 @@ class TaskGenerateSeriesThumbnails(CalibreTask):
             self.app_db_session.rollback()
 
     def update_series_thumbnail(self, series_books, thumbnail):
-        thumbnail.generated_at = datetime.utcnow()
+        thumbnail.generated_at = datetime.now(timezone.utc)
 
         try:
             self.app_db_session.commit()
