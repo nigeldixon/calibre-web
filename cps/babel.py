@@ -34,7 +34,7 @@ def get_user_locale_language(user_language):
 
 
 def get_available_locale():
-    return [Locale('en')] + babel.list_translations()
+    return [Locale('en')] + [Locale('en_GB')] + babel.list_translations()
 
 
 def get_available_translations():

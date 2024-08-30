@@ -4,7 +4,7 @@
 /* global Bloodhound, language, Modernizr, tinymce, getPath */
 
 if ($("#comments").length) {
-    tinymce.init({
+   tinymce.init({
         selector: "#comments",
         plugins: 'code',
         branding: false,
