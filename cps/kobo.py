@@ -41,13 +41,12 @@ from werkzeug.datastructures import Headers
 from sqlalchemy import func
 from sqlalchemy.sql.expression import and_, or_
 from sqlalchemy.exc import StatementError
-from sqlalchemy.sql import select
 import requests
 
 from . import config, logger, kobo_auth, db, calibre_db, helper, shelf as shelf_lib, ub, csrf, kobo_sync_status
 from . import isoLanguages
 from .epub import get_epub_layout
-from .constants import COVER_THUMBNAIL_SMALL, COVER_THUMBNAIL_MEDIUM, COVER_THUMBNAIL_LARGE
+from .constants import COVER_THUMBNAIL_SMALL, COVER_THUMBNAIL_MEDIUM, COVER_THUMBNAIL_LARGE, BASE_DIR
 from .helper import get_download_link
 from .services import SyncToken as SyncToken
 from .web import download_required
@@ -1014,6 +1013,8 @@ def handle_getests():
 @kobo.route("/v1/products/dailydeal", methods=["GET", "POST"])
 @kobo.route("/v1/products/deals", methods=["GET", "POST"])
 @kobo.route("/v1/products", methods=["GET", "POST"])
+@kobo.route("/v1/products/<path:dummy>", methods=["GET", "POST"])
+@kobo.route("/v1/products/<path:dummy>/", methods=["GET", "POST"])
 @kobo.route("/v1/affiliate", methods=["GET", "POST"])
 @kobo.route("/v1/deals", methods=["GET", "POST"])
 def HandleProductsRequest(dummy=None):
@@ -1042,6 +1043,7 @@ def make_calibre_web_auth_response():
 
 
 @csrf.exempt
+@kobo.route("/v1/auth/refresh", methods=["POST"])
 @kobo.route("/v1/auth/device", methods=["POST"])
 @requires_kobo_auth
 def HandleAuthRequest():
@@ -1141,6 +1143,14 @@ def download_book(book_id, book_format):
 
 
 def NATIVE_KOBO_RESOURCES():
+    kobo_file = os.path.join(BASE_DIR, "kobo_resources.txt")
+    try:
+        if os.path.isfile(kobo_file):
+            with open(kobo_file, "r") as f:
+                lines = f.read()
+            return json.loads(lines)
+    except Exception as e:
+        log.error(e)
     return {
         "account_page": "https://www.kobo.com/account/settings",
         "account_page_rakuten": "https://my.rakuten.co.jp/",
