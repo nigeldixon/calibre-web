@@ -103,11 +103,11 @@ $(function () {
                         });
                     }
                     else {
-                        $("#meta-info").html("<p class=\"text-danger\">" + msg.no_result + "!</p>" + $("#meta-info")[0].innerHTML)
+                        $("#meta-info").html("<p class=\"text-danger\">" + msg.no_result + "</p>" + $("#meta-info")[0].innerHTML)
                     }
                 },
                 error: function error() {
-                    $("#meta-info").html("<p class=\"text-danger\">" + msg.search_error + "!</p>" + $("#meta-info")[0].innerHTML);
+                    $("#meta-info").html("<p class=\"text-danger\">" + msg.search_error + "</p>" + $("#meta-info")[0].innerHTML);
                 },
             });
         }
@@ -135,9 +135,10 @@ $(function () {
     $(document).on("change", ".pill", function () {
         var element = $(this);
         var id = element.data("control");
-        var initial = element.data("initial");
+        var initial = String(element.data("initial")) === "true";
         var val = element.prop('checked');
         var params = {id : id, value: val};
+        $('[data-related="' + id + '"]').toggle(val);
         if (!initial) {
             params['initial'] = initial;
             params['query'] = keyword;

@@ -30,7 +30,6 @@ from flask import session as flask_session
 from flask_babel import gettext as _
 from flask_babel import get_locale
 from .cw_login import login_user, logout_user, current_user
-from flask_limiter import RateLimitExceeded
 from flask_limiter.util import get_remote_address
 from sqlalchemy.exc import IntegrityError, InvalidRequestError, OperationalError
 from sqlalchemy.sql.expression import text, func, false, not_, and_, or_
@@ -39,7 +38,7 @@ from sqlalchemy.sql.functions import coalesce
 from werkzeug.datastructures import Headers
 from werkzeug.security import generate_password_hash, check_password_hash
 
-from . import constants, logger, isoLanguages, services
+from . import constants, logger, isoLanguages, services, limiter
 from . import db, ub, config, app
 from . import calibre_db, kobo_sync_status
 from .search import render_search_results, render_adv_search_results
@@ -48,6 +47,7 @@ from .helper import check_valid_domain, check_email, check_username, \
     get_book_cover, get_series_cover_thumbnail, get_download_link, send_mail, generate_random_password, \
     send_registration_mail, check_send_to_ereader, check_read_formats, tags_filters, reset_password, valid_email, \
     edit_book_read_status, valid_password
+from .binary_helper import resolve_binary_path, SUPPORTED_UNRAR_BINARIES
 from .pagination import Pagination
 from .redirect import get_redirect_location
 from .cw_babel import get_available_locale
@@ -55,7 +55,6 @@ from .usermanagement import login_required_if_no_ano
 from .kobo_sync_status import remove_synced_book
 from .render_template import render_title_template
 from .kobo_sync_status import change_archived_books
-from . import limiter
 from .services.worker import WorkerThread
 from .tasks_status import render_task_status
 from .usermanagement import user_login_required
@@ -220,7 +219,8 @@ def get_comic_book(book_id, book_format, page):
                 cbr_file = os.path.join(config.config_calibre_dir, book.path, bookformat.name) + "." + book_format
                 if book_format in ("cbr", "rar"):
                     if feature_support['rar'] == True:
-                        rarfile.UNRAR_TOOL = config.config_rarfile_location
+                        rarfile.UNRAR_TOOL = resolve_binary_path(config.config_rarfile_location,
+                                                                 SUPPORTED_UNRAR_BINARIES)
                         try:
                             rf = rarfile.RarFile(cbr_file)
                             names = sort(rf.namelist())
@@ -303,7 +303,6 @@ def get_matching_tags():
     tag_dict = {'tags': []}
     q = calibre_db.session.query(db.Books).filter(calibre_db.common_filters(True))
     calibre_db.create_functions()
-    # calibre_db.session.connection().connection.connection.create_function("lower", 1, db.lcase)
     author_input = request.args.get('authors') or ''
     title_input = request.args.get('title') or ''
     include_tag_inputs = request.args.getlist('include_tag') or ''
@@ -714,7 +713,7 @@ def render_language_books(page, name, order):
             lang_name = _("None")
     except KeyError:
         abort(404)
-    if name == "none":
+    if name.lower() == "none":
         entries, random, pagination = calibre_db.fill_indexpage(page, 0,
                                                                 db.Books,
                                                                 db.Languages.lang_code == None,
@@ -845,7 +844,8 @@ def list_books():
     order = request.args.get("order", "").lower()
     state = None
     join = tuple()
-
+    if not order in ["asc", "desc", ""]:
+        order = "asc"
     if sort_param == "state":
         state = json.loads(request.args.get("state", "[]"))
     elif sort_param == "tags":
@@ -1028,7 +1028,7 @@ def series_list():
                             .count())
             if no_series_count:
                 entries.append([db.Category(_("None"), "-1"), no_series_count])
-            entries = sorted(entries, key=lambda x: x[0].name.lower(), reverse=not order_no)
+            entries = sorted(entries, key=lambda x: (x[0].sort or x[0].name).lower(), reverse=not order_no)
             return render_title_template('list.html',
                                          entries=entries,
                                          folder='web.books_list',
@@ -1197,7 +1197,9 @@ def get_robots():
 @viewer_required
 def serve_book(book_id, book_format, anyname):
     book_format = book_format.split(".")[0]
-    book = calibre_db.get_book(book_id)
+    book = calibre_db.get_filtered_book(book_id)
+    if not book:
+        return "File not in Database"
     data = calibre_db.get_book_format(book_id, book_format.upper())
     if not data:
         return "File not in Database"
@@ -1247,9 +1249,9 @@ def serve_book(book_id, book_format, anyname):
 @login_required_if_no_ano
 @download_required
 def download_link(book_id, book_format, anyname):
-    if "kindle" in request.headers.get('User-Agent').lower():
+    if "kindle" in request.headers.get('User-Agent', "").lower():
         client = "kindle"
-    elif "Kobo" in request.headers.get('User-Agent').lower():
+    elif "Kobo" in request.headers.get('User-Agent', "").lower():
         client = "kobo"
     else:
         client = ""
@@ -1260,6 +1262,14 @@ def download_link(book_id, book_format, anyname):
 @login_required_if_no_ano
 @download_required
 def send_to_ereader(book_id, book_format, convert):
+    book = calibre_db.get_book(book_id)
+    allowed_formats = check_send_to_ereader(book) if book else []
+    is_allowed = any(
+        option.get('format', '').lower() == book_format.lower() and int(option.get('convert', -1)) == convert
+        for option in allowed_formats
+    )
+    if not is_allowed:
+        return make_response(jsonify(type="danger", message=_("Book format not supported")))
     if not config.get_mail_server_configured():
         return make_response(jsonify(type="danger", message=_("Please configure the SMTP mail settings first...")))
     elif current_user.kindle_mail:
@@ -1285,15 +1295,6 @@ def register_post():
     if not config.config_public_reg:
         abort(404)
     to_save = request.form.to_dict()
-    try:
-        limiter.check()
-    except RateLimitExceeded:
-        flash(_(u"Please wait one minute to register next user"), category="error")
-        return render_title_template('register.html', config=config, title=_("Register"), page="register")
-    except (ConnectionError, Exception) as e:
-        log.error("Connection error to limiter backend: %s", e)
-        flash(_("Connection error to limiter backend, please contact your administrator"), category="error")
-        return render_title_template('register.html', config=config, title=_("Register"), page="register")
     if current_user is not None and current_user.is_authenticated:
         return redirect(url_for('web.index'))
     if not config.get_mail_server_configured():
@@ -1328,7 +1329,7 @@ def register_post():
             ub.session.commit()
             if feature_support['oauth']:
                 register_user_with_oauth(content)
-            send_registration_mail(strip_whitespaces(to_save.get("email", "")), nickname, password)
+            send_registration_mail(strip_whitespaces(to_save.get("email", "")), nickname, password, locale=content.locale)
         except Exception:
             ub.session.rollback()
             flash(_("Oops! An unknown error occurred. Please try again later."), category="error")
@@ -1358,7 +1359,7 @@ def register():
 def handle_login_user(user, remember, message, category):
     login_user(user, remember=remember)
     flash(message, category=category)
-    [limiter.limiter.storage.clear(k.key) for k in limiter.current_limits]
+    [limiter.limiter.clear(limit.limit, *limit.request_args) for limit in limiter.current_limits]
     return redirect(get_redirect_location(request.form.get('next', None), "web.index"))
 
 
@@ -1392,15 +1393,6 @@ def login():
 def login_post():
     form = request.form.to_dict()
     username = strip_whitespaces(form.get('username', "")).lower().replace("\n","").replace("\r","")
-    try:
-        limiter.check()
-    except RateLimitExceeded:
-        flash(_("Please wait one minute before next login"), category="error")
-        return render_login(username, form.get("password", ""))
-    except (ConnectionError, Exception) as e:
-        log.error("Connection error to limiter backend: %s", e)
-        flash(_("Connection error to limiter backend, please contact your administrator"), category="error")
-        return render_login(username, form.get("password", ""))
     if current_user is not None and current_user.is_authenticated:
         return redirect(url_for('web.index'))
     if config.config_login_type == constants.LOGIN_LDAP and not services.ldap:
@@ -1456,7 +1448,7 @@ def login_post():
             else:
                 log.warning('Login failed for user "{}" IP-address: {}'.format(username, ip_address))
                 flash(_(u"Wrong Username or Password"), category="error")
-    return render_login(username, form.get("password", ""))
+    return render_login(username, form.get("password", "")), 401
 
 
 @web.route('/logout')

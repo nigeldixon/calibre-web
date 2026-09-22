@@ -25,6 +25,7 @@ import zipfile
 from time import gmtime, strftime
 import json
 from urllib.parse import unquote
+import requests
 
 from flask import (
     Blueprint,
@@ -41,10 +42,9 @@ from werkzeug.datastructures import Headers
 from sqlalchemy import func
 from sqlalchemy.sql.expression import and_, or_
 from sqlalchemy.exc import StatementError
-import requests
 
 from . import config, logger, kobo_auth, db, calibre_db, helper, shelf as shelf_lib, ub, csrf, kobo_sync_status
-from . import isoLanguages
+from . import isoLanguages, limiter
 from .epub import get_epub_layout
 from .constants import COVER_THUMBNAIL_SMALL, COVER_THUMBNAIL_MEDIUM, COVER_THUMBNAIL_LARGE, BASE_DIR
 from .helper import get_download_link
@@ -140,7 +140,6 @@ def convert_to_kobo_timestamp_string(timestamp):
 
 @kobo.route("/v1/library/sync")
 @requires_kobo_auth
-# @download_required
 def HandleSyncRequest():
     if not current_user.role_download():
         log.info("Users need download permissions for syncing library to Kobo reader")
@@ -368,7 +367,7 @@ def get_download_url_for_book(book_id, book_format):
         )
     return url_for(
         "kobo.download_book",
-        auth_token=kobo_auth.get_auth_token(),
+        auth_token=get_auth_token(),
         book_id=book_id,
         book_format=book_format.lower(),
         _external=True,
@@ -501,6 +500,7 @@ def get_metadata(book):
         except Exception as e:
             print(e)
     return metadata
+
 
 
 @csrf.exempt
@@ -811,6 +811,8 @@ def HandleStateRequest(book_uuid):
 
         ub.session.merge(kobo_reading_state)
         ub.session_commit()
+        update_results_response["LastModified"] = convert_to_kobo_timestamp_string(kobo_reading_state.last_modified)
+        update_results_response["PriorityTimestamp"] = convert_to_kobo_timestamp_string(kobo_reading_state.priority_timestamp)
         return jsonify({
             "RequestResult": "Success",
             "UpdateResults": [update_results_response],
@@ -887,14 +889,21 @@ def get_statistics_response(statistics):
     return resp
 
 
+def _clean_progress(value):
+    """Return progress as int if it's a whole number, preserving Kobo device expectations."""
+    if value is not None and value == int(value):
+        return int(value)
+    return value
+
+
 def get_current_bookmark_response(current_bookmark):
     resp = {
         "LastModified": convert_to_kobo_timestamp_string(current_bookmark.last_modified),
     }
-    if current_bookmark.progress_percent:
-        resp["ProgressPercent"] = current_bookmark.progress_percent
-    if current_bookmark.content_source_progress_percent:
-        resp["ContentSourceProgressPercent"] = current_bookmark.content_source_progress_percent
+    if current_bookmark.progress_percent is not None:
+        resp["ProgressPercent"] = _clean_progress(current_bookmark.progress_percent)
+    if current_bookmark.content_source_progress_percent is not None:
+        resp["ContentSourceProgressPercent"] = _clean_progress(current_bookmark.content_source_progress_percent)
     if current_bookmark.location_value:
         resp["Location"] = {
             "Value": current_bookmark.location_value,
@@ -962,6 +971,7 @@ def HandleBookDeletionRequest(book_uuid):
 @kobo.route("/v1/library/<dummy>", methods=["DELETE", "GET", "POST"])
 @kobo.route("/v1/library/<dummy>/preview", methods=["POST"])
 def HandleUnimplementedRequest(dummy=None):
+    [limiter.limiter.clear(limit.limit, *limit.request_args) for limit in limiter.current_limits]
     log.debug("Unimplemented Library Request received: %s (request is forwarded to kobo if configured)",
               request.base_url)
     return redirect_or_proxy_request()
@@ -976,6 +986,7 @@ def HandleUnimplementedRequest(dummy=None):
 @kobo.route("/v1/analytics/<dummy>", methods=["GET", "POST"])
 @kobo.route("/v1/assets", methods=["GET"])
 def HandleUserRequest(dummy=None):
+    [limiter.limiter.clear(limit.limit, *limit.request_args) for limit in limiter.current_limits]
     log.debug("Unimplemented User Request received: %s (request is forwarded to kobo if configured)", request.base_url)
     return redirect_or_proxy_request()
 
@@ -983,6 +994,7 @@ def HandleUserRequest(dummy=None):
 @csrf.exempt
 @kobo.route("/v1/user/loyalty/benefits", methods=["GET"])
 def handle_benefits():
+    [limiter.limiter.clear(limit.limit, *limit.request_args) for limit in limiter.current_limits]
     if config.config_kobo_proxy:
         return redirect_or_proxy_request()
     else:
@@ -992,6 +1004,7 @@ def handle_benefits():
 @csrf.exempt
 @kobo.route("/v1/analytics/gettests", methods=["GET", "POST"])
 def handle_getests():
+    [limiter.limiter.clear(limit.limit, *limit.request_args) for limit in limiter.current_limits]
     if config.config_kobo_proxy:
         return redirect_or_proxy_request()
     else:
@@ -1018,6 +1031,7 @@ def handle_getests():
 @kobo.route("/v1/affiliate", methods=["GET", "POST"])
 @kobo.route("/v1/deals", methods=["GET", "POST"])
 def HandleProductsRequest(dummy=None):
+    [limiter.limiter.clear(limit.limit, *limit.request_args) for limit in limiter.current_limits]
     log.debug("Unimplemented Products Request received: %s (request is forwarded to kobo if configured)",
               request.base_url)
     return redirect_or_proxy_request()
@@ -1098,7 +1112,7 @@ def HandleInitRequest():
         kobo_resources["image_host"] = calibre_web_url
         kobo_resources["image_url_quality_template"] = unquote(calibre_web_url +
                                                                url_for("kobo.HandleCoverImageRequest",
-                                                                       auth_token=kobo_auth.get_auth_token(),
+                                                                       auth_token=get_auth_token(),
                                                                        book_uuid="{ImageId}",
                                                                        width="{width}",
                                                                        height="{height}",
@@ -1106,15 +1120,17 @@ def HandleInitRequest():
                                                                        isGreyscale='isGreyscale'))
         kobo_resources["image_url_template"] = unquote(calibre_web_url +
                                                        url_for("kobo.HandleCoverImageRequest",
-                                                               auth_token=kobo_auth.get_auth_token(),
+                                                               auth_token=get_auth_token(),
                                                                book_uuid="{ImageId}",
                                                                width="{width}",
                                                                height="{height}",
                                                                isGreyscale='false'))
+        kobo_resources["library_sync"] = calibre_web_url + url_for("kobo.HandleSyncRequest",
+                                                                    auth_token=kobo_auth.get_auth_token())
     else:
         kobo_resources["image_host"] = url_for("web.index", _external=True).strip("/")
         kobo_resources["image_url_quality_template"] = unquote(url_for("kobo.HandleCoverImageRequest",
-                                                                       auth_token=kobo_auth.get_auth_token(),
+                                                                       auth_token=get_auth_token(),
                                                                        book_uuid="{ImageId}",
                                                                        width="{width}",
                                                                        height="{height}",
@@ -1122,12 +1138,15 @@ def HandleInitRequest():
                                                                        isGreyscale='isGreyscale',
                                                                        _external=True))
         kobo_resources["image_url_template"] = unquote(url_for("kobo.HandleCoverImageRequest",
-                                                               auth_token=kobo_auth.get_auth_token(),
+                                                               auth_token=get_auth_token(),
                                                                book_uuid="{ImageId}",
                                                                width="{width}",
                                                                height="{height}",
                                                                isGreyscale='false',
                                                                _external=True))
+        kobo_resources["library_sync"] = url_for("kobo.HandleSyncRequest",
+                                                  auth_token=kobo_auth.get_auth_token(),
+                                                  _external=True)
 
     response = make_response(jsonify({"Resources": kobo_resources}))
     response.headers["x-kobo-apitoken"] = "e30="

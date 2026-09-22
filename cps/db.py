@@ -416,8 +416,8 @@ class Books(Base):
     path = Column(String, default="", nullable=False)
     has_cover = Column(Integer, default=0)
     uuid = Column(String)
-    isbn = Column(String(collation='NOCASE'), default="")
-    flags = Column(Integer, nullable=False, default=1)
+    # isbn = Column(String(collation='NOCASE'), default="")
+    # flags = Column(Integer, nullable=False, default=1)
 
     authors = relationship(Authors, secondary=books_authors_link, backref='books')
     tags = relationship(Tags, secondary=books_tags_link, backref='books', order_by="Tags.name")
@@ -449,7 +449,14 @@ class Books(Base):
 
     @property
     def atom_timestamp(self):
-        return self.timestamp.strftime('%Y-%m-%dT%H:%M:%S+00:00') or ''
+        # OPDS atom:updated is defined as "the most recent instant in time
+        # when the entry was modified". Books.timestamp is the date added and
+        # never changes after import, so metadata and cover edits were
+        # invisible to OPDS sync clients. Use last_modified, which Calibre
+        # updates on every metadata or cover change; fall back to timestamp
+        # only if last_modified happens to be missing.
+        t = self.last_modified or self.timestamp
+        return t.strftime('%Y-%m-%dT%H:%M:%S+00:00') if t else ''
 
 
 class CustomColumns(Base):
@@ -640,8 +647,8 @@ class CalibreDB:
                                          connect_args={'check_same_thread': False},
                                          poolclass=StaticPool)
             with check_engine.begin() as connection:
-                connection.execute(text("attach database '{}' as calibre;".format(dbpath)))
-                connection.execute(text("attach database '{}' as app_settings;".format(app_db_path)))
+                connection.execute(text("attach database '{}' as calibre;".format(dbpath.replace("'", "''"))))
+                connection.execute(text("attach database '{}' as app_settings;".format(app_db_path.replace("'", "''"))))
                 local_session = scoped_session(sessionmaker())
                 local_session.configure(bind=connection)
                 database_uuid = local_session().query(Library_Id).one_or_none()
@@ -694,8 +701,8 @@ class CalibreDB:
                                        poolclass=StaticPool)
             with engine.begin() as connection:
                 connection.execute(text('PRAGMA cache_size = 10000;'))
-                connection.execute(text("attach database '{}' as calibre;".format(dbpath)))
-                connection.execute(text("attach database '{}' as app_settings;".format(app_db_path)))
+                connection.execute(text("attach database '{}' as calibre;".format(dbpath.replace("'", "''"))))
+                connection.execute(text("attach database '{}' as app_settings;".format(app_db_path.replace("'", "''"))))
 
             conn = engine.connect()
             # conn.text_factory = lambda b: b.decode(errors = 'ignore') possible fix for #1302
@@ -746,7 +753,8 @@ class CalibreDB:
                 .filter(self.common_filters(allow_show_archived)).first())
 
     def get_book_by_uuid(self, book_uuid):
-        return self.session.query(Books).filter(Books.uuid == book_uuid).first()
+        return self.session.query(Books).filter(Books.uuid == book_uuid). \
+            filter(self.common_filters()).first()
 
     def get_book_format(self, book_id, file_format):
         return self.session.query(Data).filter(Data.book == book_id).filter(Data.format == file_format).first()
@@ -900,11 +908,13 @@ class CalibreDB:
     def order_authors(self, entries, list_return=False, combined=False):
         for entry in entries:
             if combined:
-                sort_authors = entry.Books.author_sort.split('&')
+                author_sort = entry.Books.author_sort
                 authors_list = entry.Books.authors
             else:
-                sort_authors = entry.author_sort.split('&')
+                author_sort = entry.author_sort
                 authors_list = entry.authors
+            # author_sort is nullable in Calibre's schema, fall back to the unsorted author list
+            sort_authors = author_sort.split('&') if author_sort else []
 
             # Create dictionary for O(1) lookup instead of nested loops
             authors_by_sort = {}
@@ -944,16 +954,13 @@ class CalibreDB:
     def get_typeahead(self, database, query, replace=('', ''), tag_filter=true()):
         query = query or ''
         self.create_functions()
-        # self.session.connection().connection.connection.create_function("lower", 1, lcase)
         entries = self.session.query(database).filter(tag_filter). \
             filter(func.lower(database.name).ilike("%" + query + "%")).all()
-        # json_dumps = json.dumps([dict(name=escape(r.name.replace(*replace))) for r in entries])
         json_dumps = json.dumps([dict(name=r.name.replace(*replace)) for r in entries])
         return json_dumps
 
     def check_exists_book(self, authr, title):
         self.create_functions()
-        # self.session.connection().connection.connection.create_function("lower", 1, lcase)
         q = list()
         author_terms = re.split(r'\s*&\s*', authr)
         for author_term in author_terms:
@@ -1121,7 +1128,7 @@ class CalibreDB:
                                  .filter(self.common_filters())
                                  .count())
                 if no_lang_count:
-                    tags.append([Category(_("None"), "none"), no_lang_count])
+                    tags.append([Category(_("None"), "None", "none"), no_lang_count])
             return sorted(tags, key=lambda x: x[0].name.lower(), reverse=reverse_order)
         else:
             if not languages:
@@ -1175,14 +1182,25 @@ def lcase(s):
         return s.lower()
 
 
+def title_sort(title, config):
+    # calibre sort stuff
+    title_pat = re.compile(config.config_title_regex, re.IGNORECASE)
+    match = title_pat.search(title)
+    if match:
+        prep = match.group(1)
+        title = title[len(prep):] + ', ' + prep
+    return strip_whitespaces(title)
+
 class Category:
     name = None
+    sort = None
     id = None
     count = None
     rating = None
 
     def __init__(self, name, cat_id, rating=None):
         self.name = name
+        self.sort = name
         self.id = cat_id
         self.rating = rating
         self.count = 1
