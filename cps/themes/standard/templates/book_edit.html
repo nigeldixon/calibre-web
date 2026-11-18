@@ -2,15 +2,17 @@
 {% block body %}
 {% if book %}
   <div class="col-sm-3 col-lg-3 col-xs-12">
-    <div class="cover">
+    <div class="cover text-center">
+      <div style="position: relative; display: inline-block;">
         <!-- Always use full-sized image for the book edit page -->
         <img id="detailcover" title="{{book.title}}" src="{{url_for('web.get_cover', book_id=book.id, resolution='og', c=book|last_modified)}}" />
+        {% if current_user.role_upload() and book.has_cover %}
+        <button type="button" class="btn btn-default btn-sm" id="edit_cover_btn" data-toggle="modal" data-target="#coverEditorModal" title="{{ _('Edit Cover') }}" aria-label="{{ _('Edit Cover') }}">
+          <span class="glyphicon glyphicon-edit"></span>
+        </button>
+        {% endif %}
+      </div>
     </div>
-    {% if current_user.role_upload() and book.has_cover %}
-    <div class="text-center" style="margin-bottom:10px;">
-      <button type="button" class="btn btn-default" id="edit_cover_btn" data-toggle="modal" data-target="#coverEditorModal">{{ _('Edit Cover') }}</button>
-    </div>
-    {% endif %}
 {% if current_user.role_delete_books() %}
     <div class="text-center">
       <button type="button" class="btn btn-danger" id="delete" data-toggle="modal" data-delete-id="{{ book.id }}" data-target="#deleteModal">{{_("Delete Book")}}</button>

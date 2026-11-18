@@ -64,3 +64,18 @@
   flex-wrap: wrap;
   gap: 4px;
 }
+
+#edit_cover_btn {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 2;
+  opacity: 0.9;
+  padding: 3px 7px;
+  line-height: 1.2;
+}
+
+#edit_cover_btn:hover,
+#edit_cover_btn:focus {
+  opacity: 1;
+}
