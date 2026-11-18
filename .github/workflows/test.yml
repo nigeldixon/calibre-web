@@ -36,5 +36,5 @@ jobs:
       - name: Run Playwright E2E tests
         run: pytest tests/e2e -q
 
-      - name: Run HTTP functional tests (skips if no external server)
+      - name: Run HTTP functional tests
         run: pytest tests/functional -q
