@@ -8,6 +8,7 @@ RUN rm -f /etc/apt/sources.list.d/yarn.list /etc/apt/sources.list.d/yarn.sources
     && apt-get -y install --no-install-recommends \
         libmagic1 \
         imagemagick \
+        libatomic1 \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies for the app and test tooling
