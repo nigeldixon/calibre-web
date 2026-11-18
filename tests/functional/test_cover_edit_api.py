@@ -103,6 +103,25 @@ def test_edit_cover_requires_login():
     assert r.status_code in (302, 400, 401, 403)
 
 
+@pytest.mark.parametrize("endpoint", [
+    "GET /ajax/coverhistory/{book_id}",
+    "POST /ajax/editcover/{book_id}",
+    "POST /ajax/coverhistory/{book_id}/cover_20990101T010101000000Z.jpg",
+    "POST /ajax/coverhistory/{book_id}/cover_20990101T010101000000Z.jpg/restore",
+])
+def test_cover_endpoints_404_for_unknown_book(admin_session, original_cover_bytes, endpoint):
+    method, path = endpoint.split(" ", 1)
+    url = BASE_URL + path.format(book_id=99999999)
+    if method == "GET":
+        r = admin_session.get(url, headers=auth_headers(admin_session))
+    elif path.endswith("/editcover/{book_id}".format(book_id=99999999)):
+        files = {"cover": ("cover.jpg", io.BytesIO(original_cover_bytes), "image/jpeg")}
+        r = admin_session.post(url, files=files, headers=auth_headers(admin_session))
+    else:
+        r = admin_session.post(url, headers=auth_headers(admin_session), data={"action": "delete"})
+    assert r.status_code == 404
+
+
 def test_list_cover_history_empty(admin_session):
     r = admin_session.get(BASE_URL + f"/ajax/coverhistory/{BOOK_ID}")
     assert r.status_code == 200
@@ -153,6 +172,56 @@ def test_edit_cover_rejects_missing_file(admin_session):
     assert data["success"] is False
 
 
+def test_edit_cover_rejects_empty_file(admin_session):
+    files = {"cover": ("cover.jpg", io.BytesIO(b""), "image/jpeg")}
+    r = admin_session.post(
+        BASE_URL + f"/ajax/editcover/{BOOK_ID}",
+        files=files,
+        headers=auth_headers(admin_session),
+    )
+    assert r.status_code == 400
+    data = r.json()
+    assert data["success"] is False
+
+
+def test_edit_cover_cache_bust_and_last_modified(admin_session, original_cover_bytes):
+    files = {"cover": ("cover.jpg", io.BytesIO(original_cover_bytes), "image/jpeg")}
+    r = admin_session.post(
+        BASE_URL + f"/ajax/editcover/{BOOK_ID}",
+        files=files,
+        headers=auth_headers(admin_session),
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["success"] is True
+    assert f"/cover/{BOOK_ID}/" in data["cover_url"]
+    assert "c=" in data["cover_url"]
+    assert "last_modified" in data and "T" in data["last_modified"]
+
+
+def test_edit_cover_multiple_saves_create_ordered_history(admin_session, original_cover_bytes):
+    # create three snapshots via three saves
+    names_seen = []
+    for i in range(3):
+        files = {"cover": ("cover.jpg", io.BytesIO(original_cover_bytes), "image/jpeg")}
+        r = admin_session.post(BASE_URL + f"/ajax/editcover/{BOOK_ID}", files=files, headers=auth_headers(admin_session))
+        assert r.status_code == 200 and r.json()["success"] is True
+        versions = admin_session.get(BASE_URL + f"/ajax/coverhistory/{BOOK_ID}").json()["versions"]
+        assert len(versions) == i + 1
+        names_seen = [v["name"] for v in versions]
+        # newest-first by name (timestamp-based names)
+        assert names_seen == sorted(names_seen, reverse=True)
+        # small delay to ensure distinct timestamps when resolution is coarse in some envs
+        time.sleep(0.01)
+
+    # all snapshot files exist and match original bytes
+    for name in names_seen:
+        p = os.path.join(HISTORY_DIR, name)
+        assert os.path.isfile(p)
+        with open(p, "rb") as f:
+            assert f.read() == original_cover_bytes
+
+
 def test_delete_cover_history_version(admin_session, original_cover_bytes):
     # create a version
     files = {"cover": ("cover.jpg", io.BytesIO(original_cover_bytes), "image/jpeg")}
@@ -174,15 +243,62 @@ def test_delete_cover_history_version(admin_session, original_cover_bytes):
     assert not os.path.exists(os.path.join(HISTORY_DIR, name))
 
 
-def test_delete_cover_history_rejects_unsafe_name(admin_session):
-    r = admin_session.post(
-        BASE_URL + f"/ajax/coverhistory/{BOOK_ID}/../cover.jpg",
-        data={"action": "delete"},
-        headers=auth_headers(admin_session),
-    )
+@pytest.mark.parametrize("name", [
+    "../cover.jpg",
+    "cover.jpg",
+    ".hidden",
+    "subdir/cover_20240101T010101000000Z.jpg",
+])
+def test_delete_cover_history_rejects_unsafe_name(admin_session, name):
+    # use requests with path; some names may be normalized by server/client, but must be safe
+    url = BASE_URL + f"/ajax/coverhistory/{BOOK_ID}/" + name
+    r = admin_session.post(url, data={"action": "delete"}, headers=auth_headers(admin_session))
     # route/validation should reject; must not delete actual cover
     assert r.status_code in (400, 404)
     assert os.path.isfile(COVER_PATH)
+
+
+def test_delete_cover_history_missing_version_returns_404(admin_session):
+    r = admin_session.post(
+        BASE_URL + f"/ajax/coverhistory/{BOOK_ID}/cover_20990101T010101000000Z.jpg",
+        data={"action": "delete"},
+        headers=auth_headers(admin_session),
+    )
+    assert r.status_code == 404
+    assert r.json()["success"] is False
+
+
+def test_delete_cover_history_via_delete_method(admin_session, original_cover_bytes):
+    files = {"cover": ("cover.jpg", io.BytesIO(original_cover_bytes), "image/jpeg")}
+    r = admin_session.post(BASE_URL + f"/ajax/editcover/{BOOK_ID}", files=files, headers=auth_headers(admin_session))
+    assert r.json()["success"] is True
+    name = admin_session.get(BASE_URL + f"/ajax/coverhistory/{BOOK_ID}").json()["versions"][0]["name"]
+
+    r = admin_session.delete(
+        BASE_URL + f"/ajax/coverhistory/{BOOK_ID}/{name}",
+        headers=auth_headers(admin_session),
+    )
+    assert r.status_code == 200
+    assert r.json()["success"] is True
+    assert admin_session.get(BASE_URL + f"/ajax/coverhistory/{BOOK_ID}").json()["versions"] == []
+
+
+def test_delete_cover_history_rejects_invalid_action(admin_session, original_cover_bytes):
+    files = {"cover": ("cover.jpg", io.BytesIO(original_cover_bytes), "image/jpeg")}
+    r = admin_session.post(BASE_URL + f"/ajax/editcover/{BOOK_ID}", files=files, headers=auth_headers(admin_session))
+    assert r.json()["success"] is True
+    name = admin_session.get(BASE_URL + f"/ajax/coverhistory/{BOOK_ID}").json()["versions"][0]["name"]
+
+    r = admin_session.post(
+        BASE_URL + f"/ajax/coverhistory/{BOOK_ID}/{name}",
+        data={"action": "restore"},
+        headers=auth_headers(admin_session),
+    )
+    assert r.status_code == 400
+    assert r.json()["success"] is False
+    # version should still exist
+    versions = admin_session.get(BASE_URL + f"/ajax/coverhistory/{BOOK_ID}").json()["versions"]
+    assert [v["name"] for v in versions] == [name]
 
 
 def test_restore_cover_history_version(admin_session, original_cover_bytes):
@@ -196,10 +312,6 @@ def test_restore_cover_history_version(admin_session, original_cover_bytes):
 
     # change current cover to different bytes
     new_bytes = original_cover_bytes[:1024] + b"XYZCHANGED"
-    # ensure still a valid-ish jpeg? better to craft a simple jpeg header+body; but easier write different content
-    # Instead, use a minimal valid JPEG by modifying tail of original (keeps header) - still valid for file storage
-    # actually easier: create by appending comment segment? not necessary; endpoint saves bytes as-is if jpeg header present.
-    # We'll make bytes that start with jpeg header but differ.
     if new_bytes[:3] != b"\xff\xd8\xff":
         new_bytes = b"\xff\xd8\xff" + new_bytes[3:]
     files = {"cover": ("cover.jpg", io.BytesIO(new_bytes), "image/jpeg")}
@@ -217,6 +329,7 @@ def test_restore_cover_history_version(admin_session, original_cover_bytes):
     data = r.json()
     assert data["success"] is True
     assert "cover_url" in data and f"/cover/{BOOK_ID}/" in data["cover_url"]
+    assert "c=" in data["cover_url"]
 
     with open(COVER_PATH, "rb") as f:
         assert f.read() == original_cover_bytes
@@ -233,3 +346,27 @@ def test_restore_cover_history_version(admin_session, original_cover_bytes):
                 found_new = True
                 break
     assert found_new
+
+
+def test_restore_cover_history_missing_version_returns_404(admin_session):
+    r = admin_session.post(
+        BASE_URL + f"/ajax/coverhistory/{BOOK_ID}/cover_20990101T010101000000Z.jpg/restore",
+        headers=auth_headers(admin_session),
+    )
+    assert r.status_code == 404
+    assert r.json()["success"] is False
+
+
+@pytest.mark.parametrize("name", [
+    "../cover.jpg",
+    "cover.jpg",
+    ".hidden",
+    "subdir/cover_20240101T010101000000Z.jpg",
+])
+def test_restore_cover_history_rejects_unsafe_name(admin_session, name):
+    url = BASE_URL + f"/ajax/coverhistory/{BOOK_ID}/" + name + "/restore"
+    r = admin_session.post(url, headers=auth_headers(admin_session))
+    assert r.status_code in (400, 404)
+    if r.headers.get("Content-Type", "").startswith("application/json"):
+        assert r.json().get("success") is False
+    assert os.path.isfile(COVER_PATH)
