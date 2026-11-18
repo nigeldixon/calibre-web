@@ -71,6 +71,18 @@ def live_server(tmp_path_factory):
 
     env = os.environ.copy()
     cmd = [sys.executable, str(ROOT / "cps.py"), "-p", str(settings_db), "-i", "127.0.0.1"]
+    if os.environ.get("CALIBRE_WEB_TEST_COVERAGE", "").lower() in ("1", "true", "yes"):
+        cov_data = str(ROOT / ".coverage.server")
+        cmd = [
+            sys.executable, "-m", "coverage", "run",
+            "--parallel-mode",
+            "--data-file", cov_data,
+            "--source", "cps",
+            "--omit", "*/tests/*",
+            str(ROOT / "cps.py"),
+            "-p", str(settings_db),
+            "-i", "127.0.0.1",
+        ]
     log_path = work / "cps.log"
     log_f = open(log_path, "w", encoding="utf-8")
     proc = subprocess.Popen(cmd, cwd=str(ROOT), stdout=log_f, stderr=subprocess.STDOUT, env=env)

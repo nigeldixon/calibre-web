@@ -458,3 +458,21 @@ def test_restore_cover_version_returns_false_when_copy_raises(monkeypatch, tmp_p
     monkeypatch.setattr("cps.cover_history.shutil.copy2", boom)
     assert cover_history.restore_cover_version(str(book_dir), vf.name) is False
 
+
+def test_restore_cover_version_returns_false_when_snapshot_raises(monkeypatch, tmp_path):
+    from cps import cover_history
+
+    book_dir = tmp_path / "book"
+    book_dir.mkdir()
+    (book_dir / "cover.jpg").write_bytes(b"current")
+    hdir = book_dir / ".cover_history"
+    hdir.mkdir()
+    vf = hdir / "cover_20240101T010101000000Z.jpg"
+    vf.write_bytes(b"old")
+
+    def boom(path):
+        raise OSError("boom")
+
+    monkeypatch.setattr(cover_history, "snapshot_cover", boom)
+    assert cover_history.restore_cover_version(str(book_dir), vf.name) is False
+    assert (book_dir / "cover.jpg").read_bytes() == b"current"
