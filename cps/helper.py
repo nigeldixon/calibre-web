@@ -367,16 +367,19 @@ def delete_book_file(book, calibrepath, book_format=None):
         else:
             if os.path.isdir(path):
                 try:
-                    for root, folders, files in os.walk(path):
+                    for root, folders, files in os.walk(path, topdown=False):
                         for f in files:
                             os.unlink(os.path.join(root, f))
-                        if len(folders):
-                            log.warning("Deleting book {} failed, path {} has subfolders: {}".format(book.id,
-                                        book.path, folders))
-                            return True, _("Deleting bookfolder for book %(id)s failed, path has subfolders: %(path)s",
-                                           id=book.id,
-                                           path=book.path)
-                    shutil.rmtree(path)
+                        for d in folders:
+                            try:
+                                os.rmdir(os.path.join(root, d))
+                            except OSError:
+                                pass
+                    try:
+                        shutil.rmtree(path)
+                    except OSError:
+                        if os.path.exists(path):
+                            raise
                 except (IOError, OSError) as ex:
                     log.error("Deleting book %s failed: %s", book.id, ex)
                     return False, _("Deleting book %(id)s failed: %(message)s", id=book.id, message=ex)
@@ -553,11 +556,23 @@ def move_files_on_change(calibre_path, new_author_dir, new_titledir, localbook, 
                 log.info("Moving title: %s into existing: %s", path, new_path)
                 # Take all files and subfolder from old path (strange command)
                 for dir_name, __, file_list in os.walk(path):
+                    rel_dir = dir_name[len(path):]
+                    target_dir = new_path + rel_dir
+                    if rel_dir:
+                        os.makedirs(target_dir, exist_ok=True)
                     for file in file_list:
-                        shutil.move(os.path.join(dir_name, file), os.path.join(new_path + dir_name[len(path):], file))
-            if not os.listdir(os.path.split(path)[0]):
+                        shutil.move(os.path.join(dir_name, file), os.path.join(target_dir, file))
+                # remove remaining empty directories from old path (including history subdirs)
+                for dir_name, dir_list, file_list in os.walk(path, topdown=False):
+                    try:
+                        os.rmdir(dir_name)
+                    except OSError:
+                        pass
+            # if source book dir was fully removed/moved, try to remove empty author dir
+            if not os.path.exists(path):
                 try:
-                    shutil.rmtree(os.path.split(path)[0])
+                    if not os.listdir(os.path.split(path)[0]):
+                        shutil.rmtree(os.path.split(path)[0])
                 except (IOError, OSError) as ex:
                     log.error("Deleting authorpath for book %s failed: %s", localbook.id, ex)
         # change location in database to new author/title path
