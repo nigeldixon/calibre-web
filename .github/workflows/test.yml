@@ -14,6 +14,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -29,7 +31,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pytest pytest-cov pytest-playwright playwright==1.65.2 requests
+          pip install pytest pytest-cov diff-cover pytest-playwright playwright==1.65.2 requests
 
       - name: Install Playwright browsers
         run: playwright install --with-deps chromium
@@ -56,17 +58,45 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Find associated pull request
+        if: always()
+        id: find_pr
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            if (context.eventName === 'pull_request') {
+              core.setOutput('number', context.payload.pull_request.number.toString());
+              core.setOutput('base', context.payload.pull_request.base.ref || 'develop');
+              return;
+            }
+            const branch = context.ref.replace('refs/heads/', '');
+            const head = `${owner}:${branch}`;
+            const pulls = await github.rest.pulls.list({ owner, repo, head, state: 'open' });
+            if (pulls.data.length > 0) {
+              core.setOutput('number', pulls.data[0].number.toString());
+              core.setOutput('base', pulls.data[0].base.ref || 'develop');
+            } else {
+              core.setOutput('number', '');
+              core.setOutput('base', 'develop');
+            }
+
       - name: Generate coverage PR comment
         if: always()
         id: coverage_comment
         shell: bash
+        env:
+          BASE_REF: ${{ steps.find_pr.outputs.base || github.base_ref || 'develop' }}
         run: |
           python - <<'PY' > coverage-comment.md
           import os
+          import re
+          import subprocess
           import xml.etree.ElementTree as ET
 
           marker = "<!-- coverage-report -->"
           xml_path = "coverage.xml"
+          base_ref = os.environ.get("BASE_REF", "develop").strip() or "develop"
 
           def pct_to_color(p):
               if p >= 90:
@@ -84,14 +114,17 @@ jobs:
               filled = max(0, min(width, filled))
               return "█" * filled + "░" * (width - filled)
 
+          def badge(pct_i, color):
+              return f"![coverage](https://img.shields.io/badge/coverage-{pct_i}%25-{color})"
+
+          lines_out = [marker, "## Test coverage"]
+
           if not os.path.exists(xml_path):
-              body = f"""{marker}
-          ## Test coverage
-          No coverage data was generated for this run.
-          """
-              print(body)
+              lines_out += ["", "No coverage data was generated for this run."]
+              print("\n".join(lines_out))
               raise SystemExit(0)
 
+          # Module/in-process coverage from coverage.xml
           root = ET.parse(xml_path).getroot()
           total_rate = float(root.attrib.get("line-rate", 0.0))
           total_valid = int(root.attrib.get("lines-valid", 0))
@@ -99,7 +132,7 @@ jobs:
           total_miss = max(0, total_valid - total_covered)
           total_pct = round(total_rate * 100, 1)
           total_pct_i = int(round(total_rate * 100))
-          badge_color, total_emoji, total_label = pct_to_color(total_pct)
+          total_color, total_emoji, total_label = pct_to_color(total_pct)
 
           rows = []
           for cls in root.findall(".//class"):
@@ -107,7 +140,6 @@ jobs:
               rate = float(cls.attrib.get("line-rate", 0.0))
               pct = round(rate * 100, 1)
               pct_i = int(round(rate * 100))
-              # derive statement counts from lines
               lines = cls.findall("./lines/line")
               stmts = len(lines)
               covered = sum(1 for l in lines if int(l.attrib.get("hits", "0")) > 0)
@@ -115,16 +147,13 @@ jobs:
               color, emoji, label = pct_to_color(pct)
               module = filename.replace("\\", "/")
               rows.append((module, stmts, miss, pct, pct_i, emoji, label))
-
-          # sort by coverage asc then module
           rows.sort(key=lambda r: (r[3], r[0]))
-          badge = f"![coverage](https://img.shields.io/badge/coverage-{total_pct_i}%25-{badge_color})"
 
-          lines_out = [
-              marker,
-              "## Test coverage",
+          lines_out += [
               "",
-              f"{badge} **{total_pct}%** ({total_label}) {total_emoji}",
+              "### Module coverage (in-process, measured files)",
+              "",
+              f"{badge(total_pct_i, total_color)} **{total_pct}%** ({total_label}) {total_emoji}",
               "",
               f"`{bar(total_pct_i)}` {total_pct_i}%",
               "",
@@ -137,34 +166,111 @@ jobs:
           else:
               lines_out.append(f"| {total_emoji} | (total) | {total_valid} | {total_miss} | {total_pct}% |")
 
-          lines_out.extend([
+          # Diff/patch coverage via diff-cover
+          diff_md_path = "diff-coverage.md"
+          compare_branch = f"origin/{base_ref}"
+          diff_pct = None
+          diff_pct_i = None
+          diff_total = None
+          diff_missing = None
+          diff_md = ""
+          try:
+              base_cmds = [["diff-cover"], [os.environ.get("pythonLocation", ""), "python", "-m", "diff_cover.diff_cover_tool"]]
+              # build candidate executables
+              candidates = [["diff-cover"], ["python3", "-m", "diff_cover.diff_cover_tool"], ["python", "-m", "diff_cover.diff_cover_tool"]]
+              diff_base = None
+              for cand in candidates:
+                  try:
+                      probe = subprocess.run(cand + ["--help"], capture_output=True, text=True)
+                      if probe.returncode == 0:
+                          diff_base = cand
+                          break
+                  except Exception:
+                      pass
+              if diff_base is None:
+                  raise RuntimeError("diff-cover command not available")
+
+              cmd = diff_base + [xml_path, "--compare-branch", compare_branch, "--format", f"markdown:{diff_md_path}"]
+              subprocess.run(cmd, capture_output=True, text=True)
+              # console summary for parsing
+              summary_cmd = diff_base + [xml_path, "--compare-branch", compare_branch]
+              res2 = subprocess.run(summary_cmd, capture_output=True, text=True)
+              out = (res2.stdout or "") + "\n" + (res2.stderr or "")
+              m_cov = re.search(r"Coverage:\s*([0-9]+(?:\.[0-9]+)?)%", out)
+              m_total = re.search(r"Total:\s*([0-9]+)\s*lines", out)
+              m_miss = re.search(r"Missing:\s*([0-9]+)\s*lines", out)
+              if m_cov:
+                  diff_pct = float(m_cov.group(1))
+                  diff_pct_i = int(round(diff_pct))
+              if m_total:
+                  diff_total = int(m_total.group(1))
+              if m_miss:
+                  diff_missing = int(m_miss.group(1))
+              if os.path.exists(diff_md_path):
+                  with open(diff_md_path, "r", encoding="utf-8") as f:
+                      diff_md = f.read().strip()
+          except Exception:
+              diff_md = ""
+              diff_pct = None
+
+          lines_out += [
               "",
-              "_In-process/unit coverage (modules exercised by unit tests). Functional/E2E tests run Calibre-Web in a separate process, so their server-side coverage is not captured here._",
-          ])
+              f"### Patch coverage (PR diff vs `{compare_branch}`, measured files only)",
+          ]
+          if diff_pct is not None:
+              d_color, d_emoji, d_label = pct_to_color(diff_pct)
+              lines_out += [
+                  "",
+                  f"{badge(diff_pct_i, d_color)} **{diff_pct}%** ({d_label}) {d_emoji}",
+                  "",
+                  f"`{bar(diff_pct_i)}` {diff_pct_i}%",
+              ]
+              if diff_total is not None and diff_missing is not None:
+                  lines_out.append("")
+                  lines_out.append(f"**Diff lines in measured report:** {diff_total} &nbsp;|&nbsp; **Missing:** {diff_missing} &nbsp;|&nbsp; **Covered:** {max(0, diff_total - diff_missing)}")
+          else:
+              lines_out += [
+                  "",
+                  "_Patch coverage could not be computed for this run._",
+              ]
+
+          if diff_md:
+              # keep the details collapsible to avoid huge comments
+              lines_out += [
+                  "",
+                  "<details><summary>Diff coverage details</summary>",
+                  "",
+                  diff_md,
+                  "",
+                  "</details>",
+              ]
+
+          lines_out += [
+              "",
+              "_Module coverage is measured across the full reported module(s) from in-process unit tests. Patch coverage reflects only changed/diff lines that appear in the measured coverage report; functional/E2E tests run Calibre-Web in a separate process, so their server-side coverage is not captured here._",
+          ]
           print("\n".join(lines_out))
           PY
 
-      - name: Find associated pull request
-        if: always() && github.event_name == 'push'
-        id: find_pr
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const { owner, repo } = context.repo;
-            const head = `${owner}:${context.ref.replace('refs/heads/', '')}`;
-            const pulls = await github.rest.pulls.list({ owner, repo, head, state: 'open' });
-            if (pulls.data.length > 0) {
-              core.setOutput('number', pulls.data[0].number.toString());
-            } else {
-              core.setOutput('number', '');
-            }
+      - name: Append diff coverage to job summary
+        if: always()
+        shell: bash
+        run: |
+          if [ -f diff-coverage.md ]; then
+            {
+              echo ""
+              echo "## Patch coverage (PR diff, measured files)"
+              echo ""
+              cat diff-coverage.md
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Comment coverage on PR
-        if: always() && (github.event_name == 'pull_request' || steps.find_pr.outputs.number != '')
+        if: always() && steps.find_pr.outputs.number != ''
         uses: marocchino/sticky-pull-request-comment@v2
         with:
           header: coverage-report
-          number: ${{ github.event_name == 'pull_request' && github.event.pull_request.number || steps.find_pr.outputs.number }}
+          number: ${{ steps.find_pr.outputs.number }}
           path: coverage-comment.md
 
       - name: Run Playwright E2E tests
