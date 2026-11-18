@@ -243,11 +243,11 @@ def test_restore_and_delete_history_version(page: Page, live_server):
     expect(first_item).to_have_count(1)
     first_item.locator(".cover-history-restore").click()
     expect(modal.locator("#cover-editor-status")).to_contain_text(re.compile(r"restor", re.I), timeout=15000)
-    expect(modal.locator("#cover-history-list .cover-history-item")).not_to_have_count(0, timeout=10000)
 
     items = modal.locator("#cover-history-list .cover-history-item")
+    expect(items.first).to_be_visible(timeout=10000)
+    page.wait_for_timeout(300)
     count_before_delete = items.count()
     assert count_before_delete >= 1
     items.first.locator(".cover-history-delete").click()
-    page.wait_for_timeout(500)
-    expect(modal.locator("#cover-history-list .cover-history-item")).to_have_count(count_before_delete - 1, timeout=10000)
+    expect(items).to_have_count(count_before_delete - 1, timeout=15000)
