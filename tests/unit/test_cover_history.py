@@ -150,3 +150,111 @@ def test_restore_cover_version_promotes_history_to_current(tmp_path):
     files = list(hdir.iterdir())
     assert old.exists()  # kept in history
     assert any(f.read_bytes() == b"current" for f in files)
+
+
+def test_restore_cover_version_when_no_current_cover(tmp_path):
+    from cps import cover_history
+
+    book_dir = tmp_path / "book"
+    book_dir.mkdir()
+    hdir = book_dir / ".cover_history"
+    hdir.mkdir()
+    old = hdir / "cover_20240101T010101000000Z.jpg"
+    old.write_bytes(b"old-bytes")
+    assert not (book_dir / "cover.jpg").exists()
+
+    result = cover_history.restore_cover_version(str(book_dir), old.name)
+    assert result is True
+    assert (book_dir / "cover.jpg").read_bytes() == b"old-bytes"
+    # version file remains
+    assert old.is_file() and old.read_bytes() == b"old-bytes"
+    # no spurious snapshot of a non-existent current cover created
+    files = list(hdir.iterdir())
+    assert files == [old]
+
+
+def test_restore_cover_version_rejects_unsafe_names(tmp_path):
+    from cps import cover_history
+
+    book_dir = tmp_path / "book"
+    book_dir.mkdir()
+    (book_dir / "cover.jpg").write_bytes(b"current")
+    hdir = book_dir / ".cover_history"
+    hdir.mkdir()
+    for name in ["../cover.jpg", "cover.jpg", "", ".hidden", "subdir/cover_20240101T010101000000Z.jpg"]:
+        assert cover_history.restore_cover_version(str(book_dir), name) is False
+    assert (book_dir / "cover.jpg").read_bytes() == b"current"
+
+
+def test_restore_cover_version_returns_false_for_missing(tmp_path):
+    from cps import cover_history
+
+    book_dir = tmp_path / "book"
+    book_dir.mkdir()
+    (book_dir / "cover.jpg").write_bytes(b"current")
+    hdir = book_dir / ".cover_history"
+    hdir.mkdir()
+    assert cover_history.restore_cover_version(str(book_dir), "cover_20990101T010101000000Z.jpg") is False
+    assert (book_dir / "cover.jpg").read_bytes() == b"current"
+
+
+def test_list_cover_versions_ignores_invalid_and_non_file_entries(tmp_path):
+    from cps import cover_history
+
+    book_dir = tmp_path / "book"
+    book_dir.mkdir()
+    hdir = book_dir / ".cover_history"
+    hdir.mkdir()
+    valid = hdir / "cover_20240201T010101000000Z.jpg"
+    valid.write_bytes(b"valid-bytes")
+    # invalid names
+    (hdir / "cover.jpg").write_bytes(b"nope")
+    (hdir / "notes.txt").write_bytes(b"nope")
+    (hdir / "cover_20240101T010101000000Z.png").write_bytes(b"nope")
+    # non-file entry with valid-looking name
+    (hdir / "cover_20240301T010101000000Z.jpg").mkdir()
+
+    versions = cover_history.list_cover_versions(str(book_dir))
+    assert [v["name"] for v in versions] == [valid.name]
+    assert versions[0]["size"] == len(b"valid-bytes")
+    assert isinstance(versions[0]["mtime"], (int, float))
+
+
+def test_is_safe_version_name_rejects_non_string_and_edge_cases():
+    from cps import cover_history
+
+    assert cover_history.is_safe_version_name(None) is False
+    assert cover_history.is_safe_version_name(123) is False
+    assert cover_history.is_safe_version_name(b"cover_20240101T010101000000Z.jpg") is False
+    assert cover_history.is_safe_version_name("cover_20240101T010101000000Z.jpg/extra") is False
+    assert cover_history.is_safe_version_name("cover_20240101T010101000000Z.jpg\\extra") is False
+
+
+def test_snapshot_cover_creates_unique_version_files(tmp_path):
+    from cps import cover_history
+
+    book_dir = tmp_path / "book"
+    book_dir.mkdir()
+    (book_dir / "cover.jpg").write_bytes(b"\xff\xd8\xff\xdbA")
+    v1 = cover_history.snapshot_cover(str(book_dir))
+    (book_dir / "cover.jpg").write_bytes(b"\xff\xd8\xff\xdbB")
+    v2 = cover_history.snapshot_cover(str(book_dir))
+    assert v1 and v2 and v1 != v2
+    hdir = book_dir / ".cover_history"
+    assert (hdir / v1).read_bytes() == b"\xff\xd8\xff\xdbA"
+    assert (hdir / v2).read_bytes() == b"\xff\xd8\xff\xdbB"
+
+
+def test_delete_cover_version_rejects_path_traversal_outside_history(tmp_path):
+    from cps import cover_history
+
+    book_dir = tmp_path / "book"
+    book_dir.mkdir()
+    outside = tmp_path / "outside.jpg"
+    outside.write_bytes(b"keep")
+    hdir = book_dir / ".cover_history"
+    hdir.mkdir()
+    # crafted traversal name should be rejected by safety checks
+    assert cover_history.delete_cover_version(str(book_dir), "../outside.jpg") is False
+    assert outside.read_bytes() == b"keep"
+

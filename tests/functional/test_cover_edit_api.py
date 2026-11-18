@@ -58,6 +58,11 @@ def live_server(tmp_path_factory):
     shutil.copy2(settings_src, settings_db)
 
     port = _find_free_port()
+    try:
+        from werkzeug.security import generate_password_hash
+        limited_pw = generate_password_hash("editor123")
+    except Exception:
+        limited_pw = None
     conn = sqlite3.connect(str(settings_db))
     try:
         cur = conn.cursor()
@@ -65,6 +70,14 @@ def live_server(tmp_path_factory):
             "UPDATE settings SET config_calibre_dir=?, config_port=? WHERE id=1",
             (str(library_dir), port),
         )
+        if limited_pw:
+            # ROLE_EDIT only (no upload/admin/delete)
+            cur.execute(
+                "INSERT OR IGNORE INTO user (name, email, role, password, kindle_mail, locale, sidebar_view, default_language, "
+                "denied_tags, allowed_tags, denied_column_value, allowed_column_value, view_settings, kobo_only_shelves_sync) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                ("editor", "editor@example.com", 8, limited_pw, "", "en", 1, "all", "", "", "", "", "{}", 0),
+            )
         conn.commit()
     finally:
         conn.close()
@@ -163,6 +176,39 @@ def auth_headers(session):
 
 def _url(live_server, path):
     return live_server["base_url"] + path
+
+
+def _book_path_from_db(live_server):
+    import sqlite3
+    db = live_server["book_dir"].parent.parent / "metadata.db"
+    conn = sqlite3.connect(str(db))
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT path FROM books WHERE id=?", (live_server["book_id"],))
+        row = cur.fetchone()
+        return row[0] if row else None
+    finally:
+        conn.close()
+
+
+def _rename_book(live_server, admin_session, title, author):
+    url = _url(live_server, f"/admin/book/{live_server['book_id']}")
+    data = {
+        "csrf_token": getattr(admin_session, "csrf_token", ""),
+        "title": title,
+        "authors": author,
+        "rating": "",
+        "series": "",
+        "series_index": "1",
+        "tags": "",
+        "languages": "",
+        "publisher": "",
+        "pubdate": "",
+        "comments": "",
+        "detail_view": "on",
+    }
+    return admin_session.post(url, data=data, headers=auth_headers(admin_session), allow_redirects=True)
+
 
 
 def test_cover_history_requires_login(live_server):
@@ -467,3 +513,202 @@ def test_restore_cover_history_rejects_unsafe_name(live_server, admin_session, n
     if r.headers.get("Content-Type", "").startswith("application/json"):
         assert r.json().get("success") is False
     assert live_server["cover_path"].is_file()
+
+
+def test_rename_book_title_preserves_cover_history(live_server, admin_session, original_cover_bytes):
+    base_url = live_server["base_url"]
+    book_id = live_server["book_id"]
+    files = {"cover": ("cover.jpg", io.BytesIO(original_cover_bytes), "image/jpeg")}
+    r = admin_session.post(_url(live_server, f"/ajax/editcover/{book_id}"), files=files, headers=auth_headers(admin_session))
+    assert r.status_code == 200 and r.json()["success"] is True
+    versions = admin_session.get(_url(live_server, f"/ajax/coverhistory/{book_id}")).json()["versions"]
+    assert len(versions) == 1
+    name = versions[0]["name"]
+
+    original_path = _book_path_from_db(live_server)
+    assert original_path is not None
+    try:
+        r = _rename_book(live_server, admin_session, "Dracula Renamed", "Bram Stoker")
+        assert r.status_code == 200
+        new_path = _book_path_from_db(live_server)
+        assert new_path and new_path != original_path
+        assert new_path.endswith("Dracula Renamed (2)")
+
+        r = admin_session.get(_url(live_server, f"/ajax/coverhistory/{book_id}"))
+        assert r.status_code == 200
+        versions = r.json()["versions"]
+        assert [v["name"] for v in versions] == [name]
+
+        library_dir = live_server["book_dir"].parent.parent
+        assert (library_dir / new_path / ".cover_history" / name).is_file()
+        assert not (library_dir / original_path).exists()
+    finally:
+        _rename_book(live_server, admin_session, "Dracula", "Bram Stoker")
+
+
+def test_rename_book_author_preserves_cover_history(live_server, admin_session, original_cover_bytes):
+    book_id = live_server["book_id"]
+    files = {"cover": ("cover.jpg", io.BytesIO(original_cover_bytes), "image/jpeg")}
+    r = admin_session.post(_url(live_server, f"/ajax/editcover/{book_id}"), files=files, headers=auth_headers(admin_session))
+    assert r.status_code == 200 and r.json()["success"] is True
+    name = admin_session.get(_url(live_server, f"/ajax/coverhistory/{book_id}")).json()["versions"][0]["name"]
+
+    original_path = _book_path_from_db(live_server)
+    assert original_path is not None
+    try:
+        r = _rename_book(live_server, admin_session, "Dracula", "Different Author")
+        assert r.status_code == 200
+        new_path = _book_path_from_db(live_server)
+        assert new_path and new_path != original_path
+        assert new_path.startswith("Different Author/")
+
+        r = admin_session.get(_url(live_server, f"/ajax/coverhistory/{book_id}"))
+        assert r.status_code == 200
+        assert [v["name"] for v in r.json()["versions"]] == [name]
+
+        library_dir = live_server["book_dir"].parent.parent
+        assert (library_dir / new_path / ".cover_history" / name).is_file()
+        assert not (library_dir / original_path).exists()
+    finally:
+        _rename_book(live_server, admin_session, "Dracula", "Bram Stoker")
+
+
+
+def test_rename_book_into_existing_target_dir_preserves_cover_history(live_server, admin_session, original_cover_bytes):
+    book_id = live_server["book_id"]
+    files = {"cover": ("cover.jpg", io.BytesIO(original_cover_bytes), "image/jpeg")}
+    r = admin_session.post(_url(live_server, f"/ajax/editcover/{book_id}"), files=files, headers=auth_headers(admin_session))
+    assert r.status_code == 200 and r.json()["success"] is True
+    name = admin_session.get(_url(live_server, f"/ajax/coverhistory/{book_id}")).json()["versions"][0]["name"]
+
+    original_path = _book_path_from_db(live_server)
+    assert original_path is not None
+    library_dir = live_server["book_dir"].parent.parent
+    # Pre-create target directory to force merge branch in move_files_on_change
+    target_rel = "Bram Stoker/Dracula Merged (2)"
+    target_dir = library_dir / target_rel
+    target_dir.mkdir(parents=True, exist_ok=True)
+    # simulate existing unrelated file in target
+    (target_dir / "existing.txt").write_text("keep", encoding="utf-8")
+
+    try:
+        r = _rename_book(live_server, admin_session, "Dracula Merged", "Bram Stoker")
+        assert r.status_code == 200
+        new_path = _book_path_from_db(live_server)
+        assert new_path == target_rel
+
+        r = admin_session.get(_url(live_server, f"/ajax/coverhistory/{book_id}"))
+        assert r.status_code == 200
+        assert [v["name"] for v in r.json()["versions"]] == [name]
+
+        assert (library_dir / new_path / ".cover_history" / name).is_file()
+        assert (library_dir / new_path / "existing.txt").is_file()
+        assert not (library_dir / original_path).exists()
+    finally:
+        _rename_book(live_server, admin_session, "Dracula", "Bram Stoker")
+        # cleanup any stray target dir from failed attempt
+        stray = library_dir / target_rel
+        if stray.exists() and stray != live_server["book_dir"]:
+            shutil.rmtree(stray, ignore_errors=True)
+
+
+
+def _login_session(live_server, username, password):
+    s = requests.Session()
+    base_url = live_server["base_url"]
+    r = s.get(base_url + "/login")
+    r.raise_for_status()
+    m = re.search(r'name="csrf_token" value="([^"]+)"', r.text)
+    assert m, "csrf token not found on login page"
+    csrf = m.group(1)
+    r = s.post(
+        base_url + "/login",
+        data={"username": username, "password": password, "csrf_token": csrf, "submit": ""},
+        allow_redirects=True,
+    )
+    assert r.status_code == 200
+    s.csrf_token = csrf
+    return s
+
+
+@pytest.fixture(scope="session")
+def editor_session(live_server):
+    # created in live_server fixture with ROLE_EDIT only (no upload)
+    return _login_session(live_server, "editor", "editor123")
+
+
+def test_cover_endpoints_forbidden_for_user_without_upload_role(live_server, editor_session):
+    book_id = live_server["book_id"]
+    r = editor_session.get(_url(live_server, f"/ajax/coverhistory/{book_id}"))
+    assert r.status_code == 403
+
+    files = {"cover": ("cover.jpg", b"\xff\xd8\xff\xdbFAKE", "image/jpeg")}
+    r = editor_session.post(_url(live_server, f"/ajax/editcover/{book_id}"), files=files, headers=auth_headers(editor_session))
+    assert r.status_code == 403
+
+    r = editor_session.post(_url(live_server, f"/ajax/coverhistory/{book_id}/cover_20990101T010101000000Z.jpg"), data={"action": "delete"}, headers=auth_headers(editor_session))
+    assert r.status_code == 403
+
+    r = editor_session.post(_url(live_server, f"/ajax/coverhistory/{book_id}/cover_20990101T010101000000Z.jpg/restore"), headers=auth_headers(editor_session))
+    assert r.status_code == 403
+
+
+def _make_png_bytes(w=8, h=8, r=200, g=50, b=50):
+    import struct, zlib
+    def chunk(t, d):
+        return struct.pack('>I', len(d)) + t + d + struct.pack('>I', zlib.crc32(t + d) & 0xffffffff)
+    sig = b'\x89PNG\r\n\x1a\n'
+    ihdr = chunk(b'IHDR', struct.pack('>IIBBBBB', w, h, 8, 2, 0, 0, 0))
+    raw = b''.join(b'\x00' + bytes([r, g, b]) * w for _ in range(h))
+    idat = chunk(b'IDAT', zlib.compress(raw))
+    iend = chunk(b'IEND', b'')
+    return sig + ihdr + idat + iend
+
+
+def test_edit_cover_accepts_png_and_normalizes_to_jpeg(live_server, admin_session):
+    png = _make_png_bytes()
+    files = {"cover": ("cover.png", io.BytesIO(png), "image/png")}
+    r = admin_session.post(_url(live_server, f"/ajax/editcover/{live_server['book_id']}"), files=files, headers=auth_headers(admin_session))
+    assert r.status_code == 200
+    data = r.json()
+    assert data["success"] is True
+    saved = live_server["cover_path"].read_bytes()
+    assert saved[:3] == b"\xff\xd8\xff"
+
+
+def test_edit_cover_accepts_alternate_file_field_name(live_server, admin_session, original_cover_bytes):
+    files = {"image": ("cover.jpg", io.BytesIO(original_cover_bytes), "image/jpeg")}
+    r = admin_session.post(_url(live_server, f"/ajax/editcover/{live_server['book_id']}"), files=files, headers=auth_headers(admin_session))
+    assert r.status_code == 200
+    assert r.json()["success"] is True
+
+
+def test_list_cover_history_includes_metadata_fields(live_server, admin_session, original_cover_bytes):
+    files = {"cover": ("cover.jpg", io.BytesIO(original_cover_bytes), "image/jpeg")}
+    r = admin_session.post(_url(live_server, f"/ajax/editcover/{live_server['book_id']}"), files=files, headers=auth_headers(admin_session))
+    assert r.status_code == 200 and r.json()["success"] is True
+    versions = admin_session.get(_url(live_server, f"/ajax/coverhistory/{live_server['book_id']}")).json()["versions"]
+    assert len(versions) == 1
+    v = versions[0]
+    assert v["name"].startswith("cover_") and v["name"].endswith(".jpg")
+    assert isinstance(v["size"], int) and v["size"] > 0
+    assert isinstance(v["mtime"], (int, float)) and v["mtime"] > 0
+
+
+def test_restore_cover_history_when_current_cover_missing(live_server, admin_session, original_cover_bytes):
+    book_id = live_server["book_id"]
+    files = {"cover": ("cover.jpg", io.BytesIO(original_cover_bytes), "image/jpeg")}
+    r = admin_session.post(_url(live_server, f"/ajax/editcover/{book_id}"), files=files, headers=auth_headers(admin_session))
+    assert r.status_code == 200 and r.json()["success"] is True
+    name = admin_session.get(_url(live_server, f"/ajax/coverhistory/{book_id}")).json()["versions"][0]["name"]
+
+    # remove current cover to exercise restore path without snapshot of current
+    if live_server["cover_path"].exists():
+        live_server["cover_path"].unlink()
+
+    r = admin_session.post(_url(live_server, f"/ajax/coverhistory/{book_id}/{name}/restore"), headers=auth_headers(admin_session))
+    assert r.status_code == 200
+    assert r.json()["success"] is True
+    assert live_server["cover_path"].is_file()
+    assert live_server["cover_path"].read_bytes() == original_cover_bytes
+
