@@ -11,7 +11,7 @@ BASE_URL = os.environ.get("CALIBRE_WEB_URL", "http://127.0.0.1:8083")
 BOOK_ID = int(os.environ.get("CALIBRE_WEB_TEST_BOOK_ID", "2"))
 BOOK_DIR = os.environ.get(
     "CALIBRE_WEB_TEST_BOOK_DIR",
-    "library/Unknown/Full Metal Panic! Σ v15 (2)",
+    "library/Test Author/Sample Test Book (2)",
 )
 COVER_PATH = os.path.join(BOOK_DIR, "cover.jpg")
 HISTORY_DIR = os.path.join(BOOK_DIR, ".cover_history")
