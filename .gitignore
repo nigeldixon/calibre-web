@@ -37,3 +37,6 @@ gdrive_credentials
 client_secrets.json
 gmail.json
 /.key
+
+# Local Playwright runtime libs (e.g. libatomic extracted for host)
+.local-libs/

@@ -38,25 +38,30 @@ jobs:
 
       - name: Run unit tests with coverage
         id: unit_tests
-        run: pytest tests/unit -q --cov=cps.cover_history --cov-report=term-missing --cov-report=xml:coverage.xml
-
-      - name: Publish coverage summary
         if: always()
+        continue-on-error: true
         shell: bash
         run: |
-          {
-            echo "## Test coverage (unit, in-process)"
-            echo
-            echo "Covers modules exercised by in-process unit tests. Functional/E2E tests run Calibre-Web in a separate process, so their server-side coverage is not captured here."
-            echo
-            echo '```text'
-            if [ -f .coverage ]; then
-              python -m coverage report -m --include="*/cps/cover_history.py"
-            else
-              echo "No coverage data generated."
-            fi
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+          set -o pipefail
+          pytest tests/unit -q --cov=cps.cover_history --cov-report=term-missing --cov-report=xml:coverage.xml 2>&1 | tee unit-test-output.txt
+
+      - name: Run Playwright E2E tests
+        id: e2e_tests
+        if: always()
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          pytest tests/e2e -q 2>&1 | tee e2e-test-output.txt
+
+      - name: Run HTTP functional tests
+        id: functional_tests
+        if: always()
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          pytest tests/functional -q 2>&1 | tee functional-test-output.txt
 
       - name: Find associated pull request
         if: always()
@@ -81,12 +86,15 @@ jobs:
               core.setOutput('base', 'develop');
             }
 
-      - name: Generate coverage PR comment
+      - name: Generate coverage and test PR comment
         if: always()
         id: coverage_comment
         shell: bash
         env:
           BASE_REF: ${{ steps.find_pr.outputs.base || github.base_ref || 'develop' }}
+          UNIT_OUTCOME: ${{ steps.unit_tests.outcome }}
+          E2E_OUTCOME: ${{ steps.e2e_tests.outcome }}
+          FUNCTIONAL_OUTCOME: ${{ steps.functional_tests.outcome }}
         run: |
           python - <<'PY' > coverage-comment.md
           import os
@@ -117,10 +125,57 @@ jobs:
           def badge(pct_i, color):
               return f"![coverage](https://img.shields.io/badge/coverage-{pct_i}%25-{color})"
 
-          lines_out = [marker, "## Test coverage"]
+          def status_icon(outcome):
+              if outcome == "success":
+                  return "✅"
+              if outcome == "failure":
+                  return "❌"
+              if outcome in ("skipped", "cancelled"):
+                  return "⏭️"
+              return "⚪"
+
+          def extract_summary(path):
+              if not os.path.exists(path):
+                  return "no results"
+              try:
+                  with open(path, "r", encoding="utf-8", errors="replace") as f:
+                      content = f.read()
+              except Exception:
+                  return "no results"
+              # Prefer the standard pytest short summary line near the end.
+              for line in reversed([ln.strip() for ln in content.splitlines() if ln.strip()]):
+                  if re.search(r"\b(passed|failed|error|errors|skipped|xfailed|xpassed|deselected|warnings?)\b", line) and re.search(r"\b(in|no tests ran)\b", line):
+                      return line
+                  if line.startswith("no tests ran"):
+                      return line
+              for line in reversed([ln.strip() for ln in content.splitlines() if ln.strip()]):
+                  if re.search(r"\b(passed|failed|error|errors|skipped)\b", line):
+                      return line
+              return "no results"
+
+          suites = [
+              ("Unit (in-process)", os.environ.get("UNIT_OUTCOME", ""), "unit-test-output.txt", "coverage measured"),
+              ("Playwright E2E", os.environ.get("E2E_OUTCOME", ""), "e2e-test-output.txt", "subprocess (no server-side coverage)"),
+              ("HTTP functional", os.environ.get("FUNCTIONAL_OUTCOME", ""), "functional-test-output.txt", "subprocess (no server-side coverage)"),
+          ]
+
+          lines_out = [marker, "## Test & coverage report"]
+
+          # Test results (included with patch/module coverage in the same PR comment)
+          lines_out += [
+              "",
+              "### Test results",
+              "",
+              "| Status | Suite | Tests (pass/fail summary) | Notes |",
+              "|:------:|-------|----------------------------|-------|",
+          ]
+          for name, outcome, path, note in suites:
+              icon = status_icon(outcome)
+              summary = extract_summary(path).replace("|", "\\|")
+              lines_out.append(f"| {icon} | {name} | `{summary}` | {note} |")
 
           if not os.path.exists(xml_path):
-              lines_out += ["", "No coverage data was generated for this run."]
+              lines_out += ["", "### Coverage", "", "No coverage data was generated for this run."]
               print("\n".join(lines_out))
               raise SystemExit(0)
 
@@ -175,8 +230,6 @@ jobs:
           diff_missing = None
           diff_md = ""
           try:
-              base_cmds = [["diff-cover"], [os.environ.get("pythonLocation", ""), "python", "-m", "diff_cover.diff_cover_tool"]]
-              # build candidate executables
               candidates = [["diff-cover"], ["python3", "-m", "diff_cover.diff_cover_tool"], ["python", "-m", "diff_cover.diff_cover_tool"]]
               diff_base = None
               for cand in candidates:
@@ -252,20 +305,90 @@ jobs:
           print("\n".join(lines_out))
           PY
 
-      - name: Append diff coverage to job summary
+      - name: Publish test and coverage summary
         if: always()
         shell: bash
         run: |
-          if [ -f diff-coverage.md ]; then
-            {
-              echo ""
-              echo "## Patch coverage (PR diff, measured files)"
-              echo ""
-              cat diff-coverage.md
-            } >> "$GITHUB_STEP_SUMMARY"
-          fi
+          {
+            echo "## Test results"
+            echo
+            echo "| Status | Suite | Tests (pass/fail summary) |"
+            echo "|:------:|-------|----------------------------|"
+            for row in \
+              "unit_tests|Unit (in-process)|unit-test-output.txt" \
+              "e2e_tests|Playwright E2E|e2e-test-output.txt" \
+              "functional_tests|HTTP functional|functional-test-output.txt"; do
+              IFS='|' read -r step name file <<< "$row"
+              outcome="${{ steps.unit_tests.outcome }}" # placeholder, replaced below per step
+            done
+          } >/dev/null 2>&1 || true
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import os, re
+          def status_icon(outcome):
+              if outcome == "success":
+                  return "✅"
+              if outcome == "failure":
+                  return "❌"
+              if outcome in ("skipped", "cancelled"):
+                  return "⏭️"
+              return "⚪"
+          def extract_summary(path):
+              if not os.path.exists(path):
+                  return "no results"
+              try:
+                  with open(path, "r", encoding="utf-8", errors="replace") as f:
+                      content = f.read()
+              except Exception:
+                  return "no results"
+              for line in reversed([ln.strip() for ln in content.splitlines() if ln.strip()]):
+                  if re.search(r"\b(passed|failed|error|errors|skipped|xfailed|xpassed|deselected|warnings?)\b", line) and re.search(r"\b(in|no tests ran)\b", line):
+                      return line
+                  if line.startswith("no tests ran"):
+                      return line
+              for line in reversed([ln.strip() for ln in content.splitlines() if ln.strip()]):
+                  if re.search(r"\b(passed|failed|error|errors|skipped)\b", line):
+                      return line
+              return "no results"
+          suites = [
+              ("Unit (in-process)", os.environ.get("UNIT_OUTCOME",""), "unit-test-output.txt"),
+              ("Playwright E2E", os.environ.get("E2E_OUTCOME",""), "e2e-test-output.txt"),
+              ("HTTP functional", os.environ.get("FUNCTIONAL_OUTCOME",""), "functional-test-output.txt"),
+          ]
+          print("## Test results")
+          print()
+          print("| Status | Suite | Tests (pass/fail summary) |")
+          print("|:------:|-------|----------------------------|")
+          for name, outcome, path in suites:
+              print(f"| {status_icon(outcome)} | {name} | `{extract_summary(path).replace('|','\\|')}` |")
+          print()
+          print("## Test coverage (unit, in-process)")
+          print()
+          print("Covers modules exercised by in-process unit tests. Functional/E2E tests run Calibre-Web in a separate process, so their server-side coverage is not captured here.")
+          print()
+          print("```text")
+          if os.path.exists(".coverage"):
+              try:
+                  import subprocess
+                  r = subprocess.run(["python","-m","coverage","report","-m","--include=*/cps/cover_history.py"], capture_output=True, text=True)
+                  print((r.stdout or r.stderr or "No coverage data generated.").rstrip())
+              except Exception:
+                  print("No coverage data generated.")
+          else:
+              print("No coverage data generated.")
+          print("```")
+          if os.path.exists("diff-coverage.md"):
+              print()
+              print("## Patch coverage (PR diff, measured files)")
+              print()
+              with open("diff-coverage.md","r",encoding="utf-8",errors="replace") as f:
+                  print(f.read().rstrip())
+          PY
+        env:
+          UNIT_OUTCOME: ${{ steps.unit_tests.outcome }}
+          E2E_OUTCOME: ${{ steps.e2e_tests.outcome }}
+          FUNCTIONAL_OUTCOME: ${{ steps.functional_tests.outcome }}
 
-      - name: Comment coverage on PR
+      - name: Comment coverage and test results on PR
         if: always() && steps.find_pr.outputs.number != ''
         uses: marocchino/sticky-pull-request-comment@v2
         with:
@@ -273,8 +396,12 @@ jobs:
           number: ${{ steps.find_pr.outputs.number }}
           path: coverage-comment.md
 
-      - name: Run Playwright E2E tests
-        run: pytest tests/e2e -q
-
-      - name: Run HTTP functional tests
-        run: pytest tests/functional -q
+      - name: Fail if any test suite failed
+        if: always()
+        shell: bash
+        run: |
+          failed=0
+          if [ "${{ steps.unit_tests.outcome }}" != "success" ]; then echo "Unit tests: ${{ steps.unit_tests.outcome }}"; failed=1; fi
+          if [ "${{ steps.e2e_tests.outcome }}" != "success" ]; then echo "Playwright E2E tests: ${{ steps.e2e_tests.outcome }}"; failed=1; fi
+          if [ "${{ steps.functional_tests.outcome }}" != "success" ]; then echo "HTTP functional tests: ${{ steps.functional_tests.outcome }}"; failed=1; fi
+          exit $failed
