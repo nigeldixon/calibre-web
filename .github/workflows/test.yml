@@ -4,6 +4,10 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+  pull-requests: write
+
 jobs:
   tests:
     runs-on: ubuntu-latest
@@ -31,6 +35,7 @@ jobs:
         run: playwright install --with-deps chromium
 
       - name: Run unit tests with coverage
+        id: unit_tests
         run: pytest tests/unit -q --cov=cps.cover_history --cov-report=term-missing --cov-report=xml:coverage.xml
 
       - name: Publish coverage summary
@@ -50,6 +55,117 @@ jobs:
             fi
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Generate coverage PR comment
+        if: always()
+        id: coverage_comment
+        shell: bash
+        run: |
+          python - <<'PY' > coverage-comment.md
+          import os
+          import xml.etree.ElementTree as ET
+
+          marker = "<!-- coverage-report -->"
+          xml_path = "coverage.xml"
+
+          def pct_to_color(p):
+              if p >= 90:
+                  return "brightgreen", "🟢", "Good"
+              if p >= 80:
+                  return "green", "🟢", "Good"
+              if p >= 70:
+                  return "yellow", "🟡", "Fair"
+              if p >= 50:
+                  return "orange", "🟠", "Poor"
+              return "red", "🔴", "Poor"
+
+          def bar(p, width=20):
+              filled = int(round((p / 100.0) * width))
+              filled = max(0, min(width, filled))
+              return "█" * filled + "░" * (width - filled)
+
+          if not os.path.exists(xml_path):
+              body = f"""{marker}
+          ## Test coverage
+          No coverage data was generated for this run.
+          """
+              print(body)
+              raise SystemExit(0)
+
+          root = ET.parse(xml_path).getroot()
+          total_rate = float(root.attrib.get("line-rate", 0.0))
+          total_valid = int(root.attrib.get("lines-valid", 0))
+          total_covered = int(root.attrib.get("lines-covered", 0))
+          total_miss = max(0, total_valid - total_covered)
+          total_pct = round(total_rate * 100, 1)
+          total_pct_i = int(round(total_rate * 100))
+          badge_color, total_emoji, total_label = pct_to_color(total_pct)
+
+          rows = []
+          for cls in root.findall(".//class"):
+              filename = cls.attrib.get("filename", "")
+              rate = float(cls.attrib.get("line-rate", 0.0))
+              pct = round(rate * 100, 1)
+              pct_i = int(round(rate * 100))
+              # derive statement counts from lines
+              lines = cls.findall("./lines/line")
+              stmts = len(lines)
+              covered = sum(1 for l in lines if int(l.attrib.get("hits", "0")) > 0)
+              miss = stmts - covered
+              color, emoji, label = pct_to_color(pct)
+              module = filename.replace("\\", "/")
+              rows.append((module, stmts, miss, pct, pct_i, emoji, label))
+
+          # sort by coverage asc then module
+          rows.sort(key=lambda r: (r[3], r[0]))
+          badge = f"![coverage](https://img.shields.io/badge/coverage-{total_pct_i}%25-{badge_color})"
+
+          lines_out = [
+              marker,
+              "## Test coverage",
+              "",
+              f"{badge} **{total_pct}%** ({total_label}) {total_emoji}",
+              "",
+              f"`{bar(total_pct_i)}` {total_pct_i}%",
+              "",
+              "| Status | Module | Stmts | Miss | Cover |",
+              "|:------:|--------|------:|-----:|------:|",
+          ]
+          if rows:
+              for module, stmts, miss, pct, pct_i, emoji, label in rows:
+                  lines_out.append(f"| {emoji} | `{module}` | {stmts} | {miss} | {pct}% |")
+          else:
+              lines_out.append(f"| {total_emoji} | (total) | {total_valid} | {total_miss} | {total_pct}% |")
+
+          lines_out.extend([
+              "",
+              "_In-process/unit coverage (modules exercised by unit tests). Functional/E2E tests run Calibre-Web in a separate process, so their server-side coverage is not captured here._",
+          ])
+          print("\n".join(lines_out))
+          PY
+
+      - name: Find associated pull request
+        if: always() && github.event_name == 'push'
+        id: find_pr
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const head = `${owner}:${context.ref.replace('refs/heads/', '')}`;
+            const pulls = await github.rest.pulls.list({ owner, repo, head, state: 'open' });
+            if (pulls.data.length > 0) {
+              core.setOutput('number', pulls.data[0].number.toString());
+            } else {
+              core.setOutput('number', '');
+            }
+
+      - name: Comment coverage on PR
+        if: always() && (github.event_name == 'pull_request' || steps.find_pr.outputs.number != '')
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: coverage-report
+          number: ${{ github.event_name == 'pull_request' && github.event.pull_request.number || steps.find_pr.outputs.number }}
+          path: coverage-comment.md
 
       - name: Run Playwright E2E tests
         run: pytest tests/e2e -q
