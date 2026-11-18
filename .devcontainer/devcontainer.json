@@ -1,0 +1,31 @@
+{
+  "name": "calibre-web",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".."
+  },
+  "workspaceFolder": "/workspaces/calibre-web",
+  "forwardPorts": [8083],
+  "portsAttributes": {
+    "8083": {
+      "label": "Calibre-Web",
+      "onAutoForward": "notify"
+    }
+  },
+  "postCreateCommand": "python -m pip install -e . || true",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-python.vscode-pylance"
+      ],
+      "settings": {
+        "python.testing.pytestEnabled": true,
+        "python.testing.pytestArgs": [
+          "tests"
+        ]
+      }
+    }
+  },
+  "remoteUser": "vscode"
+}
