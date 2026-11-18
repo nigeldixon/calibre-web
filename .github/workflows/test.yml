@@ -2,7 +2,14 @@ name: Tests
 
 on:
   push:
+    branches-ignore:
+      - develop
+      - master
   pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -50,6 +57,8 @@ jobs:
         if: always()
         continue-on-error: true
         shell: bash
+        env:
+          CALIBRE_WEB_TEST_COVERAGE: "1"
         run: |
           set -o pipefail
           pytest tests/e2e -q 2>&1 | tee e2e-test-output.txt
@@ -59,9 +68,29 @@ jobs:
         if: always()
         continue-on-error: true
         shell: bash
+        env:
+          CALIBRE_WEB_TEST_COVERAGE: "1"
         run: |
           set -o pipefail
           pytest tests/functional -q 2>&1 | tee functional-test-output.txt
+
+      - name: Combine coverage data
+        id: combine_coverage
+        if: always()
+        shell: bash
+        run: |
+          shopt -s nullglob
+          # Combine parallel server-side coverage data (from functional/E2E) into .coverage
+          server_cov=(.coverage.server* .coverage.*)
+          if [ ${#server_cov[@]} -gt 0 ]; then
+            python -m coverage combine --append "${server_cov[@]}" 2>&1 || true
+          else
+            python -m coverage combine 2>&1 || true
+          fi
+          if [ -f .coverage ] || [ ${#server_cov[@]} -gt 0 ]; then
+            python -m coverage xml -o coverage.xml || true
+            python -m coverage report -m --include="*/cps/*" --omit="*/tests/*" > coverage-term.txt 2>&1 || true
+          fi
 
       - name: Find associated pull request
         if: always()
@@ -154,9 +183,9 @@ jobs:
               return "no results"
 
           suites = [
-              ("Unit (in-process)", os.environ.get("UNIT_OUTCOME", ""), "unit-test-output.txt", "coverage measured"),
-              ("Playwright E2E", os.environ.get("E2E_OUTCOME", ""), "e2e-test-output.txt", "subprocess (no server-side coverage)"),
-              ("HTTP functional", os.environ.get("FUNCTIONAL_OUTCOME", ""), "functional-test-output.txt", "subprocess (no server-side coverage)"),
+              ("Unit (in-process)", os.environ.get("UNIT_OUTCOME", ""), "unit-test-output.txt", "in-process coverage"),
+              ("Playwright E2E", os.environ.get("E2E_OUTCOME", ""), "e2e-test-output.txt", "subprocess (server coverage combined when available)"),
+              ("HTTP functional", os.environ.get("FUNCTIONAL_OUTCOME", ""), "functional-test-output.txt", "subprocess (server coverage combined when available)"),
           ]
 
           lines_out = [marker, "## Test & coverage report"]
@@ -179,7 +208,7 @@ jobs:
               print("\n".join(lines_out))
               raise SystemExit(0)
 
-          # Module/in-process coverage from coverage.xml
+          # Module coverage from (combined) coverage.xml
           root = ET.parse(xml_path).getroot()
           total_rate = float(root.attrib.get("line-rate", 0.0))
           total_valid = int(root.attrib.get("lines-valid", 0))
@@ -206,7 +235,7 @@ jobs:
 
           lines_out += [
               "",
-              "### Module coverage (in-process, measured files)",
+              "### Module coverage (combined: unit + functional/E2E server where available)",
               "",
               f"{badge(total_pct_i, total_color)} **{total_pct}%** ({total_label}) {total_emoji}",
               "",
@@ -268,7 +297,7 @@ jobs:
 
           lines_out += [
               "",
-              f"### Patch coverage (PR diff vs `{compare_branch}`, measured files only)",
+              f"### Patch coverage (PR diff vs `{compare_branch}`)",
           ]
           if diff_pct is not None:
               d_color, d_emoji, d_label = pct_to_color(diff_pct)
@@ -300,7 +329,7 @@ jobs:
 
           lines_out += [
               "",
-              "_Module coverage is measured across the full reported module(s) from in-process unit tests. Patch coverage reflects only changed/diff lines that appear in the measured coverage report; functional/E2E tests run Calibre-Web in a separate process, so their server-side coverage is not captured here._",
+              "_Module coverage is reported from combined coverage data (in-process unit tests plus server-side coverage from functional/E2E runs when available). Patch coverage reflects changed/diff lines present in that combined coverage report._",
           ]
           print("\n".join(lines_out))
           PY
@@ -361,15 +390,22 @@ jobs:
           for name, outcome, path in suites:
               print(f"| {status_icon(outcome)} | {name} | `{extract_summary(path).replace('|','\\|')}` |")
           print()
-          print("## Test coverage (unit, in-process)")
+          print("## Test coverage (combined)")
           print()
-          print("Covers modules exercised by in-process unit tests. Functional/E2E tests run Calibre-Web in a separate process, so their server-side coverage is not captured here.")
+          print("Combined coverage from in-process unit tests and server-side functional/E2E runs when coverage data is available.")
           print()
           print("```text")
-          if os.path.exists(".coverage"):
+          if os.path.exists("coverage-term.txt"):
+              try:
+                  with open("coverage-term.txt", "r", encoding="utf-8", errors="replace") as f:
+                      txt = f.read().rstrip()
+                  print(txt if txt else "No coverage data generated.")
+              except Exception:
+                  print("No coverage data generated.")
+          elif os.path.exists(".coverage"):
               try:
                   import subprocess
-                  r = subprocess.run(["python","-m","coverage","report","-m","--include=*/cps/cover_history.py"], capture_output=True, text=True)
+                  r = subprocess.run(["python","-m","coverage","report","-m","--include=*/cps/*","--omit=*/tests/*"], capture_output=True, text=True)
                   print((r.stdout or r.stderr or "No coverage data generated.").rstrip())
               except Exception:
                   print("No coverage data generated.")
@@ -378,7 +414,7 @@ jobs:
           print("```")
           if os.path.exists("diff-coverage.md"):
               print()
-              print("## Patch coverage (PR diff, measured files)")
+              print("## Patch coverage (PR diff)")
               print()
               with open("diff-coverage.md","r",encoding="utf-8",errors="replace") as f:
                   print(f.read().rstrip())

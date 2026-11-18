@@ -137,7 +137,10 @@ def restore_cover_version(book_path, name):
     cover_path = os.path.join(book_path, COVER_FILENAME)
     # preserve current before overwrite
     if os.path.isfile(cover_path):
-        snapshot_cover(book_path)
+        try:
+            snapshot_cover(book_path)
+        except OSError:
+            return False
     try:
         shutil.copy2(source_real, cover_path)
     except OSError:
