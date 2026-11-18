@@ -182,73 +182,12 @@ jobs:
                       return line
               return "no results"
 
-          suites = [
-              ("Unit (in-process)", os.environ.get("UNIT_OUTCOME", ""), "unit-test-output.txt", "in-process coverage"),
-              ("Playwright E2E", os.environ.get("E2E_OUTCOME", ""), "e2e-test-output.txt", "subprocess (server coverage combined when available)"),
-              ("HTTP functional", os.environ.get("FUNCTIONAL_OUTCOME", ""), "functional-test-output.txt", "subprocess (server coverage combined when available)"),
-          ]
-
-          lines_out = [marker, "## Test & coverage report"]
-
-          # Test results (included with patch/module coverage in the same PR comment)
-          lines_out += [
-              "",
-              "### Test results",
-              "",
-              "| Status | Suite | Tests (pass/fail summary) | Notes |",
-              "|:------:|-------|----------------------------|-------|",
-          ]
-          for name, outcome, path, note in suites:
-              icon = status_icon(outcome)
-              summary = extract_summary(path).replace("|", "\\|")
-              lines_out.append(f"| {icon} | {name} | `{summary}` | {note} |")
+          lines_out = [marker, "## Patch coverage"]
 
           if not os.path.exists(xml_path):
-              lines_out += ["", "### Coverage", "", "No coverage data was generated for this run."]
+              lines_out += ["", "No coverage data was generated for this run."]
               print("\n".join(lines_out))
               raise SystemExit(0)
-
-          # Module coverage from (combined) coverage.xml
-          root = ET.parse(xml_path).getroot()
-          total_rate = float(root.attrib.get("line-rate", 0.0))
-          total_valid = int(root.attrib.get("lines-valid", 0))
-          total_covered = int(root.attrib.get("lines-covered", 0))
-          total_miss = max(0, total_valid - total_covered)
-          total_pct = round(total_rate * 100, 1)
-          total_pct_i = int(round(total_rate * 100))
-          total_color, total_emoji, total_label = pct_to_color(total_pct)
-
-          rows = []
-          for cls in root.findall(".//class"):
-              filename = cls.attrib.get("filename", "")
-              rate = float(cls.attrib.get("line-rate", 0.0))
-              pct = round(rate * 100, 1)
-              pct_i = int(round(rate * 100))
-              lines = cls.findall("./lines/line")
-              stmts = len(lines)
-              covered = sum(1 for l in lines if int(l.attrib.get("hits", "0")) > 0)
-              miss = stmts - covered
-              color, emoji, label = pct_to_color(pct)
-              module = filename.replace("\\", "/")
-              rows.append((module, stmts, miss, pct, pct_i, emoji, label))
-          rows.sort(key=lambda r: (r[3], r[0]))
-
-          lines_out += [
-              "",
-              "### Module coverage (combined: unit + functional/E2E server where available)",
-              "",
-              f"{badge(total_pct_i, total_color)} **{total_pct}%** ({total_label}) {total_emoji}",
-              "",
-              f"`{bar(total_pct_i)}` {total_pct_i}%",
-              "",
-              "| Status | Module | Stmts | Miss | Cover |",
-              "|:------:|--------|------:|-----:|------:|",
-          ]
-          if rows:
-              for module, stmts, miss, pct, pct_i, emoji, label in rows:
-                  lines_out.append(f"| {emoji} | `{module}` | {stmts} | {miss} | {pct}% |")
-          else:
-              lines_out.append(f"| {total_emoji} | (total) | {total_valid} | {total_miss} | {total_pct}% |")
 
           # Diff/patch coverage via diff-cover
           diff_md_path = "diff-coverage.md"
@@ -297,7 +236,7 @@ jobs:
 
           lines_out += [
               "",
-              f"### Patch coverage (PR diff vs `{compare_branch}`)",
+              f"Diff vs `{compare_branch}` (changed/diff lines present in the combined coverage report).",
           ]
           if diff_pct is not None:
               d_color, d_emoji, d_label = pct_to_color(diff_pct)
@@ -309,7 +248,7 @@ jobs:
               ]
               if diff_total is not None and diff_missing is not None:
                   lines_out.append("")
-                  lines_out.append(f"**Diff lines in measured report:** {diff_total} &nbsp;|&nbsp; **Missing:** {diff_missing} &nbsp;|&nbsp; **Covered:** {max(0, diff_total - diff_missing)}")
+                  lines_out.append(f"**Diff lines:** {diff_total} &nbsp;|&nbsp; **Missing:** {diff_missing} &nbsp;|&nbsp; **Covered:** {max(0, diff_total - diff_missing)}")
           else:
               lines_out += [
                   "",
@@ -317,7 +256,6 @@ jobs:
               ]
 
           if diff_md:
-              # keep the details collapsible to avoid huge comments
               lines_out += [
                   "",
                   "<details><summary>Diff coverage details</summary>",
@@ -326,11 +264,6 @@ jobs:
                   "",
                   "</details>",
               ]
-
-          lines_out += [
-              "",
-              "_Module coverage is reported from combined coverage data (in-process unit tests plus server-side coverage from functional/E2E runs when available). Patch coverage reflects changed/diff lines present in that combined coverage report._",
-          ]
           print("\n".join(lines_out))
           PY
 
