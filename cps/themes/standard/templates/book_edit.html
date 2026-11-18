@@ -7,7 +7,7 @@
         <img id="detailcover" title="{{book.title}}" src="{{url_for('web.get_cover', book_id=book.id, resolution='og', c=book|last_modified)}}" />
     </div>
     {% if current_user.role_upload() and book.has_cover %}
-    <div class="text-center" style="margin-top:8px;">
+    <div class="text-center">
       <button type="button" class="btn btn-default" id="edit_cover_btn" data-toggle="modal" data-target="#coverEditorModal">{{ _('Edit Cover') }}</button>
     </div>
     {% endif %}
