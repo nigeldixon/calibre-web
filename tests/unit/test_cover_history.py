@@ -258,3 +258,203 @@ def test_delete_cover_version_rejects_path_traversal_outside_history(tmp_path):
     assert cover_history.delete_cover_version(str(book_dir), "../outside.jpg") is False
     assert outside.read_bytes() == b"keep"
 
+
+
+def test_is_safe_version_name_defensive_checks_via_relaxed_pattern(monkeypatch, tmp_path):
+    import os
+    import re
+    from cps import cover_history
+
+    # relax regex so defensive path/basename/separator checks are reachable
+    monkeypatch.setattr(cover_history, "_VERSION_RE", re.compile(r".*"))
+    assert cover_history.is_safe_version_name("dir/cover_20240101T010101000000Z.jpg") is False
+    assert cover_history.is_safe_version_name("cover_20240101T010101000000Z.jpg") is True
+
+    # altsep present in name (while basename == name) triggers separator rejection
+    monkeypatch.setattr(cover_history.os.path, "altsep", "Z")
+    assert cover_history.is_safe_version_name("cover_20240101T010101000000Z.jpg") is False
+
+
+def test_snapshot_cover_uses_fallback_when_names_collide(monkeypatch, tmp_path):
+    from cps import cover_history
+
+    book_dir = tmp_path / "book"
+    book_dir.mkdir()
+    (book_dir / "cover.jpg").write_bytes(b"\xff\xd8\xff\xdbX")
+    hdir = book_dir / ".cover_history"
+    hdir.mkdir()
+    fixed = "cover_20240101T010101000000Z.jpg"
+    # occupy the fixed name so all 5 attempts in the loop collide
+    (hdir / fixed).write_bytes(b"occupied")
+
+    monkeypatch.setattr(cover_history, "_generate_version_name", lambda: fixed)
+    monkeypatch.setattr("cps.cover_history.os.getpid", lambda: 12345)
+
+    name = cover_history.snapshot_cover(str(book_dir))
+    assert name is not None
+    assert name != fixed
+    assert name.startswith("cover_20240101T010101000000Z_12345") or name.endswith(".jpg")
+    assert (hdir / name).read_bytes() == b"\xff\xd8\xff\xdbX"
+    assert (hdir / fixed).read_bytes() == b"occupied"
+
+
+def test_list_cover_versions_skips_entry_when_stat_raises(monkeypatch, tmp_path):
+    import os
+    from cps import cover_history
+
+    book_dir = tmp_path / "book"
+    book_dir.mkdir()
+    hdir = book_dir / ".cover_history"
+    hdir.mkdir()
+    bad = hdir / "cover_20240201T010101000000Z.jpg"
+    good = hdir / "cover_20240101T010101000000Z.jpg"
+    bad.write_bytes(b"bad")
+    good.write_bytes(b"good")
+
+    real_scandir = os.scandir
+
+    class FakeEntry:
+        def __init__(self, name, path):
+            self.name = name
+            self.path = path
+        def is_file(self):
+            return True
+        def stat(self):
+            if self.name == bad.name:
+                raise OSError("boom")
+            return os.stat(self.path)
+
+    class FakeScandir:
+        def __init__(self, path):
+            self._it = iter([FakeEntry(bad.name, str(bad)), FakeEntry(good.name, str(good))])
+        def __enter__(self):
+            return self
+        def __exit__(self, exc_type, exc, tb):
+            return False
+        def __iter__(self):
+            return self._it
+
+    monkeypatch.setattr("cps.cover_history.os.scandir", lambda p: FakeScandir(p))
+    versions = cover_history.list_cover_versions(str(book_dir))
+    assert [v["name"] for v in versions] == [good.name]
+
+
+def test_delete_cover_version_returns_false_when_realpath_raises(monkeypatch, tmp_path):
+    from cps import cover_history
+
+    book_dir = tmp_path / "book"
+    book_dir.mkdir()
+    hdir = book_dir / ".cover_history"
+    hdir.mkdir()
+    vf = hdir / "cover_20240101T010101000000Z.jpg"
+    vf.write_bytes(b"x")
+
+    def boom(path):
+        raise OSError("boom")
+
+    monkeypatch.setattr("cps.cover_history.os.path.realpath", boom)
+    assert cover_history.delete_cover_version(str(book_dir), vf.name) is False
+
+
+def test_delete_cover_version_rejects_symlink_pointing_outside_history(tmp_path):
+    from cps import cover_history
+
+    book_dir = tmp_path / "book"
+    book_dir.mkdir()
+    outside = tmp_path / "outside.jpg"
+    outside.write_bytes(b"outside")
+    hdir = book_dir / ".cover_history"
+    hdir.mkdir()
+    name = "cover_20240101T010101000000Z.jpg"
+    link = hdir / name
+    try:
+        link.symlink_to(outside)
+    except (OSError, NotImplementedError):
+        import pytest
+        pytest.skip("symlinks not supported")
+
+    assert cover_history.delete_cover_version(str(book_dir), name) is False
+    assert outside.read_bytes() == b"outside"
+
+
+def test_delete_cover_version_returns_false_when_remove_raises(monkeypatch, tmp_path):
+    from cps import cover_history
+
+    book_dir = tmp_path / "book"
+    book_dir.mkdir()
+    hdir = book_dir / ".cover_history"
+    hdir.mkdir()
+    vf = hdir / "cover_20240101T010101000000Z.jpg"
+    vf.write_bytes(b"x")
+
+    monkeypatch.setattr("cps.cover_history.os.remove", lambda p: (_ for _ in ()).throw(OSError("boom")))
+    assert cover_history.delete_cover_version(str(book_dir), vf.name) is False
+    assert vf.exists()
+
+
+def test_restore_cover_version_returns_false_when_realpath_raises(monkeypatch, tmp_path):
+    from cps import cover_history
+
+    book_dir = tmp_path / "book"
+    book_dir.mkdir()
+    (book_dir / "cover.jpg").write_bytes(b"current")
+    hdir = book_dir / ".cover_history"
+    hdir.mkdir()
+    vf = hdir / "cover_20240101T010101000000Z.jpg"
+    vf.write_bytes(b"old")
+
+    def boom(path):
+        raise OSError("boom")
+
+    monkeypatch.setattr("cps.cover_history.os.path.realpath", boom)
+    assert cover_history.restore_cover_version(str(book_dir), vf.name) is False
+    assert (book_dir / "cover.jpg").read_bytes() == b"current"
+
+
+def test_restore_cover_version_rejects_symlink_pointing_outside_history(tmp_path):
+    from cps import cover_history
+
+    book_dir = tmp_path / "book"
+    book_dir.mkdir()
+    (book_dir / "cover.jpg").write_bytes(b"current")
+    outside = tmp_path / "outside.jpg"
+    outside.write_bytes(b"outside")
+    hdir = book_dir / ".cover_history"
+    hdir.mkdir()
+    name = "cover_20240101T010101000000Z.jpg"
+    link = hdir / name
+    try:
+        link.symlink_to(outside)
+    except (OSError, NotImplementedError):
+        import pytest
+        pytest.skip("symlinks not supported")
+
+    assert cover_history.restore_cover_version(str(book_dir), name) is False
+    assert (book_dir / "cover.jpg").read_bytes() == b"current"
+
+
+def test_restore_cover_version_returns_false_when_copy_raises(monkeypatch, tmp_path):
+    import os
+    import shutil
+    from cps import cover_history
+
+    book_dir = tmp_path / "book"
+    book_dir.mkdir()
+    cover = book_dir / "cover.jpg"
+    cover.write_bytes(b"current")
+    hdir = book_dir / ".cover_history"
+    hdir.mkdir()
+    vf = hdir / "cover_20240101T010101000000Z.jpg"
+    vf.write_bytes(b"old")
+
+    real_copy2 = shutil.copy2
+
+    def boom(src, dst):
+        # allow snapshot of current cover into history; fail restore copy to cover.jpg
+        if os.path.normpath(dst) == os.path.normpath(str(cover)):
+            raise OSError("boom")
+        return real_copy2(src, dst)
+
+    monkeypatch.setattr("cps.cover_history.shutil.copy2", boom)
+    assert cover_history.restore_cover_version(str(book_dir), vf.name) is False
+
