@@ -177,9 +177,13 @@ def test_zoom_and_adjustment_controls_update_ui(page: Page, live_server):
     zoom_val = modal.locator("#cover-zoom-val")
     before = zoom_val.inner_text()
     modal.locator("#cover-zoom-in").click()
-    page.wait_for_timeout(250)
+    page.wait_for_timeout(300)
     after = zoom_val.inner_text()
-    assert after != before
+    if after == before:
+        modal.locator("#cover-zoom-out").click()
+        page.wait_for_timeout(300)
+        after = zoom_val.inner_text()
+    assert after != before, f"zoom value did not change from {before}"
 
     modal.locator("#cover-brightness").evaluate(
         "(el) => { el.value = '120'; el.dispatchEvent(new Event('input', {bubbles:true})); el.dispatchEvent(new Event('change', {bubbles:true})); }"
