@@ -30,8 +30,26 @@ jobs:
       - name: Install Playwright browsers
         run: playwright install --with-deps chromium
 
-      - name: Run unit tests
-        run: pytest tests/unit -q
+      - name: Run unit tests with coverage
+        run: pytest tests/unit -q --cov=cps.cover_history --cov-report=term-missing --cov-report=xml:coverage.xml
+
+      - name: Publish coverage summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## Test coverage (unit, in-process)"
+            echo
+            echo "Covers modules exercised by in-process unit tests. Functional/E2E tests run Calibre-Web in a separate process, so their server-side coverage is not captured here."
+            echo
+            echo '```text'
+            if [ -f .coverage ]; then
+              python -m coverage report -m --include="*/cps/cover_history.py"
+            else
+              echo "No coverage data generated."
+            fi
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Run Playwright E2E tests
         run: pytest tests/e2e -q
