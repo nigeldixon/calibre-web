@@ -45,6 +45,7 @@ vendor/
 
 # calibre-web
 *.db
+!tests/fixtures/library/metadata.db
 *.log
 cps/cache
 
