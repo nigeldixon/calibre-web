@@ -14,7 +14,7 @@ RUN rm -f /etc/apt/sources.list.d/yarn.list /etc/apt/sources.list.d/yarn.sources
 COPY requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -r /tmp/requirements.txt \
-    && pip install --no-cache-dir pytest pytest-cov pytest-playwright playwright==1.65.2 requests \
+    && pip install --no-cache-dir pytest pytest-cov diff-cover pytest-playwright playwright==1.65.2 requests \
     && rm /tmp/requirements.txt
 
 # Install Playwright browser and OS dependencies (Chromium) for E2E tests
