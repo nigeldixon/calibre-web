@@ -6,6 +6,11 @@
         <!-- Always use full-sized image for the book edit page -->
         <img id="detailcover" title="{{book.title}}" src="{{url_for('web.get_cover', book_id=book.id, resolution='og', c=book|last_modified)}}" />
     </div>
+    {% if current_user.role_upload() and book.has_cover %}
+    <div class="text-center" style="margin-top:8px;">
+      <button type="button" class="btn btn-default" id="edit_cover_btn" data-toggle="modal" data-target="#coverEditorModal">{{ _('Edit Cover') }}</button>
+    </div>
+    {% endif %}
 {% if current_user.role_delete_books() %}
     <div class="text-center">
       <button type="button" class="btn btn-danger" id="delete" data-toggle="modal" data-delete-id="{{ book.id }}" data-target="#deleteModal">{{_("Delete Book")}}</button>
@@ -228,6 +233,76 @@
 {{ delete_book(current_user.role_delete_books()) }}
 {{ delete_confirm_modal() }}
 
+{% if current_user.role_upload() %}
+<div class="modal fade" id="coverEditorModal" tabindex="-1" role="dialog" aria-labelledby="coverEditorModalLabel"
+     data-book-id="{{ book.id }}"
+     data-cover-src="{{ url_for('web.get_cover', book_id=book.id, resolution='og', c=book|last_modified) }}"
+     data-saving="{{ _('Saving...') }}"
+     data-saved="{{ _('Saved') }}"
+     data-deleting="{{ _('Deleting...') }}"
+     data-restoring="{{ _('Restoring...') }}"
+     data-restored="{{ _('Restored') }}">
+  <div class="modal-dialog modal-lg" role="document">
+    <div class="modal-content">
+      <div class="modal-header">
+        <button type="button" class="close" data-dismiss="modal" aria-label="{{ _('Close') }}"><span aria-hidden="true">&times;</span></button>
+        <h4 class="modal-title" id="coverEditorModalLabel">{{ _('Edit Cover') }}</h4>
+      </div>
+      <div class="modal-body">
+        <div class="row">
+          <div class="col-sm-8">
+            <div class="cover-editor-crop-area">
+              <img id="cover-editor-image" src="" alt="{{ _('Cover') }}" style="max-width:100%;">
+            </div>
+            <div class="cover-editor-zoom-controls">
+              <label for="cover-zoom">{{ _('Zoom') }}: <span id="cover-zoom-val">100%</span></label>
+              <div class="cover-editor-zoom-row">
+                <button type="button" class="btn btn-default btn-sm" id="cover-zoom-out" title="{{ _('Zoom out') }}">−</button>
+                <input type="range" id="cover-zoom" min="10" max="400" value="100" step="1">
+                <button type="button" class="btn btn-default btn-sm" id="cover-zoom-in" title="{{ _('Zoom in') }}">+</button>
+              </div>
+              <div class="cover-editor-mode-row" style="margin-top:6px;">
+                <span style="margin-right:6px;">{{ _('Drag mode') }}:</span>
+                <div class="btn-group btn-group-xs" role="group" aria-label="{{ _('Drag mode') }}">
+                  <button type="button" class="btn btn-default active" id="cover-drag-crop" title="{{ _('Move and resize crop box') }}">{{ _('Crop') }}</button>
+                  <button type="button" class="btn btn-default" id="cover-drag-move" title="{{ _('Move image') }}">{{ _('Move') }}</button>
+                </div>
+              </div>
+              <button type="button" class="btn btn-default btn-xs" id="cover-reset-crop" style="margin-top:4px;">{{ _('Reset Crop & Zoom') }}</button>
+            </div>
+          </div>
+          <div class="col-sm-4">
+            <div class="cover-editor-controls">
+              <label for="cover-brightness">{{ _('Brightness') }}: <span id="cover-brightness-val">100%</span></label>
+              <input type="range" id="cover-brightness" min="50" max="150" value="100" class="form-control">
+              <label for="cover-contrast">{{ _('Contrast') }}: <span id="cover-contrast-val">100%</span></label>
+              <input type="range" id="cover-contrast" min="50" max="150" value="100" class="form-control">
+              <label for="cover-saturation">{{ _('Saturation') }}: <span id="cover-saturation-val">100%</span></label>
+              <input type="range" id="cover-saturation" min="0" max="200" value="100" class="form-control">
+              <div style="margin-top:8px;">
+                <button type="button" class="btn btn-default btn-sm" id="cover-reset-adjustments">{{ _('Reset Adjustments') }}</button>
+              </div>
+              <div id="cover-editor-status"></div>
+            </div>
+            <hr>
+            <h5>{{ _('Saved Versions') }}</h5>
+            <ul id="cover-history-list" class="cover-history-list"
+                data-loading="{{ _('Loading...') }}"
+                data-empty="{{ _('No saved versions') }}"
+                data-restore="{{ _('Restore') }}"
+                data-delete="{{ _('Delete') }}"></ul>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-default" data-dismiss="modal">{{ _('Cancel') }}</button>
+        <button type="button" class="btn btn-primary" id="cover-save-btn">{{ _('Save Cover') }}</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
+
 <div class="modal fade" id="metaModal" tabindex="-1" role="dialog" aria-labelledby="metaModalLabel">
   <div class="modal-dialog modal-lg" role="document">
     <div class="modal-content">
@@ -322,11 +397,15 @@
 {% if not current_user.locale == 'en' %}
 <script src="{{ url_for('static', filename='js/libs/bootstrap-datepicker/locales/bootstrap-datepicker.' + current_user.locale + '.min.js') }}" charset="UTF-8"></script>
 {% endif %}
+<script src="{{ url_for('static', filename='js/libs/cropper.min.js') }}"></script>
 <script src="{{ url_for('static', filename='js/edit_books.js') }}"></script>
+<script src="{{ url_for('static', filename='js/cover_editor.js') }}"></script>
 <script src="{{ url_for('static', filename='js/fullscreen.js') }}"></script>
 {% endblock %}
 {% block header %}
 <meta name="referrer" content="never">
 <link href="{{ url_for('static', filename='css/libs/typeahead.css') }}" rel="stylesheet" media="screen">
 <link href="{{ url_for('static', filename='css/libs/bootstrap-datepicker3.min.css') }}" rel="stylesheet" media="screen">
+<link href="{{ url_for('static', filename='css/libs/cropper.min.css') }}" rel="stylesheet" media="screen">
+<link href="{{ url_for('static', filename='css/cover_editor.css') }}" rel="stylesheet" media="screen">
 {% endblock %}

@@ -1,0 +1,66 @@
+#coverEditorModal .cover-editor-crop-area {
+  max-height: 55vh;
+  min-height: 240px;
+  background: #f5f5f5;
+  overflow: hidden;
+}
+#coverEditorModal .cover-editor-crop-area img {
+  display: block;
+  max-width: 100%;
+}
+#coverEditorModal .cover-editor-controls label {
+  font-weight: normal;
+  margin-top: 8px;
+}
+#coverEditorModal .cover-history-list {
+  list-style: none;
+  padding-left: 0;
+  margin: 0;
+  max-height: 180px;
+  overflow-y: auto;
+}
+#coverEditorModal .cover-history-item {
+  padding: 4px 0;
+  border-bottom: 1px solid #eee;
+  font-size: 12px;
+}
+#coverEditorModal .cover-history-name {
+  display: inline-block;
+  max-width: 55%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+#cover-editor-status {
+  min-height: 1.4em;
+  margin-top: 6px;
+}
+#coverEditorModal .cover-editor-zoom-controls {
+  margin-top: 8px;
+}
+#coverEditorModal .cover-editor-zoom-controls label {
+  font-weight: normal;
+  margin-bottom: 2px;
+}
+#coverEditorModal .cover-editor-zoom-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+#coverEditorModal .cover-editor-zoom-row input[type="range"] {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+#coverEditorModal .cover-editor-zoom-row .btn {
+  flex: 0 0 auto;
+  width: 32px;
+  padding-left: 0;
+  padding-right: 0;
+}
+#coverEditorModal .cover-editor-mode-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+}
