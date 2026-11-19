@@ -171,6 +171,7 @@ jobs:
           marker = "<!-- codeql-report -->"
           sarif_files = sorted(glob.glob("codeql-results/**/*.sarif", recursive=True))
           analyze_outcomes = ${{ toJSON(needs.analyze.result) }}
+          expected_langs = ["javascript-typescript", "python"]
 
           base_sha = os.environ.get("PR_BASE_SHA", "").strip()
           head_sha = os.environ.get("PR_HEAD_SHA", "").strip()
@@ -240,6 +241,9 @@ jobs:
               return False
 
           by_lang = {}
+          if not sarif_files:
+              for lang in expected_langs:
+                  by_lang[lang] = {"results": 0, "error": 0, "warning": 0, "note": 0, "parse_error": True}
           for path in sarif_files:
               # path like codeql-results/codeql-sarif-python/python.sarif
               parts = path.replace("\\", "/").split("/")
@@ -252,9 +256,9 @@ jobs:
                   with open(path, "r", encoding="utf-8") as f:
                       sarif = json.load(f)
               except Exception:
-                  by_lang.setdefault(lang, {"results": 0, "error": 0, "warning": 0, "note": 0, "parse_error": True})
+                  by_lang[lang] = {"results": 0, "error": 0, "warning": 0, "note": 0, "parse_error": True}
                   continue
-              info = by_lang.setdefault(lang, {"results": 0, "error": 0, "warning": 0, "note": 0, "parse_error": False})
+              info = {"results": 0, "error": 0, "warning": 0, "note": 0, "parse_error": False}
               for run in sarif.get("runs", []) or []:
                   results = run.get("results", []) or []
                   for r in results:
@@ -270,6 +274,12 @@ jobs:
                           info["note"] += 1
                       else:
                           info["warning"] += 1
+              by_lang[lang] = info
+          # Ensure both expected languages are always shown when SARIF files are present
+          if sarif_files:
+              for lang in expected_langs:
+                  if lang not in by_lang:
+                      by_lang[lang] = {"results": 0, "error": 0, "warning": 0, "note": 0, "parse_error": True}
 
           def status_icon(count):
               return "✅" if count == 0 else "⚠️"
@@ -294,8 +304,8 @@ jobs:
                           f"| {status_icon(info['results'])} | `{lang}` | {info['results']} | {info['error']} | {info['warning']} | {info['note']} |"
                       )
           else:
-              # matrix/result fallback
-              lines.append(f"| ⚪ | - | - | - | - | - |")
+              for lang in expected_langs:
+                  lines.append(f"| ⚪ | `{lang}` | - | - | - | - |")
 
           total = sum(v.get("results", 0) for v in by_lang.values() if not v.get("parse_error"))
           lines += [
