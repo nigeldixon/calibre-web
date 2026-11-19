@@ -560,17 +560,21 @@ def move_files_on_change(calibre_path, new_author_dir, new_titledir, localbook, 
                     rel_dir = dir_name[len(path):].lstrip(os.sep)
                     if os.path.altsep:
                         rel_dir = rel_dir.lstrip(os.path.altsep)
-                    target_dir = new_path if not rel_dir else os.path.join(new_path, rel_dir)
-                    target_dir_real = os.path.realpath(target_dir)
-                    try:
-                        if os.path.commonpath([new_path_real, target_dir_real]) != new_path_real:
-                            log.error("Skipping unsafe merge directory outside destination: %s", target_dir)
-                            continue
-                    except ValueError:
-                        log.error("Skipping unsafe merge directory: %s", target_dir)
-                        continue
                     if rel_dir:
+                        target_dir_real = os.path.realpath(os.path.join(new_path_real, rel_dir))
+                        try:
+                            if os.path.commonpath([new_path_real, target_dir_real]) != new_path_real:
+                                log.error("Skipping unsafe merge directory outside destination: %s", target_dir_real)
+                                continue
+                        except ValueError:
+                            log.error("Skipping unsafe merge directory: %s", target_dir_real)
+                            continue
+                        if not target_dir_real.startswith(new_path_real + os.sep):
+                            log.error("Skipping unsafe merge directory outside destination: %s", target_dir_real)
+                            continue
                         os.makedirs(target_dir_real, exist_ok=True)
+                    else:
+                        target_dir_real = new_path_real
                     for file in file_list:
                         src_file = os.path.join(dir_name, file)
                         safe_file = os.path.basename(file)
