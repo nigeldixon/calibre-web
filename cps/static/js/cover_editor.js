@@ -22,14 +22,57 @@
         var $zoomVal = $('#cover-zoom-val');
         var $status = $('#cover-editor-status');
         var $history = $('#cover-history-list');
+        var $aspect = $('#cover-aspect-ratio');
+        var $overlay = $('#cover-editor-overlay');
         var cropper = null;
         var originalSrc = $modal.data('cover-src');
         var syncingZoom = false;
+        var dragMode = 'crop';
+        var overlayTimer = null;
 
         function setStatus(msg, isError) {
             $status.text(msg || '');
             $status.toggleClass('text-danger', !!isError);
             $status.toggleClass('text-success', !isError && !!msg);
+        }
+
+        function hideStatusOverlay() {
+            if (overlayTimer) {
+                clearTimeout(overlayTimer);
+                overlayTimer = null;
+            }
+            if ($overlay.length) {
+                $overlay.removeClass('is-visible is-error').text('');
+            }
+        }
+
+        function showStatusOverlay(msg, isError, fadeMs) {
+            if (!$overlay.length) {
+                setStatus(msg, isError);
+                return;
+            }
+            if (overlayTimer) {
+                clearTimeout(overlayTimer);
+                overlayTimer = null;
+            }
+            $overlay.text(msg || '');
+            $overlay.toggleClass('is-error', !!isError);
+            // restart transition
+            $overlay.removeClass('is-visible');
+            if (msg) {
+                setTimeout(function () { $overlay.addClass('is-visible'); }, 10);
+            }
+            if (fadeMs && msg) {
+                overlayTimer = setTimeout(function () {
+                    $overlay.removeClass('is-visible');
+                    overlayTimer = setTimeout(function () {
+                        if (!$overlay.hasClass('is-visible')) {
+                            $overlay.text('').removeClass('is-error');
+                        }
+                        overlayTimer = null;
+                    }, 300);
+                }, fadeMs);
+            }
         }
 
         function filterString() {
@@ -89,10 +132,46 @@
         }
 
         function setDragMode(mode) {
+            dragMode = mode || 'crop';
             if (!cropper) return;
-            cropper.setDragMode(mode);
-            $('#cover-drag-crop').toggleClass('active', mode === 'crop');
-            $('#cover-drag-move').toggleClass('active', mode === 'move');
+            cropper.setDragMode(dragMode);
+            $('#cover-drag-crop').toggleClass('active', dragMode === 'crop');
+            $('#cover-drag-move').toggleClass('active', dragMode === 'move');
+        }
+
+        function getAspectRatioValue() {
+            if (!$aspect.length) return NaN;
+            var val = $aspect.val();
+            if (val === 'original') {
+                var img = $image[0];
+                if (img && img.naturalWidth && img.naturalHeight) {
+                    return img.naturalWidth / img.naturalHeight;
+                }
+                if (cropper) {
+                    var d = cropper.getImageData();
+                    if (d && d.naturalWidth && d.naturalHeight) {
+                        return d.naturalWidth / d.naturalHeight;
+                    }
+                }
+                return NaN;
+            }
+            var n = parseFloat(val);
+            return isNaN(n) ? NaN : n;
+        }
+
+        function applyAspectRatio() {
+            if (!cropper) return;
+            cropper.setAspectRatio(getAspectRatioValue());
+        }
+
+        function onCropperReady() {
+            if (cropper && typeof cropper.crop === 'function') {
+                cropper.crop();
+            }
+            syncZoomFromCropper();
+            setDragMode(dragMode || 'crop');
+            applyAspectRatio();
+            setTimeout(updateFilter, 0);
         }
 
         function initCropper() {
@@ -107,21 +186,15 @@
                 zoomOnWheel: true,
                 wheelZoomRatio: 0.05,
                 zoomOnTouch: true,
-                dragMode: 'crop',
+                dragMode: dragMode || 'crop',
                 ready: function () {
-                    syncZoomFromCropper();
+                    onCropperReady();
                 },
                 zoom: function () {
                     if (syncingZoom) return;
                     syncZoomFromCropper();
                 }
             });
-            // reapply filter after cropper builds DOM
-            setTimeout(function () {
-                updateFilter();
-                syncZoomFromCropper();
-                setDragMode('crop');
-            }, 0);
         }
 
         function loadHistory() {
@@ -184,7 +257,12 @@
         $modal.on('hidden.bs.modal', function () {
             destroyCropper();
             setStatus('');
+            hideStatusOverlay();
             setZoomUI(1);
+            if ($aspect.length) {
+                $aspect.val('NaN');
+            }
+            dragMode = 'crop';
             $('#cover-drag-crop').addClass('active');
             $('#cover-drag-move').removeClass('active');
         });
@@ -222,7 +300,53 @@
             cropper.reset();
             syncZoomFromCropper();
             setDragMode('crop');
+            if ($aspect.length) {
+                $aspect.val('NaN');
+            }
+            applyAspectRatio();
             setTimeout(updateFilter, 0);
+        });
+
+        $('#cover-apply-crop').on('click', function () {
+            if (!cropper) return;
+            hideStatusOverlay();
+            setStatus($modal.data('cropping') || 'Applying crop...', false);
+            try {
+                var canvas = cropper.getCroppedCanvas({ maxWidth: 4096, maxHeight: 4096 });
+                if (!canvas) {
+                    setStatus($modal.data('crop-failed') || 'Could not crop image', true);
+                    return;
+                }
+                var dataUrl;
+                try {
+                    dataUrl = canvas.toDataURL('image/png');
+                } catch (e) {
+                    setStatus($modal.data('crop-failed') || 'Could not crop image', true);
+                    return;
+                }
+                destroyCropper();
+                $image.off('.covereditorapply');
+                var initApplied = function () {
+                    $image.off('.covereditorapplied').one('ready.covereditorapplied', function () {
+                        setStatus('', false);
+                        showStatusOverlay($modal.data('crop-applied') || 'Crop applied', false, 1800);
+                    });
+                    initCropper();
+                };
+                $image.one('load.covereditorapply', initApplied);
+                $image.attr('src', dataUrl);
+                if ($image[0].complete && $image[0].naturalWidth) {
+                    // Cached/data-URL images may not reliably fire load; initialize once ready.
+                    $image.off('load.covereditorapply');
+                    setTimeout(initApplied, 0);
+                }
+            } catch (e) {
+                setStatus($modal.data('crop-failed') || 'Could not crop image', true);
+            }
+        });
+
+        $aspect.on('change', function () {
+            applyAspectRatio();
         });
 
         $('#cover-drag-crop').on('click', function () {
@@ -273,7 +397,9 @@
                         if (resp && resp.success) {
                             setStatus($modal.data('saved') || 'Saved', false);
                             refreshCoverPreview(resp.cover_url);
-                            loadHistory();
+                            setTimeout(function () {
+                                $modal.modal('hide');
+                            }, 400);
                         } else {
                             setStatus((resp && resp.error) || 'Save failed', true);
                         }

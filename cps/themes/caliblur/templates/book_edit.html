@@ -243,6 +243,9 @@
      data-cover-src="{{ url_for('web.get_cover', book_id=book.id, resolution='og', c=book|last_modified) }}"
      data-saving="{{ _('Saving...') }}"
      data-saved="{{ _('Saved') }}"
+     data-cropping="{{ _('Applying crop...') }}"
+     data-crop-applied="{{ _('Crop applied') }}"
+     data-crop-failed="{{ _('Could not crop image') }}"
      data-deleting="{{ _('Deleting...') }}"
      data-restoring="{{ _('Restoring...') }}"
      data-restored="{{ _('Restored') }}">
@@ -257,6 +260,7 @@
           <div class="col-sm-8">
             <div class="cover-editor-crop-area">
               <img id="cover-editor-image" src="" alt="{{ _('Cover') }}" style="max-width:100%;">
+              <div id="cover-editor-overlay" class="cover-editor-overlay" aria-live="polite"></div>
             </div>
             <div class="cover-editor-zoom-controls">
               <label for="cover-zoom">{{ _('Zoom') }}: <span id="cover-zoom-val">100%</span></label>
@@ -272,7 +276,23 @@
                   <button type="button" class="btn btn-default" id="cover-drag-move" title="{{ _('Move image') }}">{{ _('Move') }}</button>
                 </div>
               </div>
-              <button type="button" class="btn btn-default btn-xs" id="cover-reset-crop" style="margin-top:4px;">{{ _('Reset Crop & Zoom') }}</button>
+              <div class="cover-editor-aspect-row" style="margin-top:6px;">
+                <label for="cover-aspect-ratio" style="margin-right:6px; font-weight: normal;">{{ _('Aspect ratio') }}:</label>
+                <select id="cover-aspect-ratio" class="form-control input-sm" style="display:inline-block;width:auto;max-width:100%;vertical-align:middle;">
+                  <option value="NaN">{{ _('Free') }}</option>
+                  <option value="original">{{ _('Original') }}</option>
+                  <option value="0.6666667">2:3</option>
+                  <option value="0.75">3:4</option>
+                  <option value="1">1:1</option>
+                  <option value="1.3333333">4:3</option>
+                  <option value="1.5">3:2</option>
+                  <option value="1.7777778">16:9</option>
+                </select>
+              </div>
+              <div style="margin-top:4px;">
+                <button type="button" class="btn btn-default btn-xs" id="cover-apply-crop">{{ _('Apply Crop') }}</button>
+                <button type="button" class="btn btn-default btn-xs" id="cover-reset-crop">{{ _('Reset Crop & Zoom') }}</button>
+              </div>
             </div>
           </div>
           <div class="col-sm-4">
