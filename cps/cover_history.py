@@ -111,6 +111,8 @@ def delete_cover_version(book_path, name):
         return False
     if os.path.commonpath([hdir_real, target_real]) != hdir_real:
         return False
+    if not target_real.startswith(hdir_real + os.sep):
+        return False
     if not os.path.isfile(target_real):
         return False
     try:
@@ -131,6 +133,8 @@ def restore_cover_version(book_path, name):
     except OSError:
         return False
     if os.path.commonpath([hdir_real, source_real]) != hdir_real:
+        return False
+    if not source_real.startswith(hdir_real + os.sep):
         return False
     if not os.path.isfile(source_real):
         return False
