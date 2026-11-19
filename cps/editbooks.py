@@ -1782,6 +1782,8 @@ def _book_cover_path(book):
 @user_login_required
 @edit_required
 def edit_cover(book_id):
+    if getattr(config, "config_use_google_drive", False):
+        return jsonify({"success": False, "error": _("Cover editing is not currently available when using Google Drive")}), 400
     book = _get_book_for_cover_edit(book_id)
     upload_file = request.files.get('cover') or request.files.get('file') or request.files.get('image')
     if not upload_file or upload_file.filename == '':
@@ -1878,6 +1880,8 @@ def _save_edited_cover_bytes(cover_path, data, mimetype=None):
 @user_login_required
 @edit_required
 def list_cover_history(book_id):
+    if getattr(config, "config_use_google_drive", False):
+        return jsonify({"success": False, "error": _("Cover editing is not currently available when using Google Drive")}), 400
     book = _get_book_for_cover_edit(book_id)
     book_dir = os.path.join(config.get_book_path(), book.path)
     versions = cover_history.list_cover_versions(book_dir)
@@ -1888,6 +1892,8 @@ def list_cover_history(book_id):
 @user_login_required
 @edit_required
 def delete_cover_history(book_id, version):
+    if getattr(config, "config_use_google_drive", False):
+        return jsonify({"success": False, "error": _("Cover editing is not currently available when using Google Drive")}), 400
     # support POST with _method or action for clients without DELETE
     if request.method == "POST":
         action = request.form.get('action') or (request.get_json(silent=True) or {}).get('action')
@@ -1905,6 +1911,8 @@ def delete_cover_history(book_id, version):
 @user_login_required
 @edit_required
 def restore_cover_history(book_id, version):
+    if getattr(config, "config_use_google_drive", False):
+        return jsonify({"success": False, "error": _("Cover editing is not currently available when using Google Drive")}), 400
     book = _get_book_for_cover_edit(book_id)
     book_dir = os.path.join(config.get_book_path(), book.path)
     ok = cover_history.restore_cover_version(book_dir, version)
