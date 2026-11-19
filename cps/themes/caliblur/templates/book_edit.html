@@ -6,7 +6,7 @@
       <div style="position: relative; display: inline-block;">
         <!-- Always use full-sized image for the book edit page -->
         <img id="detailcover" title="{{book.title}}" src="{{url_for('web.get_cover', book_id=book.id, resolution='og', c=book|last_modified)}}" />
-        {% if current_user.role_upload() and book.has_cover %}
+        {% if current_user.role_upload() and book.has_cover and not config.config_use_google_drive %}
         <button type="button" class="btn btn-default btn-sm" id="edit_cover_btn" data-toggle="modal" data-target="#coverEditorModal" title="{{ _('Edit Cover') }}" aria-label="{{ _('Edit Cover') }}">
           <span class="glyphicon glyphicon-edit"></span>
         </button>
@@ -237,7 +237,7 @@
 {{ delete_book(current_user.role_delete_books()) }}
 {{ delete_confirm_modal() }}
 
-{% if current_user.role_upload() %}
+{% if current_user.role_upload() and not config.config_use_google_drive %}
 <div class="modal fade" id="coverEditorModal" tabindex="-1" role="dialog" aria-labelledby="coverEditorModalLabel"
      data-book-id="{{ book.id }}"
      data-cover-src="{{ url_for('web.get_cover', book_id=book.id, resolution='og', c=book|last_modified) }}"
@@ -401,15 +401,21 @@
 {% if not current_user.locale == 'en' %}
 <script src="{{ url_for('static', filename='js/libs/bootstrap-datepicker/locales/bootstrap-datepicker.' + current_user.locale + '.min.js') }}" charset="UTF-8"></script>
 {% endif %}
+{% if current_user.role_upload() and not config.config_use_google_drive %}
 <script src="{{ url_for('static', filename='js/libs/cropper.min.js') }}"></script>
+{% endif %}
 <script src="{{ url_for('static', filename='js/edit_books.js') }}"></script>
+{% if current_user.role_upload() and not config.config_use_google_drive %}
 <script src="{{ url_for('static', filename='js/cover_editor.js') }}"></script>
+{% endif %}
 <script src="{{ url_for('static', filename='js/fullscreen.js') }}"></script>
 {% endblock %}
 {% block header %}
 <meta name="referrer" content="never">
 <link href="{{ url_for('static', filename='css/libs/typeahead.css') }}" rel="stylesheet" media="screen">
 <link href="{{ url_for('static', filename='css/libs/bootstrap-datepicker3.min.css') }}" rel="stylesheet" media="screen">
+{% if current_user.role_upload() and not config.config_use_google_drive %}
 <link href="{{ url_for('static', filename='css/libs/cropper.min.css') }}" rel="stylesheet" media="screen">
 <link href="{{ url_for('static', filename='css/cover_editor.css') }}" rel="stylesheet" media="screen">
+{% endif %}
 {% endblock %}
