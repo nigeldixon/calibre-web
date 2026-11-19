@@ -626,3 +626,71 @@ def test_restore_cover_history_not_found_returns_404(monkeypatch, tmp_path):
         resp, status = restore(2, "ver.jpg")
         assert status == 404
         assert resp.get_json()["success"] is False
+
+
+def test_edit_cover_returns_400_when_google_drive_enabled(monkeypatch):
+    from cps import editbooks
+
+    app = _make_app()
+    edit_cover = _unwrap(editbooks.edit_cover)
+
+    monkeypatch.setattr(editbooks.config, "config_use_google_drive", True, raising=False)
+    monkeypatch.setattr(editbooks, "_", lambda s, *a, **k: s)
+
+    with app.test_request_context("/ajax/editcover/2", method="POST", data={}):
+        resp, status = edit_cover(2)
+        assert status == 400
+        data = resp.get_json()
+        assert data["success"] is False
+        assert "Google Drive" in data["error"]
+
+
+def test_list_cover_history_returns_400_when_google_drive_enabled(monkeypatch):
+    from cps import editbooks
+
+    app = _make_app()
+    list_history = _unwrap(editbooks.list_cover_history)
+
+    monkeypatch.setattr(editbooks.config, "config_use_google_drive", True, raising=False)
+    monkeypatch.setattr(editbooks, "_", lambda s, *a, **k: s)
+
+    with app.test_request_context("/ajax/coverhistory/2", method="GET"):
+        resp, status = list_history(2)
+        assert status == 400
+        data = resp.get_json()
+        assert data["success"] is False
+        assert "Google Drive" in data["error"]
+
+
+def test_delete_cover_history_returns_400_when_google_drive_enabled(monkeypatch):
+    from cps import editbooks
+
+    app = _make_app()
+    delete_history = _unwrap(editbooks.delete_cover_history)
+
+    monkeypatch.setattr(editbooks.config, "config_use_google_drive", True, raising=False)
+    monkeypatch.setattr(editbooks, "_", lambda s, *a, **k: s)
+
+    with app.test_request_context("/ajax/coverhistory/2/ver.jpg", method="DELETE"):
+        resp, status = delete_history(2, "ver.jpg")
+        assert status == 400
+        data = resp.get_json()
+        assert data["success"] is False
+        assert "Google Drive" in data["error"]
+
+
+def test_restore_cover_history_returns_400_when_google_drive_enabled(monkeypatch):
+    from cps import editbooks
+
+    app = _make_app()
+    restore = _unwrap(editbooks.restore_cover_history)
+
+    monkeypatch.setattr(editbooks.config, "config_use_google_drive", True, raising=False)
+    monkeypatch.setattr(editbooks, "_", lambda s, *a, **k: s)
+
+    with app.test_request_context("/ajax/coverhistory/2/ver.jpg/restore", method="POST"):
+        resp, status = restore(2, "ver.jpg")
+        assert status == 400
+        data = resp.get_json()
+        assert data["success"] is False
+        assert "Google Drive" in data["error"]
