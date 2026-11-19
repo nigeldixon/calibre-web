@@ -573,14 +573,17 @@ def move_files_on_change(calibre_path, new_author_dir, new_titledir, localbook, 
                         os.makedirs(target_dir_real, exist_ok=True)
                     for file in file_list:
                         src_file = os.path.join(dir_name, file)
-                        dest_file = os.path.join(target_dir, file)
-                        dest_file_real = os.path.realpath(dest_file)
+                        safe_file = os.path.basename(file)
+                        dest_file_real = os.path.realpath(os.path.join(target_dir_real, safe_file))
                         try:
                             if os.path.commonpath([new_path_real, dest_file_real]) != new_path_real:
-                                log.error("Skipping unsafe merge file outside destination: %s", dest_file)
+                                log.error("Skipping unsafe merge file outside destination: %s", dest_file_real)
                                 continue
                         except ValueError:
-                            log.error("Skipping unsafe merge file: %s", dest_file)
+                            log.error("Skipping unsafe merge file: %s", dest_file_real)
+                            continue
+                        if not dest_file_real.startswith(new_path_real + os.sep):
+                            log.error("Skipping unsafe merge file outside destination: %s", dest_file_real)
                             continue
                         shutil.move(src_file, dest_file_real)
                 # remove remaining empty directories from old path (including history subdirs)
