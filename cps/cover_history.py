@@ -101,13 +101,12 @@ def list_cover_versions(book_path):
 def delete_cover_version(book_path, name):
     if not is_safe_version_name(name):
         return False
-    hdir = history_dir(book_path)
     safe_name = os.path.basename(name)
-    target = os.path.join(hdir, safe_name)
+    hdir = history_dir(book_path)
     # ensure resolved path stays within history dir
     try:
         hdir_real = os.path.realpath(hdir)
-        target_real = os.path.realpath(target)
+        target_real = os.path.realpath(os.path.join(hdir_real, safe_name))
     except OSError:
         return False
     if os.path.commonpath([hdir_real, target_real]) != hdir_real:
@@ -124,12 +123,11 @@ def delete_cover_version(book_path, name):
 def restore_cover_version(book_path, name):
     if not is_safe_version_name(name):
         return False
-    hdir = history_dir(book_path)
     safe_name = os.path.basename(name)
-    source = os.path.join(hdir, safe_name)
+    hdir = history_dir(book_path)
     try:
         hdir_real = os.path.realpath(hdir)
-        source_real = os.path.realpath(source)
+        source_real = os.path.realpath(os.path.join(hdir_real, safe_name))
     except OSError:
         return False
     if os.path.commonpath([hdir_real, source_real]) != hdir_real:
