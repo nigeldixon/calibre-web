@@ -554,14 +554,35 @@ def move_files_on_change(calibre_path, new_author_dir, new_titledir, localbook, 
                 shutil.move(path, new_path)
             else:  # path is valid copy only files to new location (merge)
                 log.info("Moving title: %s into existing: %s", path, new_path)
+                new_path_real = os.path.realpath(new_path)
                 # Take all files and subfolder from old path (strange command)
                 for dir_name, __, file_list in os.walk(path):
-                    rel_dir = dir_name[len(path):]
-                    target_dir = new_path + rel_dir
+                    rel_dir = dir_name[len(path):].lstrip(os.sep)
+                    if os.path.altsep:
+                        rel_dir = rel_dir.lstrip(os.path.altsep)
+                    target_dir = new_path if not rel_dir else os.path.join(new_path, rel_dir)
+                    target_dir_real = os.path.realpath(target_dir)
+                    try:
+                        if os.path.commonpath([new_path_real, target_dir_real]) != new_path_real:
+                            log.error("Skipping unsafe merge directory outside destination: %s", target_dir)
+                            continue
+                    except ValueError:
+                        log.error("Skipping unsafe merge directory: %s", target_dir)
+                        continue
                     if rel_dir:
                         os.makedirs(target_dir, exist_ok=True)
                     for file in file_list:
-                        shutil.move(os.path.join(dir_name, file), os.path.join(target_dir, file))
+                        src_file = os.path.join(dir_name, file)
+                        dest_file = os.path.join(target_dir, file)
+                        dest_file_real = os.path.realpath(dest_file)
+                        try:
+                            if os.path.commonpath([new_path_real, dest_file_real]) != new_path_real:
+                                log.error("Skipping unsafe merge file outside destination: %s", dest_file)
+                                continue
+                        except ValueError:
+                            log.error("Skipping unsafe merge file: %s", dest_file)
+                            continue
+                        shutil.move(src_file, dest_file)
                 # remove remaining empty directories from old path (including history subdirs)
                 for dir_name, dir_list, file_list in os.walk(path, topdown=False):
                     try:
