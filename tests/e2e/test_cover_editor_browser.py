@@ -223,9 +223,7 @@ def test_save_creates_history_and_updates_cover(page: Page, live_server):
     before_src = page.locator("#detailcover").get_attribute("src")
     modal.locator("#cover-save-btn").click()
 
-    status = modal.locator("#cover-editor-status")
-    expect(status).to_contain_text(re.compile(r"saved", re.I), timeout=15000)
-    expect(modal.locator("#cover-history-list .cover-history-item")).to_have_count(1, timeout=10000)
+    expect(modal).to_be_hidden(timeout=15000)
 
     after_src = page.locator("#detailcover").get_attribute("src")
     assert after_src and before_src != after_src
@@ -238,18 +236,26 @@ def test_restore_and_delete_history_version(page: Page, live_server):
     login(page, live_server["base_url"])
     modal = open_cover_editor(page, live_server["base_url"])
 
+    # First save creates an initial history snapshot; save now closes the modal.
     modal.locator("#cover-save-btn").click()
-    expect(modal.locator("#cover-editor-status")).to_contain_text(re.compile(r"saved", re.I), timeout=15000)
-    expect(modal.locator("#cover-history-list .cover-history-item")).to_have_count(1, timeout=10000)
-    first_name = modal.locator("#cover-history-list .cover-history-item").first.get_attribute("data-version")
+    expect(modal).to_be_hidden(timeout=15000)
+
+    modal = open_cover_editor(page, live_server["base_url"])
+    items = modal.locator("#cover-history-list .cover-history-item")
+    expect(items).to_have_count(1, timeout=10000)
+    first_name = items.first.get_attribute("data-version")
     assert first_name
 
+    # Second save creates another history snapshot.
     modal.locator("#cover-brightness").evaluate(
         "(el) => { el.value = '130'; el.dispatchEvent(new Event('input', {bubbles:true})); el.dispatchEvent(new Event('change', {bubbles:true})); }"
     )
     modal.locator("#cover-save-btn").click()
-    expect(modal.locator("#cover-editor-status")).to_contain_text(re.compile(r"saved", re.I), timeout=15000)
-    expect(modal.locator("#cover-history-list .cover-history-item")).to_have_count(2, timeout=10000)
+    expect(modal).to_be_hidden(timeout=15000)
+
+    modal = open_cover_editor(page, live_server["base_url"])
+    items = modal.locator("#cover-history-list .cover-history-item")
+    expect(items).to_have_count(2, timeout=10000)
 
     first_item = modal.locator(f"#cover-history-list .cover-history-item[data-version='{first_name}']")
     expect(first_item).to_have_count(1)
