@@ -89,19 +89,7 @@ jobs:
         id: combine_coverage
         if: always()
         shell: bash
-        run: |
-          shopt -s nullglob
-          # Combine parallel server-side coverage data (from functional/E2E) into .coverage
-          server_cov=(.coverage.server* .coverage.*)
-          if [ ${#server_cov[@]} -gt 0 ]; then
-            python -m coverage combine --append "${server_cov[@]}" 2>&1 || true
-          else
-            python -m coverage combine 2>&1 || true
-          fi
-          if [ -f .coverage ] || [ ${#server_cov[@]} -gt 0 ]; then
-            python -m coverage xml -o coverage.xml || true
-            python -m coverage report -m --include="*/cps/*" --omit="*/tests/*" > coverage-term.txt 2>&1 || true
-          fi
+        run: bash .github/scripts/combine_coverage.sh
 
       - name: Find associated pull request
         if: always()
@@ -109,22 +97,8 @@ jobs:
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
           script: |
-            const { owner, repo } = context.repo;
-            if (context.eventName === 'pull_request') {
-              core.setOutput('number', context.payload.pull_request.number.toString());
-              core.setOutput('base', context.payload.pull_request.base.ref || 'develop');
-              return;
-            }
-            const branch = context.ref.replace('refs/heads/', '');
-            const head = `${owner}:${branch}`;
-            const pulls = await github.rest.pulls.list({ owner, repo, head, state: 'open' });
-            if (pulls.data.length > 0) {
-              core.setOutput('number', pulls.data[0].number.toString());
-              core.setOutput('base', pulls.data[0].base.ref || 'develop');
-            } else {
-              core.setOutput('number', '');
-              core.setOutput('base', 'develop');
-            }
+            const script = require('./.github/scripts/find_associated_pr.js');
+            await script({ github, context, core });
 
       - name: Generate coverage and test PR comment
         if: always()
