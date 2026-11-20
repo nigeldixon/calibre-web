@@ -37,7 +37,7 @@ from sqlalchemy.exc import OperationalError, IntegrityError, InterfaceError
 from sqlalchemy.orm.exc import StaleDataError
 from sqlalchemy.sql.expression import func
 
-from . import constants, logger, isoLanguages, gdriveutils, uploader, helper, kobo_sync_status
+from . import constants, logger, isoLanguages, gdriveutils, uploader, helper, kobo_sync_status, cover_history
 from .clean_html import clean_string
 from . import config, ub, db, calibre_db
 from .services.worker import WorkerThread
@@ -1760,3 +1760,183 @@ def modify_identifiers(input_identifiers, db_identifiers, db_session):
             db_session.add(identifier)
             changed = True
     return changed, error
+
+
+# ################################### Cover Editor ###################################
+
+
+def _get_book_for_cover_edit(book_id):
+    if not current_user.role_upload():
+        abort(403)
+    book = calibre_db.get_filtered_book(book_id)
+    if not book:
+        abort(404)
+    return book
+
+
+def _book_cover_path(book):
+    return os.path.join(config.get_book_path(), book.path, "cover.jpg")
+
+
+@editbook.route("/ajax/editcover/<int:book_id>", methods=["POST"])
+@user_login_required
+@edit_required
+def edit_cover(book_id):
+    if getattr(config, "config_use_google_drive", False):
+        return jsonify({"success": False, "error": _("Cover editing is not currently available when using Google Drive")}), 400
+    book = _get_book_for_cover_edit(book_id)
+    upload_file = request.files.get('cover') or request.files.get('file') or request.files.get('image')
+    if not upload_file or upload_file.filename == '':
+        return jsonify({"success": False, "error": _("No cover image provided")}), 400
+    data = upload_file.read()
+    if not data:
+        return jsonify({"success": False, "error": _("No cover image provided")}), 400
+    # basic sanity: accept jpeg/png/webp input, we will store as jpeg
+    book_dir = os.path.join(config.get_book_path(), book.path)
+    try:
+        os.makedirs(book_dir, exist_ok=True)
+    except OSError as ex:
+        log.error_or_exception(ex)
+        return jsonify({"success": False, "error": _("Failed to create book path")}), 500
+    # snapshot previous cover before overwrite
+    try:
+        cover_history.snapshot_cover(book_dir)
+    except Exception as ex:
+        log.error_or_exception(ex)
+        # non-fatal: continue saving
+    cover_path = _book_cover_path(book)
+    try:
+        # Save as-is if jpeg, otherwise try to convert with Wand when available
+        saved = _save_edited_cover_bytes(cover_path, data, upload_file.mimetype)
+        if not saved:
+            return jsonify({"success": False, "error": _("Failed to save cover image")}), 500
+    except Exception as ex:
+        log.error_or_exception(ex)
+        return jsonify({"success": False, "error": _("Failed to save cover image")}), 500
+    try:
+        calibre_db.create_functions(config)
+        book.has_cover = 1
+        book.last_modified = datetime.now(timezone.utc)
+        kobo_sync_status.remove_synced_book(book.id)
+        calibre_db.set_metadata_dirty(book.id)
+        calibre_db.session.merge(book)
+        calibre_db.session.commit()
+    except (OperationalError, IntegrityError, StaleDataError, InterfaceError) as ex:
+        calibre_db.session.rollback()
+        log.error_or_exception(ex)
+        return jsonify({"success": False, "error": _("Database error while saving cover")}), 500
+    try:
+        helper.replace_cover_thumbnail_cache(book.id)
+    except Exception as ex:
+        log.error_or_exception(ex)
+    cache_bust = int(book.last_modified.timestamp())
+    return jsonify({
+        "success": True,
+        "cover_url": url_for('web.get_cover', book_id=book.id, resolution='og', c=cache_bust),
+        "last_modified": book.last_modified.isoformat(),
+    })
+
+
+def _save_edited_cover_bytes(cover_path, data, mimetype=None):
+    """Persist edited cover bytes as cover.jpg. Expects JPEG data in normal case."""
+    # Normalize to JPEG if needed and Wand is available
+    is_jpeg = data[:3] == b'\xff\xd8\xff'
+    if not is_jpeg:
+        try:
+            from .cover import use_IM
+            if use_IM:
+                try:
+                    from wand.image import Image
+                    with Image(blob=data) as imgc:
+                        imgc.format = 'jpeg'
+                        imgc.transform_colorspace('srgb')
+                        imgc.save(filename=cover_path)
+                    return True
+                except Exception:
+                    pass
+            # try Pillow as fallback if installed
+            try:
+                import io
+                from PIL import Image as PILImage
+                im = PILImage.open(io.BytesIO(data))
+                im = im.convert('RGB')
+                im.save(cover_path, format='JPEG')
+                return True
+            except Exception:
+                pass
+        except Exception:
+            pass
+        # if we can't convert, reject non-jpeg
+        return False
+    try:
+        with open(cover_path, 'wb') as f:
+            f.write(data)
+        return True
+    except OSError:
+        return False
+
+
+@editbook.route("/ajax/coverhistory/<int:book_id>", methods=["GET"])
+@user_login_required
+@edit_required
+def list_cover_history(book_id):
+    if getattr(config, "config_use_google_drive", False):
+        return jsonify({"success": False, "error": _("Cover editing is not currently available when using Google Drive")}), 400
+    book = _get_book_for_cover_edit(book_id)
+    book_dir = os.path.join(config.get_book_path(), book.path)
+    versions = cover_history.list_cover_versions(book_dir)
+    return jsonify({"success": True, "versions": versions})
+
+
+@editbook.route("/ajax/coverhistory/<int:book_id>/<version>", methods=["DELETE", "POST"])
+@user_login_required
+@edit_required
+def delete_cover_history(book_id, version):
+    if getattr(config, "config_use_google_drive", False):
+        return jsonify({"success": False, "error": _("Cover editing is not currently available when using Google Drive")}), 400
+    # support POST with _method or action for clients without DELETE
+    if request.method == "POST":
+        action = request.form.get('action') or (request.get_json(silent=True) or {}).get('action')
+        if action and action != 'delete':
+            return jsonify({"success": False, "error": _("Invalid action")}), 400
+    book = _get_book_for_cover_edit(book_id)
+    book_dir = os.path.join(config.get_book_path(), book.path)
+    ok = cover_history.delete_cover_version(book_dir, version)
+    if not ok:
+        return jsonify({"success": False, "error": _("Version not found")}), 404
+    return jsonify({"success": True})
+
+
+@editbook.route("/ajax/coverhistory/<int:book_id>/<version>/restore", methods=["POST"])
+@user_login_required
+@edit_required
+def restore_cover_history(book_id, version):
+    if getattr(config, "config_use_google_drive", False):
+        return jsonify({"success": False, "error": _("Cover editing is not currently available when using Google Drive")}), 400
+    book = _get_book_for_cover_edit(book_id)
+    book_dir = os.path.join(config.get_book_path(), book.path)
+    ok = cover_history.restore_cover_version(book_dir, version)
+    if not ok:
+        return jsonify({"success": False, "error": _("Version not found")}), 404
+    try:
+        calibre_db.create_functions(config)
+        book.has_cover = 1
+        book.last_modified = datetime.now(timezone.utc)
+        kobo_sync_status.remove_synced_book(book.id)
+        calibre_db.set_metadata_dirty(book.id)
+        calibre_db.session.merge(book)
+        calibre_db.session.commit()
+    except (OperationalError, IntegrityError, StaleDataError, InterfaceError) as ex:
+        calibre_db.session.rollback()
+        log.error_or_exception(ex)
+        return jsonify({"success": False, "error": _("Database error while restoring cover")}), 500
+    try:
+        helper.replace_cover_thumbnail_cache(book.id)
+    except Exception as ex:
+        log.error_or_exception(ex)
+    cache_bust = int(book.last_modified.timestamp())
+    return jsonify({
+        "success": True,
+        "cover_url": url_for('web.get_cover', book_id=book.id, resolution='og', c=cache_bust),
+        "last_modified": book.last_modified.isoformat(),
+    })

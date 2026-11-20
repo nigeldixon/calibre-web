@@ -34,6 +34,9 @@
         <input type="checkbox" id="config_use_google_drive" name="config_use_google_drive" data-control="gdrive_settings" {% if config.config_use_google_drive %}checked{% endif %}>
         <label for="config_use_google_drive">{{ _('Use Google Drive?') }}</label>
       </div>
+      {% if config.config_use_google_drive %}
+      <p class="help-block">{{ _('Note: The built-in cover editor (crop, adjustments, and saved cover versions) is not currently available when using Google Drive integration.') }}</p>
+      {% endif %}
       {% if not gdriveError and config.config_use_google_drive %}
         {% if show_authenticate_google_drive and config.config_use_google_drive %}
           <div class="form-group required">
