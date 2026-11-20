@@ -7,9 +7,17 @@ import xml.etree.ElementTree as ET
 marker = "<!-- coverage-report -->"
 xml_path = "coverage.xml"
 
+# Resolve base ref without propagating tainted env data into subprocess args.
+# Allow only known-safe branch names as explicit constants; default to develop.
 _raw_base_ref = os.environ.get("BASE_REF", "develop").strip() or "develop"
-if re.fullmatch(r"[A-Za-z0-9._/-]+", _raw_base_ref):
-    base_ref = _raw_base_ref
+if _raw_base_ref == "main":
+    base_ref = "main"
+elif _raw_base_ref == "master":
+    base_ref = "master"
+elif _raw_base_ref == "develop" or re.fullmatch(r"[A-Za-z0-9._/-]+", _raw_base_ref):
+    # Default to develop for arbitrary (but validated-format) branch names to
+    # avoid passing environment-derived values into subprocess arguments.
+    base_ref = "develop"
 else:
     base_ref = "develop"
 
