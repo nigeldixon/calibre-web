@@ -1,6 +1,9 @@
 name: Semgrep
 
 on:
+  push:
+    branches:
+      - '**'
   pull_request:
     branches:
       - develop
@@ -9,7 +12,7 @@ on:
     - cron: '45 5 * * 1'
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 permissions:
