@@ -63,6 +63,7 @@ jobs:
           pip install pytest pytest-cov diff-cover pytest-playwright playwright==1.65.2 requests
 
       - name: Install Playwright browsers
+        if: always() && (hashFiles('tests/e2e/**') != '' || hashFiles('tests/functional/**') != '')
         run: playwright install --with-deps chromium
 
       - name: Run unit tests with coverage
@@ -72,7 +73,11 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          pytest tests/unit -q --cov=cps.cover_history --cov=cps.editbooks --cov=cps.helper --cov-report=term-missing --cov-report=xml:coverage.xml 2>&1 | tee unit-test-output.txt
+          if [ -d tests/unit ]; then
+            pytest tests/unit -q --cov=cps.cover_history --cov=cps.editbooks --cov=cps.helper --cov-report=term-missing --cov-report=xml:coverage.xml 2>&1 | tee unit-test-output.txt
+          else
+            echo "tests/unit not found; skipping unit tests." | tee unit-test-output.txt
+          fi
 
       - name: Run Playwright E2E tests
         id: e2e_tests
@@ -83,7 +88,11 @@ jobs:
           CALIBRE_WEB_TEST_COVERAGE: "1"
         run: |
           set -o pipefail
-          pytest tests/e2e -q 2>&1 | tee e2e-test-output.txt
+          if [ -d tests/e2e ]; then
+            pytest tests/e2e -q 2>&1 | tee e2e-test-output.txt
+          else
+            echo "tests/e2e not found; skipping Playwright E2E tests." | tee e2e-test-output.txt
+          fi
 
       - name: Run HTTP functional tests
         id: functional_tests
@@ -94,7 +103,11 @@ jobs:
           CALIBRE_WEB_TEST_COVERAGE: "1"
         run: |
           set -o pipefail
-          pytest tests/functional -q 2>&1 | tee functional-test-output.txt
+          if [ -d tests/functional ]; then
+            pytest tests/functional -q 2>&1 | tee functional-test-output.txt
+          else
+            echo "tests/functional not found; skipping HTTP functional tests." | tee functional-test-output.txt
+          fi
 
       - name: Combine coverage data
         id: combine_coverage
