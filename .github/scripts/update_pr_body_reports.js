@@ -11,10 +11,6 @@ function ensureSection(body) {
   return out;
 }
 
-function escapeRegExp(s) {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
 function upsertReport(body, marker, content) {
   body = ensureSection(body || '');
   content = (content || '').replace(/\s*$/, '');
@@ -30,14 +26,16 @@ function upsertReport(body, marker, content) {
   let section = body.slice(startIdx + SECTION_START.length, endIdx);
   const after = body.slice(endIdx);
 
-  const otherMarkers = REPORT_MARKERS.filter(m => m !== marker).map(escapeRegExp).join('|');
-  // Match up to the next report marker or the end of the managed section content.
-  const endBoundary = otherMarkers ? '(?=' + otherMarkers + '|$)' : '(?=$)';
-  const re = new RegExp(escapeRegExp(marker) + '[\\s\\S]*?' + endBoundary);
-
   const replacement = '\n' + content + '\n';
-  if (re.test(section)) {
-    section = section.replace(re, replacement);
+  const markerIdx = section.indexOf(marker);
+  if (markerIdx !== -1) {
+    let end = section.length;
+    for (const m of REPORT_MARKERS) {
+      if (m === marker) continue;
+      const idx = section.indexOf(m, markerIdx + marker.length);
+      if (idx !== -1 && idx < end) end = idx;
+    }
+    section = section.slice(0, markerIdx) + replacement + section.slice(end);
   } else {
     // Append before end of section, keeping a blank line separation if needed
     section = section.replace(/\s*$/, '') + '\n' + replacement;
