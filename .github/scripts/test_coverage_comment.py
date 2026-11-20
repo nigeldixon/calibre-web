@@ -6,7 +6,12 @@ import xml.etree.ElementTree as ET
 
 marker = "<!-- coverage-report -->"
 xml_path = "coverage.xml"
-base_ref = os.environ.get("BASE_REF", "develop").strip() or "develop"
+
+_raw_base_ref = os.environ.get("BASE_REF", "develop").strip() or "develop"
+if re.fullmatch(r"[A-Za-z0-9._/-]+", _raw_base_ref):
+    base_ref = _raw_base_ref
+else:
+    base_ref = "develop"
 
 def pct_to_color(p):
     if p >= 90:
