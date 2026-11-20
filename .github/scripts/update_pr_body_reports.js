@@ -31,7 +31,8 @@ function upsertReport(body, marker, content) {
   const after = body.slice(endIdx);
 
   const otherMarkers = REPORT_MARKERS.filter(m => m !== marker).map(escapeRegExp).join('|');
-  const endBoundary = '(?=' + (otherMarkers ? otherMarkers + '|' : '') + escapeRegExp(SECTION_END) + ')';
+  // Match up to the next report marker or the end of the managed section content.
+  const endBoundary = otherMarkers ? '(?=' + otherMarkers + '|$)' : '(?=$)';
   const re = new RegExp(escapeRegExp(marker) + '[\\s\\S]*?' + endBoundary);
 
   const replacement = '\n' + content + '\n';
@@ -42,6 +43,8 @@ function upsertReport(body, marker, content) {
     section = section.replace(/\s*$/, '') + '\n' + replacement;
   }
 
+  // Normalize spacing before section end marker
+  section = section.replace(/\s*$/, '\n');
   return before + section + after;
 }
 
