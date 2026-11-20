@@ -90,10 +90,12 @@ try:
         raise RuntimeError("diff-cover command not available")
 
     cmd = diff_base + [xml_path, "--compare-branch", compare_branch, "--format", f"markdown:{diff_md_path}"]
-    subprocess.run(cmd, capture_output=True, text=True)  # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args -- base_ref is allowlisted and args are list-form (no shell)
+    # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
+    subprocess.run(cmd, capture_output=True, text=True)
     # console summary for parsing
     summary_cmd = diff_base + [xml_path, "--compare-branch", compare_branch]
-    res2 = subprocess.run(summary_cmd, capture_output=True, text=True)  # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args -- base_ref is allowlisted and args are list-form (no shell)
+    # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
+    res2 = subprocess.run(summary_cmd, capture_output=True, text=True)
     out = (res2.stdout or "") + "\n" + (res2.stderr or "")
     m_cov = re.search(r"Coverage:\s*([0-9]+(?:\.[0-9]+)?)%", out)
     m_total = re.search(r"Total:\s*([0-9]+)\s*lines", out)
