@@ -97,7 +97,8 @@ def test_coverage_by_file_ignores_malformed_and_empty_entries(load_quality_scrip
 
     invalid = tmp_path / "invalid.xml"
     invalid.write_text("<coverage><broken>", encoding="utf-8")
-    assert coverage_by_file(str(invalid)) == {}
+    with pytest.raises(script["CoverageDataError"]):
+        coverage_by_file(str(invalid))
 
     xml = tmp_path / "coverage.xml"
     xml.write_text(
@@ -296,6 +297,24 @@ def test_missing_coverage_xml_is_not_an_error(tmp_path, run_quality_script):
     assert proc.returncode == 0
     assert "## Patch coverage" in proc.stdout
     assert "No coverage data was generated for this run." in proc.stdout
+
+
+def test_malformed_coverage_xml_fails_closed(tmp_path, run_quality_script):
+    (tmp_path / "coverage.xml").write_text("<coverage><broken>", encoding="utf-8")
+    (tmp_path / "changed-files.json").write_text("[]", encoding="utf-8")
+
+    proc = run_quality_script(
+        "test_coverage_comment.py",
+        tmp_path,
+        env={
+            "CHANGED_FILES_JSON": str(tmp_path / "changed-files.json"),
+            "COVERAGE_XML_PATH": str(tmp_path / "coverage.xml"),
+        },
+    )
+
+    assert proc.returncode != 0
+    assert "❌ Coverage XML could not be parsed; patch coverage is unavailable for this run." in proc.stdout
+    assert "0% covered" not in proc.stdout
 
 
 def test_missing_coverage_xml_still_reports_workflow_coverage(tmp_path, run_quality_script):

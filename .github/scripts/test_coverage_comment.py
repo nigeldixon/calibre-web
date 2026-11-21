@@ -6,6 +6,12 @@ import re
 from defusedxml import ElementTree as SafeET
 
 marker = "<!-- coverage-report -->"
+
+
+class CoverageDataError(Exception):
+    """Raised when a coverage report exists but cannot be trusted."""
+
+
 coverage_xml_path = os.environ.get("COVERAGE_XML_PATH", "coverage.xml").strip() or "coverage.xml"
 run_url = os.environ.get("RUN_URL", "").strip()
 changed_json_path = os.environ.get("CHANGED_FILES_JSON", "").strip()
@@ -61,8 +67,8 @@ def coverage_by_file(path):
         return by_file
     try:
         root = SafeET.parse(path).getroot()
-    except Exception:
-        return by_file
+    except Exception as exc:
+        raise CoverageDataError(str(exc)) from exc
     for cls in root.iter("class"):
         filename = normalize_path(cls.get("filename", ""))
         if not filename:
@@ -305,7 +311,19 @@ def main():
     lines += ["Automated test summary for files changed in this PR.", ""]
     lines += test_table(suites)
     lines += failure_details(suites)
-    lines += ["", ""] + coverage_section()
+    try:
+        lines += ["", ""] + coverage_section()
+    except CoverageDataError as exc:
+        lines += [
+            "",
+            "",
+            "### Patch coverage",
+            "",
+            "❌ Coverage XML could not be parsed; patch coverage is unavailable for this run.",
+            f"`{coverage_xml_path}`: {exc}",
+        ]
+        print("\n".join(lines))
+        raise SystemExit(1)
     print("\n".join(lines))
 
 
