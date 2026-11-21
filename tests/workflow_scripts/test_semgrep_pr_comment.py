@@ -76,7 +76,21 @@ def test_json_uri_and_counting_helpers(load_quality_script, tmp_path):
     assert script["valid_notification_shape"]({"descriptor": "bad"}) is False
     assert script["valid_notification_shape"]("bad") is False
     assert script["valid_sarif"]({"runs": ["bad"]}) is False
-    assert script["valid_sarif"]({"runs": [{"tool": {}, "results": [{"level": 7}]}]}) is False
+    assert script["valid_sarif"]({"runs": [{"tool": {"driver": {}}, "results": [{"level": 7}]}]}) is False
+    assert script["valid_sarif"]({"runs": [{
+        "tool": {"driver": {}}, "results": [], "invocations": "bad",
+    }]}) is False
+    assert script["valid_sarif"]({"runs": [{
+        "tool": {"driver": {}}, "results": [], "invocations": ["bad"],
+    }]}) is False
+    assert script["valid_sarif"]({"runs": [{
+        "tool": {"driver": {}}, "results": [],
+        "invocations": [{"toolExecutionNotifications": "bad"}],
+    }]}) is False
+    assert script["valid_sarif"]({"runs": [{
+        "tool": {"driver": {}}, "results": [],
+        "invocations": [{"toolExecutionNotifications": [{"level": 7}]}],
+    }]}) is False
 
     sarif = {
         "runs": [

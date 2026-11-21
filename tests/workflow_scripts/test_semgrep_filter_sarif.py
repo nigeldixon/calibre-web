@@ -72,6 +72,20 @@ def test_sarif_shape_validators_reject_bad_nested_types(load_quality_script, tmp
     assert script["valid_notification_shape"]("bad") is False
     assert script["valid_run_shape"]({"tool": {"driver": {}}, "results": "bad"}) is False
     assert script["valid_run_shape"]({"tool": {"driver": {}}, "results": [{"level": 7}]}) is False
+    assert script["valid_run_shape"]({
+        "tool": {"driver": {}}, "results": [], "invocations": "bad",
+    }) is False
+    assert script["valid_run_shape"]({
+        "tool": {"driver": {}}, "results": [], "invocations": ["bad"],
+    }) is False
+    assert script["valid_run_shape"]({
+        "tool": {"driver": {}}, "results": [],
+        "invocations": [{"toolExecutionNotifications": "bad"}],
+    }) is False
+    assert script["valid_run_shape"]({
+        "tool": {"driver": {}}, "results": [],
+        "invocations": [{"toolExecutionNotifications": [{"level": 7}]}],
+    }) is False
 
 
 def test_unreadable_scan_exit_code_fails_closed(tmp_path, run_quality_script):
