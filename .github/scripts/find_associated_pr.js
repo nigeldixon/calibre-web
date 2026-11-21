@@ -25,8 +25,11 @@ module.exports = async ({ github, context, core }) => {
   const branch = context.ref.replace('refs/heads/', '');
   const head = `${owner}:${branch}`;
   const pulls = await github.rest.pulls.list({ owner, repo, head, state: 'open', per_page: 100 });
-  if (pulls.data.length > 0) {
-    const pr = pulls.data.find((p) => p.head.sha === context.sha) || pulls.data[0];
+  // Never guess a PR. A stale push or a force-push race can leave the branch
+  // with open PRs whose head SHA is not this commit; reporting to any of them
+  // would attach results from the wrong revision.
+  const pr = pulls.data.find((p) => p.head.sha === context.sha);
+  if (pr) {
     core.setOutput('number', pr.number.toString());
     core.setOutput('base', pr.base.ref || 'develop');
     core.setOutput('base_ref', pr.base.ref || '');
