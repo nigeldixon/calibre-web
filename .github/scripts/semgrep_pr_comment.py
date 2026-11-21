@@ -265,7 +265,7 @@ def status_icon(n):
 
 
 analysis_url = os.environ.get('ANALYSIS_URL', '').strip()
-analysis_label = os.environ.get('ANALYSIS_LABEL', '').strip() or 'PR-scoped Semgrep alerts'
+analysis_label = os.environ.get('ANALYSIS_LABEL', '').strip() or 'All Semgrep alerts'
 run_url = os.environ.get('RUN_URL', '').strip()
 
 full_analysis = []

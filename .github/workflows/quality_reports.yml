@@ -252,7 +252,7 @@ jobs:
           SCAN_EXIT_PATH: scan-exit-code.txt
           ANALYZE_RESULT: ${{ github.event.workflow_run.conclusion }}
           ANALYSIS_URL: ${{ github.server_url }}/${{ github.repository }}/security/code-scanning?query=tool%3ASemgrep
-          ANALYSIS_LABEL: PR-scoped Semgrep alerts
+          ANALYSIS_LABEL: All Semgrep alerts
           RUN_URL: ${{ github.event.workflow_run.html_url }}
         run: |
           cd artifacts/semgrep
@@ -608,7 +608,7 @@ jobs:
           SCAN_EXIT_PATH: scan-exit-code.txt
           ANALYZE_RESULT: ${{ steps.runs.outputs.semgrep_conclusion }}
           ANALYSIS_URL: ${{ github.server_url }}/${{ github.repository }}/security/code-scanning?query=tool%3ASemgrep
-          ANALYSIS_LABEL: PR-scoped Semgrep alerts
+          ANALYSIS_LABEL: All Semgrep alerts
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ steps.runs.outputs.semgrep_run }}
         run: |
           cd artifacts/semgrep

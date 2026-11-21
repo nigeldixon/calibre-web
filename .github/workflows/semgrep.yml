@@ -147,7 +147,7 @@ jobs:
         env:
           ANALYZE_RESULT: ${{ needs.analyze.result }}
           ANALYSIS_URL: ${{ github.server_url }}/${{ github.repository }}/security/code-scanning?query=tool%3ASemgrep
-          ANALYSIS_LABEL: PR-scoped Semgrep alerts
+          ANALYSIS_LABEL: All Semgrep alerts
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: python .github/scripts/semgrep_pr_comment.py > semgrep-comment.md
 

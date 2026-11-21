@@ -308,7 +308,7 @@ def test_trusted_path_filters_findings_and_reports_exec_errors(tmp_path, run_qua
     assert "- 1 × W1" in out
     assert "❌ Semgrep scan failed (exit 0, 1 error-level notification(s))" in out
     assert "**Full analysis:** [Workflow run](https://example.test/run/1)" in out
-    assert "**Code scanning:** [PR-scoped Semgrep alerts](https://example.test/alerts)" in out
+    assert "**Code scanning:** [All Semgrep alerts](https://example.test/alerts)" in out
     assert "_Scope: 1 changed file(s)" in out
 
 
