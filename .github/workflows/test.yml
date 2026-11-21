@@ -25,6 +25,8 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.event.pull_request.base.repo.full_name
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    outputs:
+      pr_number: ${{ steps.find_pr.outputs.number }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -162,26 +164,14 @@ jobs:
           if-no-files-found: warn
           retention-days: 5
 
-      - name: Update coverage report in PR body
+      - name: Upload coverage report for PR body publisher
         if: always() && github.event_name == 'push' && steps.find_pr.outputs.number != ''
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
-        env:
-          PR_NUMBER: ${{ steps.find_pr.outputs.number }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          script: |
-            const fs = require('fs');
-            const { updateReportAndRefreshTotals } = require('./.github/scripts/update_pr_body_reports.js');
-            if (!fs.existsSync('coverage-comment.md')) {
-              core.info('coverage-comment.md not found; skipping PR body update.');
-            } else {
-              const content = fs.readFileSync('coverage-comment.md', 'utf8');
-              await updateReportAndRefreshTotals({
-                github, context, core,
-                pull_number: process.env.PR_NUMBER,
-                marker: '<!-- coverage-report -->',
-                content,
-              });
-            }
+          name: coverage-report-md
+          path: coverage-comment.md
+          if-no-files-found: warn
+          retention-days: 5
 
       - name: Fail if any test suite failed
         if: always()
@@ -192,3 +182,51 @@ jobs:
           if [ "${{ steps.e2e_tests.outcome }}" != "success" ]; then echo "Playwright E2E tests: ${{ steps.e2e_tests.outcome }}"; failed=1; fi
           if [ "${{ steps.functional_tests.outcome }}" != "success" ]; then echo "HTTP functional tests: ${{ steps.functional_tests.outcome }}"; failed=1; fi
           exit $failed
+
+  report:
+    name: PR report
+    if: always() && github.event_name == 'push' && needs.tests.outputs.pr_number != ''
+    needs: tests
+    runs-on: ubuntu-latest
+    # Serialize PR body writes across all quality workflows. Keep this group
+    # identical to the one used by CodeQL, Semgrep, and Quality reports.
+    concurrency:
+      group: quality-pr-body
+      cancel-in-progress: false
+      queue: max
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Download coverage report artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: coverage-report-md
+          path: report
+        continue-on-error: true
+
+      - name: Update coverage report in PR body
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        env:
+          PR_NUMBER: ${{ needs.tests.outputs.pr_number }}
+        with:
+          script: |
+            const fs = require('fs');
+            const { updateReportAndRefreshTotals } = require('./.github/scripts/update_pr_body_reports.js');
+            const path = 'report/coverage-comment.md';
+            if (!fs.existsSync(path)) {
+              core.info('coverage-comment.md not found; skipping PR body update.');
+            } else {
+              const content = fs.readFileSync(path, 'utf8');
+              await updateReportAndRefreshTotals({
+                github, context, core,
+                pull_number: Number(process.env.PR_NUMBER),
+                marker: '<!-- coverage-report -->',
+                content,
+              });
+            }

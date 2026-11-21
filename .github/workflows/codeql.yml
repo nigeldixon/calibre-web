@@ -146,6 +146,13 @@ jobs:
     runs-on: ubuntu-latest
     if: always() && github.event_name == 'push'
     needs: analyze
+    # Serialize PR body writes across all quality workflows. GitHub has no
+    # conditional PR update, so concurrent publishers can lose each other's
+    # reports even with the re-read check in updateReportAndRefreshTotals.
+    concurrency:
+      group: quality-pr-body
+      cancel-in-progress: false
+      queue: max
     permissions:
       actions: read
       contents: read

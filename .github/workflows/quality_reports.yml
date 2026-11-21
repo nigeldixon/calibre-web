@@ -19,6 +19,11 @@ jobs:
     # Only fork PRs need this: internal PRs are reported directly by push runs.
     if: github.event.workflow_run.event == 'pull_request'
     runs-on: ubuntu-latest
+    # Serialize PR body writes across all quality workflows.
+    concurrency:
+      group: quality-pr-body
+      cancel-in-progress: false
+      queue: max
     steps:
       - name: Checkout trusted workflow scripts
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
