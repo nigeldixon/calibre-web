@@ -1,14 +1,46 @@
-import re
 import shutil
 import subprocess
+from html.parser import HTMLParser
 
 import pytest
 
 
-SCRIPT_RE = re.compile(r"<script\b([^>]*)>(.*?)</script\s*>", re.S | re.I)
-TYPE_RE = re.compile(r"\btype\s*=\s*[\"']?([^\"' >]+)", re.I)
-SRC_RE = re.compile(r"\bsrc\s*=", re.I)
-HANDLER_RE = re.compile(r"\bon[a-z]+\s*=\s*([\"'])(.*?)\1", re.S | re.I)
+JS_TYPES = {"", "text/javascript", "application/javascript", "module"}
+
+
+class ScriptSnippetParser(HTMLParser):
+    """Collect inline scripts and event handlers using a real HTML parser."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=False)
+        self.snippets = []
+        self._script_parts = None
+
+    def _record_handlers(self, attrs):
+        for name, value in attrs:
+            if name and name.lower().startswith("on") and value:
+                self.snippets.append(value)
+
+    def handle_starttag(self, tag, attrs):
+        self._record_handlers(attrs)
+        if tag != "script":
+            return
+        attrs = dict(attrs)
+        script_type = str(attrs.get("type") or "").lower()
+        if "src" not in attrs and script_type in JS_TYPES:
+            self._script_parts = []
+
+    def handle_startendtag(self, tag, attrs):
+        self._record_handlers(attrs)
+
+    def handle_data(self, data):
+        if self._script_parts is not None:
+            self._script_parts.append(data)
+
+    def handle_endtag(self, tag):
+        if tag == "script" and self._script_parts is not None:
+            self.snippets.append("".join(self._script_parts))
+            self._script_parts = None
 
 
 def write_template(path, text):
@@ -97,20 +129,10 @@ def test_rendered_template_javascript_is_parseable(tmp_path, run_quality_script)
         tmp_path / "codeql-rendered/templates/alpha/templates/widget.html"
     ).read_text(encoding="utf-8")
 
-    snippets = []
-    for match in SCRIPT_RE.finditer(output):
-        attrs = match.group(1)
-        type_match = TYPE_RE.search(attrs)
-        if type_match and type_match.group(1).lower() not in (
-            "text/javascript",
-            "application/javascript",
-            "module",
-        ):
-            continue
-        if SRC_RE.search(attrs):
-            continue
-        snippets.append(match.group(2))
-    snippets.extend(match.group(2) for match in HANDLER_RE.finditer(output))
+    parser = ScriptSnippetParser()
+    parser.feed(output)
+    parser.close()
+    snippets = parser.snippets
 
     assert snippets
     for index, code in enumerate(snippets):
