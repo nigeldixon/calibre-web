@@ -285,22 +285,30 @@ jobs:
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         env:
           PR_NUMBER: ${{ needs.tests.outputs.pr_number }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         with:
           script: |
             const fs = require('fs');
             const { updateReportAndRefreshTotals } = require('./.github/scripts/update_pr_body_reports.js');
             const path = 'report/coverage-comment.md';
+            let content;
             if (!fs.existsSync(path) || fs.statSync(path).size === 0) {
-              core.info('No usable coverage-comment.md artifact; skipping PR body update.');
+              core.warning('No usable coverage-comment.md artifact; publishing an explicit fallback.');
+              content = [
+                '<!-- coverage-report -->',
+                '## Tests',
+                '',
+                `❌ Report unavailable: the test workflow did not produce a usable report. See [workflow run](${process.env.RUN_URL}).`,
+              ].join('\n');
             } else {
-              const content = fs.readFileSync(path, 'utf8');
-              await updateReportAndRefreshTotals({
-                github, context, core,
-                pull_number: Number(process.env.PR_NUMBER),
-                marker: '<!-- coverage-report -->',
-                content,
-              });
+              content = fs.readFileSync(path, 'utf8');
             }
+            await updateReportAndRefreshTotals({
+              github, context, core,
+              pull_number: Number(process.env.PR_NUMBER),
+              marker: '<!-- coverage-report -->',
+              content,
+            });
 
       - name: Install comment sync dependencies
         shell: bash

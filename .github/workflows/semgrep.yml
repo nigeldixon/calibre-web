@@ -152,7 +152,6 @@ jobs:
 
       - name: Update Semgrep report in PR body
         if: github.event_name == 'push' && steps.find_pr.outputs.number != '' && hashFiles('semgrep-comment.md') != ''
-        continue-on-error: true
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         env:
           PR_NUMBER: ${{ steps.find_pr.outputs.number }}
