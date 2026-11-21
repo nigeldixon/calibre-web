@@ -155,9 +155,10 @@ def workflow_coverage_line():
     if not total:
         return None
     marker = coverage_marker(total)
+    scope = "Python only; JS/shell scripts not measured"
     if marker:
-        return f"**Workflow script coverage:** {marker} `{total}`"
-    return f"<small>Workflow script coverage: `{total}`</small>"
+        return f"**Workflow script coverage ({scope}):** {marker} `{total}`"
+    return f"<small>Workflow script coverage ({scope}): `{total}`</small>"
 
 
 def load_test_results():

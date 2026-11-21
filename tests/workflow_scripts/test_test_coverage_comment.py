@@ -225,7 +225,7 @@ def test_patch_coverage_report_uses_normalized_paths(tmp_path, run_quality_scrip
     assert proc.returncode == 0
     assert "**Full analysis:** [Workflow run](https://example.test/run/1)" in out
     assert (
-        "**Workflow script coverage:** ❌ Low coverage "
+        "**Workflow script coverage (Python only; JS/shell scripts not measured):** ❌ Low coverage "
         "`673 statements · 432 missed · 36% covered`"
     ) in out
     assert "**Diff lines:** 3 &nbsp;|&nbsp; **Missing:** 2 &nbsp;|&nbsp; **Covered:** 1" in out
@@ -330,7 +330,7 @@ def test_missing_coverage_xml_still_reports_workflow_coverage(tmp_path, run_qual
 
     assert proc.returncode == 0
     assert (
-        "<small>Workflow script coverage: "
+        "<small>Workflow script coverage (Python only; JS/shell scripts not measured): "
         "`100 statements · 20 missed · 80% covered`</small>"
     ) in proc.stdout
 
@@ -348,7 +348,7 @@ def test_medium_and_low_coverage_use_severity_icons(tmp_path, run_quality_script
 
         assert proc.returncode == 0
         assert (
-            f"**Workflow script coverage:** {marker} "
+            f"**Workflow script coverage (Python only; JS/shell scripts not measured):** {marker} "
             f"`100 statements · 30 missed · {percent}% covered`"
         ) in proc.stdout
 
@@ -487,6 +487,6 @@ def test_coverage_xml_without_changed_file_json_does_not_compute_patch(
     assert proc.returncode == 0
     assert "_Patch coverage could not be computed for this run._" in proc.stdout
     assert (
-        "<small>Workflow script coverage: "
+        "<small>Workflow script coverage (Python only; JS/shell scripts not measured): "
         "`100 statements · 20 missed · 80% covered`</small>"
     ) in proc.stdout
