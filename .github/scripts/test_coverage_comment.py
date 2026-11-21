@@ -3,22 +3,12 @@ import json
 import os
 import re
 import subprocess
-import xml.etree.ElementTree as ET
+from defusedxml import ElementTree as SafeET
 
 marker = "<!-- coverage-report -->"
-xml_path = os.environ.get("COVERAGE_XML_PATH", "coverage.xml")
+coverage_xml_path = os.environ.get("COVERAGE_XML_PATH", "coverage.xml").strip() or "coverage.xml"
 run_url = os.environ.get("RUN_URL", "").strip()
 changed_json_path = os.environ.get("CHANGED_FILES_JSON", "").strip()
-
-# Resolve base ref without propagating tainted env data into subprocess args.
-# Allow only known-safe branch names as explicit constants; default to develop.
-_raw_base_ref = os.environ.get("BASE_REF", "develop").strip() or "develop"
-if _raw_base_ref == "main":
-    base_ref = "main"
-elif _raw_base_ref == "master":
-    base_ref = "master"
-else:
-    base_ref = "develop"
 
 
 def pct_to_color(p):
@@ -58,7 +48,7 @@ def coverage_by_file(path):
     if not os.path.exists(path):
         return by_file
     try:
-        root = ET.parse(path).getroot()
+        root = SafeET.parse(path).getroot()
     except Exception:
         return by_file
     for cls in root.iter("class"):
@@ -117,7 +107,7 @@ def header():
     return out
 
 
-if not os.path.exists(xml_path):
+if not os.path.exists(coverage_xml_path):
     print("\n".join(header() + ["No coverage data was generated for this run."]))
     raise SystemExit(0)
 
@@ -126,7 +116,7 @@ lines_out = header()
 # Trusted path: compute patch coverage from coverage XML + GitHub's file patches.
 # This is used by the privileged workflow_run publisher and needs no git checkout.
 if changed_json_path:
-    coverage = coverage_by_file(xml_path)
+    coverage = coverage_by_file(coverage_xml_path)
     per_file = []
     total = 0
     covered = 0
@@ -175,9 +165,11 @@ if changed_json_path:
     print("\n".join(lines_out))
     raise SystemExit(0)
 
-# Legacy path: diff-cover against the branch used by the push workflow.
+# Legacy path: diff-cover against a fixed local branch. Keep every subprocess
+# argument as a literal constant so no env-derived value reaches the command.
+legacy_xml_path = "coverage.xml"
 diff_md_path = "diff-coverage.md"
-compare_branch = f"origin/{base_ref}"
+compare_branch = "origin/develop"
 diff_pct = None
 diff_pct_i = None
 diff_total = None
@@ -197,10 +189,10 @@ try:
     if diff_base is None:
         raise RuntimeError("diff-cover command not available")
 
-    cmd = diff_base + [xml_path, "--compare-branch", compare_branch, "--format", f"markdown:{diff_md_path}"]
+    cmd = diff_base + [legacy_xml_path, "--compare-branch", compare_branch, "--format", f"markdown:{diff_md_path}"]
     # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
     subprocess.run(cmd, capture_output=True, text=True)
-    summary_cmd = diff_base + [xml_path, "--compare-branch", compare_branch]
+    summary_cmd = diff_base + [legacy_xml_path, "--compare-branch", compare_branch]
     # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
     res2 = subprocess.run(summary_cmd, capture_output=True, text=True)
     out = (res2.stdout or "") + "\n" + (res2.stderr or "")
