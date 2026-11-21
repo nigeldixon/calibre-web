@@ -146,7 +146,8 @@ jobs:
         with:
           category: "/language:${{ matrix.language }}"
           output: codeql-results/${{ matrix.language }}
-          upload: ${{ github.event_name == 'pull_request' && 'never' || 'always' }}
+          # Upload only after the structural gate below has passed.
+          upload: never
 
       - name: Record analyze outcome
         if: always()
@@ -156,18 +157,66 @@ jobs:
           echo '${{ steps.analyze.outcome }}' > codeql-results/${{ matrix.language }}/status.txt
 
       - name: Validate CodeQL SARIF
+        id: validate_sarif
         if: always()
         shell: bash
         run: |
-          shopt -s nullglob
-          files=(codeql-results/${{ matrix.language }}/*.sarif)
-          if [ ${#files[@]} -eq 0 ]; then
-            echo "No CodeQL SARIF was produced for ${{ matrix.language }}"
-            exit 1
-          fi
-          for f in "${files[@]}"; do
-            python -m json.tool "$f" > /dev/null || { echo "Invalid SARIF: $f"; exit 1; }
-          done
+          python - "${{ matrix.language }}" <<'PY'
+          import glob
+          import json
+          import sys
+
+          language = sys.argv[1]
+          files = sorted(glob.glob(f"codeql-results/{language}/*.sarif"))
+          if not files:
+              raise SystemExit(f"No CodeQL SARIF was produced for {language}")
+
+          for path in files:
+              try:
+                  with open(path, "r", encoding="utf-8") as handle:
+                      sarif = json.load(handle)
+              except Exception as exc:
+                  raise SystemExit(f"Invalid SARIF {path}: {exc}")
+
+              runs = sarif.get("runs") if isinstance(sarif, dict) else None
+              if not isinstance(runs, list) or not runs:
+                  raise SystemExit(f"Invalid SARIF {path}: no runs")
+              for run in runs:
+                  if (not isinstance(run, dict)
+                          or not isinstance(run.get("tool"), dict)
+                          or not run["tool"]):
+                      raise SystemExit(f"Invalid SARIF {path}: missing tool")
+                  results = run.get("results", [])
+                  if not isinstance(results, list):
+                      raise SystemExit(f"Invalid SARIF {path}: results is not a list")
+                  invocations = run.get("invocations", []) or []
+                  if not isinstance(invocations, list):
+                      raise SystemExit(f"Invalid SARIF {path}: invocations is not a list")
+                  for invocation in invocations:
+                      if not isinstance(invocation, dict):
+                          raise SystemExit(f"Invalid SARIF {path}: invalid invocation")
+                      notifications = invocation.get("toolExecutionNotifications", []) or []
+                      if not isinstance(notifications, list):
+                          raise SystemExit(f"Invalid SARIF {path}: notifications is not a list")
+                      for notification in notifications:
+                          if not isinstance(notification, dict):
+                              raise SystemExit(f"Invalid SARIF {path}: invalid notification")
+                          if str(notification.get("level", "")).lower() == "error":
+                              raise SystemExit(
+                                  f"CodeQL scan failed for {language}: "
+                                  f"{notification.get('message', {}).get('text', 'error notification')}"
+                              )
+          print(f"Validated {len(files)} CodeQL SARIF file(s) for {language}")
+          PY
+
+      - name: Upload CodeQL SARIF to code scanning
+        if: >-
+          always() && steps.validate_sarif.outcome == 'success' &&
+          github.event_name != 'pull_request'
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4
+        with:
+          sarif_file: codeql-results/${{ matrix.language }}
+          category: "/language:${{ matrix.language }}"
 
       - name: Upload SARIF artifact
         if: always()
