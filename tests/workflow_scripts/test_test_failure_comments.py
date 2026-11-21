@@ -521,6 +521,16 @@ def test_graphql_variables_empty_state_and_http_errors(
         client.graphql("query")
 
 
+def test_marker_of_ignores_inline_markers(load_quality_script, tmp_path):
+    script = load_module(load_quality_script, tmp_path, "sync_test_failure_comments.py")
+    real = "<!-- test-failure:aaaaaaaaaaaa -->"
+    inline = "<!-- test-failure:bbbbbbbbbbbb -->"
+
+    assert script["marker_of"](f"details mention {inline} in text\n{real}\n") == real
+    assert script["marker_of"](f"details mention {inline} in text") is None
+    assert script["marker_of"](f"{real}\n- copied {inline}\n") == real
+
+
 def test_helpers_handle_missing_metadata(load_quality_script, tmp_path):
     script = load_module(load_quality_script, tmp_path, "sync_test_failure_comments.py")
 

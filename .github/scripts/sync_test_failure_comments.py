@@ -7,7 +7,9 @@ import re
 import requests
 
 
-MARKER_RE = re.compile(r"<!-- test-failure:[0-9a-f]{12} -->")
+# Only a whole line is a structural comment marker. A marker quoted inside a
+# failure detail (for example a copied error message) must not hijack syncing.
+MARKER_RE = re.compile(r"(?m)^<!-- test-failure:[0-9a-f]{12} -->[ \t]*\r?$")
 STATUS_LINE = "Resolved: this failure is no longer present in the latest run."
 DETAILS_MARKER = "<details><summary>Last reported failures</summary>"
 MINIMIZE_MUTATION = """
