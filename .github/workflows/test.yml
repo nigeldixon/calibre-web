@@ -4,6 +4,11 @@ on:
   push:
     branches:
       - '**'
+  pull_request:
+    types:
+      - opened
+      - reopened
+      - synchronize
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -15,6 +20,9 @@ permissions:
 
 jobs:
   tests:
+    # Internal PRs are covered by the push workflow; only fork PRs need the
+    # read-only pull_request run (their reports are published by workflow_run).
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -117,8 +125,17 @@ jobs:
           FUNCTIONAL_OUTCOME: ${{ steps.functional_tests.outcome }}
         run: python .github/scripts/test_summary.py >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Upload coverage report artifact for fork PRs
+        if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork && hashFiles('coverage-comment.md') != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: quality-report-coverage
+          path: coverage-comment.md
+          if-no-files-found: warn
+          retention-days: 5
+
       - name: Update coverage report in PR body
-        if: always() && steps.find_pr.outputs.number != ''
+        if: always() && github.event_name == 'push' && steps.find_pr.outputs.number != ''
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         env:
           PR_NUMBER: ${{ steps.find_pr.outputs.number }}

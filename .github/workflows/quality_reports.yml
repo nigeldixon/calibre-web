@@ -1,0 +1,139 @@
+name: Quality reports
+
+on:
+  workflow_run:
+    workflows:
+      - Tests
+      - Semgrep
+      - CodeQL
+    types:
+      - completed
+
+permissions:
+  actions: read
+  contents: read
+  pull-requests: write
+
+jobs:
+  publish:
+    # Only fork PRs need this: internal PRs are reported directly by push runs.
+    if: github.event.workflow_run.event == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout trusted workflow scripts
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Find associated pull request
+        id: pr
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        with:
+          script: |
+            const wr = context.payload.workflow_run;
+            let number = (wr.pull_requests || [])[0]?.number;
+
+            if (!number && wr.head_repository?.owner?.login && wr.head_branch) {
+              const head = `${wr.head_repository.owner.login}:${wr.head_branch}`;
+              const { data: pulls } = await github.rest.pulls.list({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                head,
+                state: 'open',
+                per_page: 100,
+              });
+              const match = pulls.find((p) => p.head.sha === wr.head_sha) || pulls[0];
+              number = match?.number;
+            }
+
+            if (number) {
+              core.setOutput('number', number.toString());
+              core.info(`Found PR #${number} for ${wr.name} run ${wr.id}.`);
+            } else {
+              core.setOutput('number', '');
+              core.info(`No open PR found for ${wr.name} run ${wr.id}; skipping.`);
+            }
+
+      - name: Download report artifacts
+        if: steps.pr.outputs.number != ''
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pattern: quality-report-*
+          path: quality-reports
+          merge-multiple: true
+        continue-on-error: true
+
+      - name: Publish quality report to PR body
+        if: steps.pr.outputs.number != ''
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        env:
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const { updateReport, refreshTotals } = require('./.github/scripts/update_pr_body_reports.js');
+
+            const pullNumber = Number(process.env.PR_NUMBER);
+            const wr = context.payload.workflow_run;
+            const reports = {
+              'CodeQL': {
+                file: 'codeql-report.md',
+                marker: '<!-- codeql-report -->',
+                heading: '## CodeQL analysis',
+                labels: true,
+              },
+              'Semgrep': {
+                file: 'semgrep-report.md',
+                marker: '<!-- semgrep-report -->',
+                heading: '## Semgrep analysis',
+                labels: true,
+              },
+              'Tests': {
+                file: 'coverage-report.md',
+                marker: '<!-- coverage-report -->',
+                heading: '## Patch coverage',
+                labels: false,
+              },
+            };
+            const report = reports[wr.name];
+            if (!report) {
+              core.info(`No report mapping for workflow ${wr.name}; skipping.`);
+              return;
+            }
+
+            const artifact = path.join('quality-reports', report.file);
+            const runUrl = wr.html_url || `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${wr.id}`;
+            let content;
+            if (fs.existsSync(artifact)) {
+              content = fs.readFileSync(artifact, 'utf8');
+              core.info(`Using ${report.file} from workflow run ${wr.id}.`);
+            } else {
+              content = [
+                report.marker,
+                report.heading,
+                '',
+                `❌ ${wr.name} workflow did not produce a report. See [workflow run](${runUrl}).`,
+              ];
+              if (report.labels) {
+                content.push(
+                  '',
+                  '**Whole-solution issues:** 0 · **In changed files:** 0',
+                  '**Analysis errors:** 1 · **Analysis warnings:** 0',
+                  '',
+                  '**Analyze job:** `failure`'
+                );
+              }
+              content = content.join('\n');
+              core.warning(`${report.file} missing from workflow run ${wr.id}; publishing failure report.`);
+            }
+
+            await updateReport({
+              github, context, core,
+              pull_number: pullNumber,
+              marker: report.marker,
+              content,
+            });
+            await refreshTotals({ github, context, core, pull_number: pullNumber });
