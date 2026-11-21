@@ -178,6 +178,8 @@ jobs:
           PR_HEAD_SHA: ${{ steps.find_pr.outputs.head_sha }}
           PR_BASE_REF: ${{ steps.find_pr.outputs.base_ref }}
           ANALYZE_RESULT: ${{ needs.analyze.result }}
+          ANALYSIS_URL: ${{ github.server_url }}/${{ github.repository }}/security/code-scanning?query=tool%3Acodeql
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: python .github/scripts/codeql_pr_comment.py > codeql-comment.md
 
       - name: Update CodeQL report in PR body

@@ -181,14 +181,28 @@ def status_icon(count):
     return "✅" if count == 0 else "⚠️"
 
 
+analysis_url = os.environ.get("ANALYSIS_URL", "").strip()
+run_url = os.environ.get("RUN_URL", "").strip()
+full_analysis_links = []
+if analysis_url:
+    full_analysis_links.append(f"[All CodeQL alerts]({analysis_url})")
+if run_url:
+    full_analysis_links.append(f"[Workflow run]({run_url})")
+full_analysis = "**Full analysis:** " + " · ".join(full_analysis_links) if full_analysis_links else ""
+
 total = sum(v.get("results", 0) for v in by_lang.values() if not v.get("parse_error"))
 
 lines = [
     marker,
     "## CodeQL analysis",
     "",
-    scope_note + " See the **Security** tab / code scanning alerts and workflow logs for full details.",
+    scope_note,
     "",
+]
+if full_analysis:
+    lines += [full_analysis, ""]
+
+lines += [
     "| Status | Language | Results | Error | Warning | Note |",
     "|:------:|----------|--------:|------:|--------:|-----:|",
 ]

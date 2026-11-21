@@ -127,6 +127,8 @@ jobs:
         shell: bash
         env:
           ANALYZE_RESULT: ${{ needs.analyze.result }}
+          ANALYSIS_URL: ${{ github.server_url }}/${{ github.repository }}/security/code-scanning?query=tool%3ASemgrep
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: python .github/scripts/semgrep_pr_comment.py > semgrep-comment.md
 
       - name: Update Semgrep report in PR body

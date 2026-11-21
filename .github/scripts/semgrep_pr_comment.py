@@ -52,15 +52,27 @@ def status_icon(n):
     return '✅' if n == 0 else '⚠️'
 
 
+analysis_url = os.environ.get('ANALYSIS_URL', '').strip()
+run_url = os.environ.get('RUN_URL', '').strip()
+full_analysis_links = []
+if analysis_url:
+    full_analysis_links.append(f'[All Semgrep alerts]({analysis_url})')
+if run_url:
+    full_analysis_links.append(f'[Workflow run]({run_url})')
+full_analysis = '**Full analysis:** ' + ' · '.join(full_analysis_links) if full_analysis_links else ''
+
 lines = [marker, '## Semgrep analysis', '']
 if scope.get('scoped'):
-    lines.append('Automated Semgrep summary for files changed in this PR (filtered SARIF). See the **Security** tab / code scanning alerts and workflow logs for full details.')
+    lines.append('Automated Semgrep summary for files changed in this PR (filtered SARIF).')
 elif scope.get('reason') == 'diff_failed_full_scan':
-    lines.append('Automated Semgrep summary (could not determine PR diff; showing unfiltered/full scan results). See the **Security** tab / code scanning alerts and workflow logs for full details.')
+    lines.append('Automated Semgrep summary (could not determine PR diff; showing unfiltered/full scan results).')
 elif os.environ.get('GITHUB_EVENT_NAME') == 'schedule':
-    lines.append('Automated Semgrep summary (scheduled full scan). See the **Security** tab / code scanning alerts and workflow logs for full details.')
+    lines.append('Automated Semgrep summary (scheduled full scan).')
 else:
-    lines.append('Automated Semgrep summary. See the **Security** tab / code scanning alerts and workflow logs for full details.')
+    lines.append('Automated Semgrep summary.')
+
+if full_analysis:
+    lines += ['', full_analysis]
 
 lines += [
     '',
