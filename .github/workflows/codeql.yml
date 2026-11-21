@@ -47,7 +47,7 @@ jobs:
         with:
           script: |
             const {
-              updateReports, SECTION_START, SECTION_END,
+              updateReports, SECTION_START, sectionBounds, lineMarkerIndices, reportBlockText,
             } = require('./.github/scripts/update_pr_body_reports.js');
 
             const placeholders = [
@@ -87,17 +87,18 @@ jobs:
               pull_number: Number(process.env.PR_NUMBER),
             });
             const body = pr.body || '';
-            const start = body.indexOf(SECTION_START);
-            const end = start === -1 ? -1 : body.indexOf(SECTION_END, start);
-            const section = start !== -1 && end !== -1 ? body.slice(start, end) : '';
+            const { start, end } = sectionBounds(body);
+            const section = start !== -1 && end !== -1
+              ? reportBlockText(body.slice(start + SECTION_START.length, end))
+              : '';
             const markers = placeholders.map((r) => r.marker);
             const todo = placeholders.filter((r) => {
-              const idx = section.indexOf(r.marker);
+              const idx = lineMarkerIndices(section, r.marker)[0] ?? -1;
               if (idx === -1) return true;
               let next = section.length;
               for (const m of markers) {
                 if (m === r.marker) continue;
-                const at = section.indexOf(m, idx + r.marker.length);
+                const at = lineMarkerIndices(section, m).find((i) => i > idx) ?? -1;
                 if (at !== -1 && at < next) next = at;
               }
               return section.slice(idx, next).includes('⏳');

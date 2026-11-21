@@ -434,25 +434,29 @@ jobs:
         with:
           script: |
             const fs = require('fs');
+            const {
+              SECTION_START, sectionBounds, lineMarkerIndices, reportBlockText,
+            } = require('./.github/scripts/update_pr_body_reports.js');
             const pr = context.payload.pull_request;
             const { data: current } = await github.rest.pulls.get({
               owner: context.repo.owner, repo: context.repo.repo,
               pull_number: pr.number,
             });
             const body = current.body || '';
-            const start = body.indexOf('<!-- quality-reports:start -->');
-            const end = start === -1 ? -1 : body.indexOf('<!-- quality-reports:end -->', start);
-            const section = start !== -1 && end !== -1 ? body.slice(start, end) : '';
+            const { start, end } = sectionBounds(body);
+            const section = start !== -1 && end !== -1
+              ? reportBlockText(body.slice(start + SECTION_START.length, end))
+              : '';
             const markers = [
               '<!-- codeql-report -->', '<!-- semgrep-report -->', '<!-- coverage-report -->',
             ];
             const needsBackfill = (marker) => {
-              const idx = section.indexOf(marker);
+              const idx = lineMarkerIndices(section, marker)[0] ?? -1;
               if (idx === -1) return true;
               let next = section.length;
               for (const m of markers) {
                 if (m === marker) continue;
-                const at = section.indexOf(m, idx + marker.length);
+                const at = lineMarkerIndices(section, m).find((i) => i > idx) ?? -1;
                 if (at !== -1 && at < next) next = at;
               }
               return section.slice(idx, next).includes('⏳');
@@ -745,7 +749,8 @@ jobs:
         with:
           script: |
             const {
-              updateReportAndRefreshTotals, SECTION_START, SECTION_END, SUMMARY_MARKER,
+              updateReportAndRefreshTotals, SECTION_START, SUMMARY_MARKER,
+              sectionBounds, lineMarkerIndices, reportBlockText,
             } = require('./.github/scripts/update_pr_body_reports.js');
             const { owner, repo } = context.repo;
             const reports = [
@@ -763,9 +768,9 @@ jobs:
                 owner, repo, pull_number: pr.number,
               });
               const body = current.body || '';
-              const start = body.indexOf(SECTION_START);
-              const end = start === -1 ? -1 : body.indexOf(SECTION_END, start);
-              const section = start === -1 || end === -1 ? '' : body.slice(start, end);
+              const { start, end } = sectionBounds(body);
+              const section = start === -1 || end === -1 ? ''
+                : reportBlockText(body.slice(start + SECTION_START.length, end));
               if (!section) continue;
 
               const active = await github.rest.actions.listWorkflowRunsForRepo({
@@ -777,12 +782,12 @@ jobs:
               }
 
               for (const report of reports) {
-                const idx = section.indexOf(report.marker);
+                const idx = lineMarkerIndices(section, report.marker)[0] ?? -1;
                 if (idx === -1) continue;
                 let next = section.length;
                 for (const marker of allMarkers) {
                   if (marker === report.marker) continue;
-                  const at = section.indexOf(marker, idx + report.marker.length);
+                  const at = lineMarkerIndices(section, marker).find((i) => i > idx) ?? -1;
                   if (at !== -1 && at < next) next = at;
                 }
                 if (!section.slice(idx, next).includes('⏳')) continue;

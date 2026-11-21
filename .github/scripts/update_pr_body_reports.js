@@ -26,12 +26,51 @@ function lineMarkerIndices(body, marker) {
   return indices;
 }
 
-function ensureSection(body) {
+function stripQualityMarkers(text) {
+  return (text || '')
+    .split(/\r?\n/)
+    .filter((line) => line !== SECTION_START && line !== SECTION_END)
+    .join('\n')
+    .split(SECTION_HEADER)
+    .join('');
+}
+
+function dedupeReportMarkers(section) {
+  const lines = (section || '').split(/\r?\n/);
+  const lastIndex = {};
+  lines.forEach((line, i) => {
+    if (REPORT_MARKERS.includes(line)) lastIndex[line] = i;
+  });
+  return lines
+    .filter((line, i) => !REPORT_MARKERS.includes(line) || lastIndex[line] === i)
+    .join('\n');
+}
+
+// Rebuild exactly one quality section from the last complete pair of section
+// markers. Standalone injected pairs before it are discarded, and duplicate
+// report markers inside it are collapsed to the last occurrence.
+function sectionBounds(body) {
+  const starts = lineMarkerIndices(body || '', SECTION_START);
+  const ends = lineMarkerIndices(body || '', SECTION_END);
+  const start = starts.length ? starts[starts.length - 1] : -1;
+  const end = start === -1 ? -1 : ends.find((i) => i > start) ?? -1;
+  return { start, end };
+}
+
+function canonicalizeSection(body) {
   body = body || '';
-  if (lineMarkerIndices(body, SECTION_START).length && lineMarkerIndices(body, SECTION_END).length) return body;
-  let out = body.replace(/\s*$/, '');
-  out += SECTION_HEADER + SECTION_START + '\n' + SECTION_END + '\n';
-  return out;
+  const { start, end } = sectionBounds(body);
+  if (start === -1 || end === -1) {
+    return stripQualityMarkers(body).replace(/\s*$/, '') + SECTION_HEADER + SECTION_START + '\n' + SECTION_END + '\n';
+  }
+  const section = dedupeReportMarkers(body.slice(start + SECTION_START.length, end));
+  const before = stripQualityMarkers(body.slice(0, start)).replace(/\s*$/, '');
+  const after = stripQualityMarkers(body.slice(end + SECTION_END.length)).replace(/^\s*/, '');
+  return before + SECTION_HEADER + SECTION_START + section + SECTION_END + (after ? '\n' + after : '\n');
+}
+
+function ensureSection(body) {
+  return canonicalizeSection(body || '');
 }
 
 function upsertReport(body, marker, content) {
@@ -133,10 +172,27 @@ function sumLabel(body, label) {
   return total;
 }
 
+// Only generated report panels contribute to totals. A metric-looking line
+// elsewhere in the body (or in an unrelated paragraph) is ignored.
+function reportBlockText(section) {
+  const markers = [];
+  for (const marker of REPORT_MARKERS) {
+    const at = lineMarkerIndices(section, marker)[0] ?? -1;
+    if (at !== -1) markers.push({ marker, at });
+  }
+  markers.sort((a, b) => a.at - b.at);
+  return markers
+    .map((item, i) => section.slice(
+      item.at,
+      i + 1 < markers.length ? markers[i + 1].at : section.length,
+    ))
+    .join('\n');
+}
+
 function totalsContent(body) {
   const start = lineMarkerIndices(body, SECTION_START)[0] ?? -1;
   const end = start === -1 ? -1 : lineMarkerIndices(body, SECTION_END).find((i) => i > start) ?? -1;
-  const section = start !== -1 && end !== -1 ? body.slice(start, end) : '';
+  const section = start !== -1 && end !== -1 ? reportBlockText(body.slice(start, end)) : '';
   return [
     SUMMARY_MARKER,
     `**Quality total:** ${sumLabel(section, ISSUES_LABEL)} issues found · ` +
@@ -210,7 +266,11 @@ module.exports = {
   SECTION_START,
   SECTION_END,
   SUMMARY_MARKER,
+  lineMarkerIndices,
   ensureSection,
+  sectionBounds,
+  canonicalizeSection,
+  reportBlockText,
   upsertReport,
   sumLabel,
   totalsContent,
