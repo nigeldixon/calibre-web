@@ -26,7 +26,7 @@ module.exports = async ({ github, context, core }) => {
   const head = `${owner}:${branch}`;
   const pulls = await github.rest.pulls.list({ owner, repo, head, state: 'open', per_page: 100 });
   if (pulls.data.length > 0) {
-    const pr = pulls.data[0];
+    const pr = pulls.data.find((p) => p.head.sha === context.sha) || pulls.data[0];
     core.setOutput('number', pr.number.toString());
     core.setOutput('base', pr.base.ref || 'develop');
     core.setOutput('base_ref', pr.base.ref || '');
