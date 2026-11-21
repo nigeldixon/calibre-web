@@ -46,9 +46,11 @@ def write_empty_sarif():
 
 
 if not os.path.exists(raw_path):
+    # Still write an empty local SARIF so report/artifact steps have a file,
+    # but fail so the upload step can refuse to publish it to code scanning.
     write_scope(base_scope(reason='no_sarif'))
     write_empty_sarif()
-    sys.exit(0)
+    sys.exit(1)
 
 try:
     with open(raw_path, 'r', encoding='utf-8') as f:
