@@ -328,18 +328,21 @@ jobs:
                 file: 'codeql-report.md',
                 marker: '<!-- codeql-report -->',
                 heading: '## CodeQL analysis',
+                label: 'CodeQL',
                 labels: true,
               },
               semgrep: {
                 file: 'semgrep-report.md',
                 marker: '<!-- semgrep-report -->',
                 heading: '## Semgrep analysis',
+                label: 'Semgrep',
                 labels: true,
               },
               tests: {
                 file: 'coverage-report.md',
                 marker: '<!-- coverage-report -->',
                 heading: '## Tests',
+                label: 'Tests',
                 labels: false,
               },
             };
@@ -359,7 +362,7 @@ jobs:
               core.info(`Using regenerated ${report.file} from workflow run ${wr.id}.`);
             } else {
               const reason = trusted
-                ? `${wr.name} workflow did not produce usable artifacts.`
+                ? `${report.label} workflow did not produce usable artifacts.`
                 : `this PR modified verification-sensitive files (${modified || 'unknown'}), so its artifacts cannot be trusted.`;
               const parts = [
                 report.marker,
