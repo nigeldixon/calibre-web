@@ -7,9 +7,24 @@ const ISSUES_LABEL = '**Whole-solution issues:** ';
 const ERRORS_LABEL = '**Analysis errors:** ';
 const WARNINGS_LABEL = '**Analysis warnings:** ';
 
+// Markers embedded in report text (for example a test message copied into a
+// failure bullet) must never be mistaken for a panel boundary. Only whole
+// lines count as structural markers.
+function lineMarkerIndices(body, marker) {
+  const indices = [];
+  let pos = 0;
+  while ((pos = body.indexOf(marker, pos)) !== -1) {
+    const before = pos === 0 ? '\n' : body[pos - 1];
+    const after = body[pos + marker.length] || '\n';
+    if (before === '\n' && (after === '\n' || after === '\r')) indices.push(pos);
+    pos += marker.length;
+  }
+  return indices;
+}
+
 function ensureSection(body) {
   body = body || '';
-  if (body.includes(SECTION_START) && body.includes(SECTION_END)) return body;
+  if (lineMarkerIndices(body, SECTION_START).length && lineMarkerIndices(body, SECTION_END).length) return body;
   let out = body.replace(/\s*$/, '');
   out += SECTION_HEADER + SECTION_START + '\n' + SECTION_END + '\n';
   return out;
@@ -22,20 +37,20 @@ function upsertReport(body, marker, content) {
     content = marker + '\n' + content;
   }
 
-  const startIdx = body.indexOf(SECTION_START);
-  const endIdx = body.indexOf(SECTION_END, startIdx);
+  const startIdx = lineMarkerIndices(body, SECTION_START)[0] ?? -1;
+  const endIdx = startIdx === -1 ? -1 : lineMarkerIndices(body, SECTION_END).find((i) => i > startIdx) ?? -1;
   if (startIdx === -1 || endIdx === -1) return body;
 
   const before = body.slice(0, startIdx + SECTION_START.length);
   let section = body.slice(startIdx + SECTION_START.length, endIdx);
   const after = body.slice(endIdx);
 
-  const markerIdx = section.indexOf(marker);
+  const markerIdx = lineMarkerIndices(section, marker)[0] ?? -1;
   if (markerIdx !== -1) {
     let end = section.length;
     for (const m of REPORT_MARKERS) {
       if (m === marker) continue;
-      const idx = section.indexOf(m, markerIdx + marker.length);
+      const idx = lineMarkerIndices(section, m).find((i) => i > markerIdx + marker.length) ?? -1;
       if (idx !== -1 && idx < end) end = idx;
     }
     // Normalize the whitespace before this report to exactly one blank line.
@@ -97,21 +112,20 @@ async function updateReports({ github, context, core, owner, repo, pull_number, 
 
 function sumLabel(body, label) {
   let total = 0;
-  let pos = 0;
-  while ((pos = body.indexOf(label, pos)) !== -1) {
-    const start = pos + label.length;
-    const end = body.indexOf('\n', start);
-    const text = body.slice(start, end === -1 ? body.length : end).trim();
-    const n = Number.parseInt(text, 10);
+  // Only generated lines beginning with the label contribute to the totals;
+  // quoted text inside an expandable failure detail cannot inflate them.
+  for (const line of body.split(/\r?\n/)) {
+    const text = line.trim();
+    if (!text.startsWith(label)) continue;
+    const n = Number.parseInt(text.slice(label.length).trim(), 10);
     if (Number.isFinite(n)) total += n;
-    pos = start;
   }
   return total;
 }
 
 function totalsContent(body) {
-  const start = body.indexOf(SECTION_START);
-  const end = start === -1 ? -1 : body.indexOf(SECTION_END, start);
+  const start = lineMarkerIndices(body, SECTION_START)[0] ?? -1;
+  const end = start === -1 ? -1 : lineMarkerIndices(body, SECTION_END).find((i) => i > start) ?? -1;
   const section = start !== -1 && end !== -1 ? body.slice(start, end) : '';
   return [
     SUMMARY_MARKER,
