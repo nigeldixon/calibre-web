@@ -1,3 +1,6 @@
+import os
+
+
 def test_summary_reports_each_suite_and_coverage(tmp_path, run_quality_script):
     (tmp_path / "workflow-script-test-output.txt").write_text("18 passed in 0.87s\n", encoding="utf-8")
     (tmp_path / "unit-test-output.txt").write_text(".... 12 passed in 1.50s\n", encoding="utf-8")
@@ -27,6 +30,64 @@ def test_summary_reports_each_suite_and_coverage(tmp_path, run_quality_script):
     assert "TOTAL 71%" in out
     assert "**Workflow script coverage:**" in out
     assert "TOTAL 88%" in out
+
+
+def test_extract_summary_handles_unreadable_and_plain_count_lines(
+    load_quality_script, tmp_path
+):
+    script = load_quality_script("test_summary.py", tmp_path)
+    extract_summary = script["extract_summary"]
+
+    unreadable = tmp_path / "unreadable.txt"
+    unreadable.mkdir()
+    assert extract_summary(str(unreadable)) == "no results"
+
+    counts = tmp_path / "counts.txt"
+    counts.write_text("collecting tests\n12 passed, 1 failed\n", encoding="utf-8")
+    assert extract_summary(str(counts)) == "12 passed, 1 failed"
+
+    no_tests = tmp_path / "no-tests.txt"
+    no_tests.write_text("no tests ran\n", encoding="utf-8")
+    assert extract_summary(str(no_tests)) == "no tests ran"
+
+    noise = tmp_path / "noise.txt"
+    noise.write_text("nothing useful here\n", encoding="utf-8")
+    assert extract_summary(str(noise)) == "no results"
+
+
+def test_read_coverage_handles_unreadable_file(load_quality_script, tmp_path):
+    script = load_quality_script("test_summary.py", tmp_path)
+    unreadable = tmp_path / "coverage-term.txt"
+    unreadable.mkdir()
+
+    assert script["read_coverage"](str(unreadable)) == "No coverage data generated."
+
+
+def test_app_coverage_falls_back_to_coverage_command(tmp_path, run_quality_script):
+    bin_dir = tmp_path / "fake-bin"
+    bin_dir.mkdir()
+    fake_python = bin_dir / "python"
+    fake_python.write_text("#!/bin/sh\nprintf 'TOTAL 42%%\\n'\n", encoding="utf-8")
+    fake_python.chmod(0o755)
+    (tmp_path / ".coverage").write_text("dummy", encoding="utf-8")
+
+    proc = run_quality_script(
+        "test_summary.py",
+        tmp_path,
+        env={"PATH": f"{bin_dir}:{os.environ['PATH']}"},
+    )
+
+    assert proc.returncode == 0
+    assert "TOTAL 42%" in proc.stdout
+
+
+def test_app_coverage_command_failure_is_not_reported_as_data(tmp_path, run_quality_script):
+    (tmp_path / ".coverage").write_text("dummy", encoding="utf-8")
+
+    proc = run_quality_script("test_summary.py", tmp_path, env={"PATH": ""})
+
+    assert proc.returncode == 0
+    assert proc.stdout.count("No coverage data generated.") == 2
 
 
 def test_summary_without_outputs_does_not_claim_results(tmp_path, run_quality_script):
