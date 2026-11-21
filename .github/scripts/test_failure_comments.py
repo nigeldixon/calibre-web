@@ -9,13 +9,13 @@ MARKER_PREFIX = "<!-- test-failure:"
 
 
 def marker_for(suite_key):
-    digest = hashlib.sha1(f"suite:{suite_key}".encode("utf-8")).hexdigest()[:12]
+    digest = hashlib.sha256(f"suite:{suite_key}".encode("utf-8")).hexdigest()[:12]
     return f"{MARKER_PREFIX}{digest} -->"
 
 
 def legacy_marker_for(suite_key, nodeid):
     """Return the marker used by the old one-comment-per-failure format."""
-    digest = hashlib.sha1(f"{suite_key}:{nodeid}".encode("utf-8")).hexdigest()[:12]
+    digest = hashlib.sha256(f"{suite_key}:{nodeid}".encode("utf-8")).hexdigest()[:12]
     return f"{MARKER_PREFIX}{digest} -->"
 
 

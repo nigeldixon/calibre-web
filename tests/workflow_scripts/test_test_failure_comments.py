@@ -1,4 +1,5 @@
 import json
+import re
 
 
 def load_module(load_quality_script, tmp_path, name):
@@ -124,6 +125,7 @@ def test_group_marker_is_stable_and_distinct_from_legacy_markers(
     legacy = script["legacy_marker_for"]("workflow_script_tests", "tests/x.py::test_a")
 
     assert grouped == script["marker_for"]("workflow_script_tests")
+    assert re.fullmatch(r"<!-- test-failure:[0-9a-f]{12} -->", grouped)
     assert legacy != grouped
     assert script["marker_for"]("unit_tests") != grouped
 
