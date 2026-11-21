@@ -70,6 +70,12 @@ jobs:
             . 2>&1 | tee semgrep-scan.log
           status=${PIPESTATUS[0]}
           printf '%s\n' "$status" > semgrep-results/scan-exit-code.txt
+          # Semgrep uses 1 for findings when --error is configured. Keep the
+          # recorded code for reporting, but do not fail the job for a scan
+          # that completed and produced valid SARIF.
+          if [ "$status" -eq 1 ]; then
+            status=0
+          fi
           exit "$status"
 
       - name: Filter SARIF to PR-changed files
