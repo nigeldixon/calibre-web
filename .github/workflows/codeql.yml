@@ -282,7 +282,9 @@ jobs:
         run: python .github/scripts/codeql_pr_comment.py > codeql-comment.md
 
       - name: Update CodeQL report in PR body
-        if: github.event_name == 'push' && steps.find_pr.outputs.number != ''
+        if: >-
+          github.event_name == 'push' && steps.find_pr.outputs.number != '' &&
+          steps.codeql_comment.outcome == 'success'
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         env:
           PR_NUMBER: ${{ steps.find_pr.outputs.number }}
@@ -291,6 +293,10 @@ jobs:
             const fs = require('fs');
             const { updateReportAndRefreshTotals } = require('./.github/scripts/update_pr_body_reports.js');
             const content = fs.readFileSync('codeql-comment.md', 'utf8');
+            if (!content.trim() || !content.includes('<!-- codeql-report -->')) {
+              core.warning('CodeQL report is empty or partial; leaving the PR report unchanged.');
+              return;
+            }
             await updateReportAndRefreshTotals({
               github, context, core,
               pull_number: process.env.PR_NUMBER,
