@@ -61,7 +61,38 @@ def resolved_body(body):
         if line.startswith("## ❌ Test failure:"):
             lines[index] = line.replace("## ❌ Test failure:", "## ✅ Resolved test failure:", 1)
             lines[index + 1:index + 1] = ["", "Resolved in the latest passing run."]
-            return "\n".join(lines).rstrip()
+            detail_start = index + 3
+        elif line.startswith("## ✅ Resolved test failure:"):
+            status_line = "Resolved in the latest passing run."
+            details_marker = "<details><summary>Original test failure</summary>"
+            details_at = lines.index(details_marker) if details_marker in lines else -1
+            status_at = lines.index(status_line) if status_line in lines else -1
+            if details_at != -1 and status_at > details_at:
+                lines.pop(status_at)
+                lines[index + 1:index + 1] = ["", status_line]
+            elif status_at == -1:
+                lines[index + 1:index + 1] = ["", status_line]
+            if details_at != -1:
+                return "\n".join(lines).rstrip()
+            detail_start = index + 1
+            while detail_start < len(lines) and (
+                not lines[detail_start].strip()
+                or lines[detail_start].startswith("Resolved in the latest passing run.")
+            ):
+                detail_start += 1
+        else:
+            continue
+        while detail_start < len(lines) and not lines[detail_start].strip():
+            detail_start += 1
+        if detail_start < len(lines):
+            lines[detail_start:detail_start] = [
+                "<details><summary>Original test failure</summary>",
+                "",
+            ]
+            while lines and not lines[-1].strip():
+                lines.pop()
+            lines += ["", "</details>"]
+        return "\n".join(lines).rstrip()
     return "\n".join(lines).rstrip()
 
 

@@ -42,6 +42,58 @@ def test_builds_one_stable_comment_per_failure(load_quality_script, tmp_path):
     assert "[Full workflow run](https://example.test/run/1)" in comment["body"]
 
 
+def test_resolved_body_is_idempotent(load_quality_script, tmp_path):
+    script = load_module(load_quality_script, tmp_path, "sync_test_failure_comments.py")
+    body = (
+        "<!-- test-failure:aaaaaaaaaaaa -->\n"
+        "## ❌ Test failure: Workflow script tests\n\n"
+        "`tests/x.py::test_a` failed.\n\n"
+        "- **Outcome:** `FAILED`"
+    )
+
+    resolved = script["resolved_body"](body)
+
+    assert script["resolved_body"](resolved) == resolved
+
+
+def test_resolved_body_collapses_legacy_expanded_comments(
+    load_quality_script, tmp_path
+):
+    script = load_module(load_quality_script, tmp_path, "sync_test_failure_comments.py")
+    body = (
+        "<!-- test-failure:aaaaaaaaaaaa -->\n"
+        "## ✅ Resolved test failure: Workflow script tests\n\n"
+        "Resolved in the latest passing run.\n\n"
+        "`tests/x.py::test_a` failed.\n\n"
+        "- **Outcome:** `FAILED`"
+    )
+
+    resolved = script["resolved_body"](body)
+
+    assert "<details><summary>Original test failure</summary>" in resolved
+    assert resolved.index("Resolved in the latest passing run.") < resolved.index("<details>")
+    assert resolved.rstrip().endswith("</details>")
+
+
+def test_resolved_body_moves_status_out_of_existing_details(
+    load_quality_script, tmp_path
+):
+    script = load_module(load_quality_script, tmp_path, "sync_test_failure_comments.py")
+    body = (
+        "<!-- test-failure:aaaaaaaaaaaa -->\n"
+        "## ✅ Resolved test failure: Workflow script tests\n\n"
+        "<details><summary>Original test failure</summary>\n\n"
+        "Resolved in the latest passing run.\n\n"
+        "`tests/x.py::test_a` failed.\n\n"
+        "</details>"
+    )
+
+    resolved = script["resolved_body"](body)
+
+    assert resolved.index("Resolved in the latest passing run.") < resolved.index("<details>")
+    assert script["resolved_body"](resolved) == resolved
+
+
 def test_sync_creates_updates_and_resolves_comments(load_quality_script, tmp_path):
     script = load_module(load_quality_script, tmp_path, "sync_test_failure_comments.py")
     marker_a = "<!-- test-failure:aaaaaaaaaaaa -->"
@@ -51,7 +103,7 @@ def test_sync_creates_updates_and_resolves_comments(load_quality_script, tmp_pat
         def __init__(self):
             self.comments = [
                 {"id": 1, "body": f"{marker_a}\n## ❌ Test failure: Old"},
-                {"id": 2, "body": f"{marker_b}\n## ❌ Test failure: Fixed"},
+                {"id": 2, "body": f"{marker_b}\n## ❌ Test failure: Fixed\n\n`tests/x.py::test_b` failed."},
             ]
             self.created = []
             self.updated = []
@@ -79,8 +131,13 @@ def test_sync_creates_updates_and_resolves_comments(load_quality_script, tmp_pat
     assert ("resolved", marker_b) in actions
     assert ("created", "<!-- test-failure:cccccccccccc -->") in actions
     assert client.created == ["new failure"]
-    assert "## ✅ Resolved test failure:" in dict(client.updated)[2]
-    assert "Resolved in the latest passing run." in dict(client.updated)[2]
+    resolved = dict(client.updated)[2]
+    assert "## ✅ Resolved test failure:" in resolved
+    assert "Resolved in the latest passing run." in resolved
+    assert "<details><summary>Original test failure</summary>" in resolved
+    assert resolved.index("Resolved in the latest passing run.") < resolved.index("<details>")
+    assert "`tests/x.py::test_b` failed." in resolved
+    assert resolved.rstrip().endswith("</details>")
 
 
 def test_failing_run_can_update_comments_without_resolving_others(
