@@ -10,6 +10,8 @@ SUMMARY_WORDS = re.compile(
     r"\b(passed|failed|error|errors|skipped|xfailed|xpassed|deselected|warnings?)\b"
 )
 SUMMARY_TAIL = re.compile(r"\b(in|no tests ran)\b")
+FAILURE_SUMMARY_RE = re.compile(r"\b[1-9]\d*\s+(failed|errors?)\b", re.I)
+SUCCESS_SUMMARY_RE = re.compile(r"\b(no tests ran|passed)\b", re.I)
 
 
 SUITES = [
@@ -43,6 +45,16 @@ def summary_of(lines):
     return "no results"
 
 
+def outcome_from_output(lines, fallback):
+    """Infer a suite outcome from its summary when no per-step status exists."""
+    summary = summary_of(lines)
+    if FAILURE_SUMMARY_RE.search(summary):
+        return "failure"
+    if SUCCESS_SUMMARY_RE.search(summary):
+        return "success"
+    return fallback or "unknown"
+
+
 def failures_of(lines, outcome):
     if outcome not in ("failure", "cancelled"):
         return []
@@ -62,10 +74,13 @@ def failures_of(lines, outcome):
 
 def collect():
     suites = []
+    derive_outcomes = os.environ.get("DERIVE_TEST_OUTCOMES", "").strip() == "1"
     for key, name, outcome_env, default_output in SUITES:
         output = os.environ.get(f"{key.upper()}_OUTPUT", "").strip() or default_output
         lines = read_lines(output)
         outcome = os.environ.get(outcome_env, "").strip()
+        if derive_outcomes and outcome in ("success", "failure"):
+            outcome = outcome_from_output(lines, outcome)
         suites.append({
             "key": key,
             "name": name,

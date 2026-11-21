@@ -59,6 +59,36 @@ def test_successful_outcome_ignores_stale_failure_lines(tmp_path, run_quality_sc
     assert data["suites"][0]["failures"] == []
 
 
+def test_derived_outcomes_do_not_mark_passing_suites_failed(tmp_path, run_quality_script):
+    (tmp_path / "workflow-script-test-output.txt").write_text(
+        "FAILED tests/workflow_scripts/test_x.py::test_a\n"
+        "1 failed, 50 passed in 2.10s\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "unit-test-output.txt").write_text("12 passed in 1.50s\n", encoding="utf-8")
+    (tmp_path / "e2e-test-output.txt").write_text("8 passed in 3.00s\n", encoding="utf-8")
+
+    proc = run_quality_script(
+        "collect_test_results.py",
+        tmp_path,
+        env={
+            "DERIVE_TEST_OUTCOMES": "1",
+            "WORKFLOW_SCRIPT_OUTCOME": "failure",
+            "UNIT_OUTCOME": "failure",
+            "E2E_OUTCOME": "failure",
+            "FUNCTIONAL_OUTCOME": "failure",
+        },
+    )
+
+    assert proc.returncode == 0
+    data = json.loads((tmp_path / "test-results.json").read_text(encoding="utf-8"))
+    suites = {suite["key"]: suite for suite in data["suites"]}
+    assert suites["workflow_script_tests"]["outcome"] == "failure"
+    assert suites["unit_tests"]["outcome"] == "success"
+    assert suites["e2e_tests"]["outcome"] == "success"
+    assert suites["functional_tests"]["outcome"] == "failure"
+
+
 def test_read_lines_handles_missing_files_and_read_errors(
     load_quality_script, tmp_path, monkeypatch
 ):
@@ -87,6 +117,17 @@ def test_summary_of_no_tests_and_word_only_fallback(
     )
     assert script["summary_of"](["all good", "5 passed"]) == "5 passed"
     assert script["summary_of"](["not a summary"]) == "no results"
+
+
+def test_outcome_from_output(load_quality_script, tmp_path):
+    script = load_quality_script("collect_test_results.py", tmp_path)
+
+    assert script["outcome_from_output"](["1 failed, 2 passed"], "success") == "failure"
+    assert script["outcome_from_output"](["2 errors in 1s"], "success") == "failure"
+    assert script["outcome_from_output"](["2 passed in 1s"], "failure") == "success"
+    assert script["outcome_from_output"](["no tests ran in 0.1s"], "failure") == "success"
+    assert script["outcome_from_output"](["no results"], "failure") == "failure"
+    assert script["outcome_from_output"](["no results"], "") == "unknown"
 
 
 def test_custom_output_paths_are_honoured(tmp_path, run_quality_script):

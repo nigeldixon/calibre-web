@@ -270,6 +270,7 @@ jobs:
         shell: bash
         env:
           TESTS_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          DERIVE_TEST_OUTCOMES: '1'
           RUN_URL: ${{ github.event.workflow_run.html_url }}
         run: |
           outcome=success
@@ -622,6 +623,7 @@ jobs:
         shell: bash
         env:
           TESTS_CONCLUSION: ${{ steps.runs.outputs.tests_conclusion }}
+          DERIVE_TEST_OUTCOMES: '1'
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ steps.runs.outputs.tests_run }}
         run: |
           outcome=success
