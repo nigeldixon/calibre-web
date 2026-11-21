@@ -83,6 +83,45 @@ def test_sync_creates_updates_and_resolves_comments(load_quality_script, tmp_pat
     assert "Resolved in the latest passing run." in dict(client.updated)[2]
 
 
+def test_failing_run_can_update_comments_without_resolving_others(
+    load_quality_script, tmp_path
+):
+    script = load_module(load_quality_script, tmp_path, "sync_test_failure_comments.py")
+    marker_a = "<!-- test-failure:aaaaaaaaaaaa -->"
+    marker_b = "<!-- test-failure:bbbbbbbbbbbb -->"
+
+    class FakeClient:
+        def __init__(self):
+            self.comments = [
+                {"id": 1, "body": f"{marker_a}\n## ❌ Test failure: Old"},
+                {"id": 2, "body": f"{marker_b}\n## ❌ Test failure: Still failing"},
+            ]
+            self.created = []
+            self.updated = []
+
+        def list_comments(self, pr_number):
+            return self.comments
+
+        def create_comment(self, pr_number, body):
+            self.created.append(body)
+
+        def update_comment(self, comment_id, body):
+            self.updated.append((comment_id, body))
+
+    client = FakeClient()
+    payload = {
+        "comments": [
+            {"marker": marker_a, "body": f"{marker_a}\n## ❌ Test failure: New"},
+        ]
+    }
+
+    actions = script["sync"](payload, client, 5, resolve_missing=False)
+
+    assert actions == [("updated", marker_a)]
+    assert [comment_id for comment_id, _ in client.updated] == [1]
+    assert "## ✅ Resolved test failure:" not in client.updated[0][1]
+
+
 def test_writes_payload_from_artifact(tmp_path, run_quality_script, write_json):
     results = tmp_path / "test-results.json"
     write_json(

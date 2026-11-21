@@ -131,6 +131,22 @@ jobs:
         shell: bash
         run: bash .github/scripts/combine_coverage.sh
 
+      - name: Collect structured test results
+        if: always()
+        shell: bash
+        env:
+          WORKFLOW_SCRIPT_OUTCOME: ${{ steps.workflow_script_tests.outcome }}
+          UNIT_OUTCOME: ${{ steps.unit_tests.outcome }}
+          E2E_OUTCOME: ${{ steps.e2e_tests.outcome }}
+          FUNCTIONAL_OUTCOME: ${{ steps.functional_tests.outcome }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: python .github/scripts/collect_test_results.py
+
+      - name: Build test failure comments
+        if: always()
+        shell: bash
+        run: python .github/scripts/test_failure_comments.py
+
       - name: Find associated pull request
         if: always()
         id: find_pr
@@ -164,6 +180,7 @@ jobs:
         env:
           CHANGED_FILES_JSON: changed-files.json
           COVERAGE_XML_PATH: coverage.xml
+          TEST_RESULTS_JSON: test-results.json
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: python .github/scripts/test_coverage_comment.py > coverage-comment.md
 
@@ -194,6 +211,18 @@ jobs:
             unit-test-output.txt
             e2e-test-output.txt
             functional-test-output.txt
+            test-results.json
+            test-failure-comments.json
+          if-no-files-found: warn
+          retention-days: 5
+
+      - name: Upload test failure comments payload
+        # The report job uses this to create/update/resolve sticky PR comments.
+        if: always() && github.event_name == 'push' && steps.find_pr.outputs.number != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: test-failure-comments
+          path: test-failure-comments.json
           if-no-files-found: warn
           retention-days: 5
 
@@ -244,6 +273,13 @@ jobs:
           path: report
         continue-on-error: true
 
+      - name: Download test failure comments payload
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: test-failure-comments
+          path: comments
+        continue-on-error: true
+
       - name: Update coverage report in PR body
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         env:
@@ -264,3 +300,17 @@ jobs:
                 content,
               });
             }
+
+      - name: Sync per-test failure comments
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ needs.tests.outputs.pr_number }}
+          TEST_FAILURE_COMMENTS_JSON: comments/test-failure-comments.json
+          RESOLVE_MISSING: ${{ needs.tests.result == 'success' && 'true' || 'false' }}
+        run: |
+          if [ -f "$TEST_FAILURE_COMMENTS_JSON" ]; then
+            python .github/scripts/sync_test_failure_comments.py
+          else
+            echo "No test-failure-comments.json artifact; skipping comment sync."
+          fi

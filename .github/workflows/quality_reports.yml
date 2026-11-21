@@ -107,7 +107,14 @@ jobs:
               },
               '.github/workflows/test.yml': {
                 key: 'tests',
-                required: ['.github/workflows/test.yml', '.github/scripts/combine_coverage.sh'],
+                required: [
+                  '.github/workflows/test.yml',
+                  '.github/scripts/collect_test_results.py',
+                  '.github/scripts/combine_coverage.sh',
+                  '.github/scripts/sync_test_failure_comments.py',
+                  '.github/scripts/test_coverage_comment.py',
+                  '.github/scripts/test_failure_comments.py',
+                ],
               },
             };
             const config = workflowConfigs[wr.path || ''];
@@ -233,13 +240,45 @@ jobs:
           cd artifacts/semgrep
           python "$GITHUB_WORKSPACE/.github/scripts/semgrep_pr_comment.py" > "$GITHUB_WORKSPACE/semgrep-report.md"
 
-      - name: Regenerate coverage report from coverage XML
+      - name: Regenerate structured test results
+        id: regen_test_results
+        # Rebuild from the raw test outputs with trusted scripts. The PR's
+        # structured artifacts are never trusted for comment side effects.
         if: steps.pr.outputs.number != '' && steps.pr.outputs.trusted == 'true' && steps.pr.outputs.report_key == 'tests'
+        shell: bash
+        env:
+          TESTS_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          outcome=success
+          if [ "$TESTS_CONCLUSION" != "success" ]; then outcome=failure; fi
+          export WORKFLOW_SCRIPT_OUTCOME="$outcome"
+          export UNIT_OUTCOME="$outcome"
+          export E2E_OUTCOME="$outcome"
+          export FUNCTIONAL_OUTCOME="$outcome"
+          cd artifacts/tests
+          python "$GITHUB_WORKSPACE/.github/scripts/collect_test_results.py"
+
+      - name: Build test failure comment payload
+        id: build_test_failure_comments
+        if: steps.regen_test_results.outcome == 'success'
+        shell: bash
+        env:
+          TEST_RESULTS_JSON: ${{ github.workspace }}/test-results.json
+          TEST_FAILURE_COMMENTS_JSON: ${{ github.workspace }}/test-failure-comments.json
+        run: python "$GITHUB_WORKSPACE/.github/scripts/test_failure_comments.py"
+
+      - name: Regenerate coverage report from coverage XML
+        if: >-
+          steps.pr.outputs.number != '' && steps.pr.outputs.trusted == 'true' &&
+          steps.pr.outputs.report_key == 'tests' &&
+          steps.regen_test_results.outcome == 'success'
         continue-on-error: true
         shell: bash
         env:
           CHANGED_FILES_JSON: ${{ github.workspace }}/changed-files.json
           COVERAGE_XML_PATH: coverage.xml
+          TEST_RESULTS_JSON: ${{ github.workspace }}/test-results.json
           RUN_URL: ${{ github.event.workflow_run.html_url }}
         run: |
           python -m pip install --quiet defusedxml
@@ -276,7 +315,7 @@ jobs:
               tests: {
                 file: 'coverage-report.md',
                 marker: '<!-- coverage-report -->',
-                heading: '## Patch coverage',
+                heading: '## Tests',
                 labels: false,
               },
             };
@@ -323,6 +362,19 @@ jobs:
               marker: report.marker,
               content,
             });
+
+      - name: Sync per-test failure comments
+        if: >-
+          steps.pr.outputs.number != '' && steps.pr.outputs.trusted == 'true' &&
+          steps.pr.outputs.report_key == 'tests' &&
+          steps.build_test_failure_comments.outcome == 'success'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+          TEST_FAILURE_COMMENTS_JSON: ${{ github.workspace }}/test-failure-comments.json
+          RESOLVE_MISSING: ${{ github.event.workflow_run.conclusion == 'success' }}
+        run: python "$GITHUB_WORKSPACE/.github/scripts/sync_test_failure_comments.py"
 
   backfill:
     name: Backfill internal PR reports
@@ -502,17 +554,47 @@ jobs:
           cd artifacts/semgrep
           python "$GITHUB_WORKSPACE/.github/scripts/semgrep_pr_comment.py" > "$GITHUB_WORKSPACE/semgrep-report.md"
 
+      - name: Regenerate structured test results
+        id: backfill_test_results
+        if: >-
+          steps.runs.outputs.tests_artifacts == 'true' &&
+          steps.download_tests.outcome == 'success'
+        shell: bash
+        env:
+          TESTS_CONCLUSION: ${{ steps.runs.outputs.tests_conclusion }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ steps.runs.outputs.tests_run }}
+        run: |
+          outcome=success
+          if [ "$TESTS_CONCLUSION" != "success" ]; then outcome=failure; fi
+          export WORKFLOW_SCRIPT_OUTCOME="$outcome"
+          export UNIT_OUTCOME="$outcome"
+          export E2E_OUTCOME="$outcome"
+          export FUNCTIONAL_OUTCOME="$outcome"
+          cd artifacts/tests
+          python "$GITHUB_WORKSPACE/.github/scripts/collect_test_results.py"
+
+      - name: Build test failure comment payload
+        id: backfill_test_comments
+        if: steps.backfill_test_results.outcome == 'success'
+        shell: bash
+        env:
+          TEST_RESULTS_JSON: ${{ github.workspace }}/test-results.json
+          TEST_FAILURE_COMMENTS_JSON: ${{ github.workspace }}/test-failure-comments.json
+        run: python "$GITHUB_WORKSPACE/.github/scripts/test_failure_comments.py"
+
       - name: Regenerate coverage report
         # A successful download may legitimately have no coverage.xml when the
         # repo has no tests, so only gate on the download outcome here.
         if: >-
           steps.runs.outputs.tests_artifacts == 'true' &&
-          steps.download_tests.outcome == 'success'
+          steps.download_tests.outcome == 'success' &&
+          steps.backfill_test_results.outcome == 'success'
         continue-on-error: true
         shell: bash
         env:
           CHANGED_FILES_JSON: ${{ github.workspace }}/changed-files.json
           COVERAGE_XML_PATH: coverage.xml
+          TEST_RESULTS_JSON: ${{ github.workspace }}/test-results.json
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ steps.runs.outputs.tests_run }}
         run: |
           python -m pip install --quiet defusedxml
@@ -540,7 +622,7 @@ jobs:
             const reports = [
               { key: 'codeql', marker: '<!-- codeql-report -->', file: 'codeql-report.md', heading: '## CodeQL analysis', labels: true },
               { key: 'semgrep', marker: '<!-- semgrep-report -->', file: 'semgrep-report.md', heading: '## Semgrep analysis', labels: true },
-              { key: 'tests', marker: '<!-- coverage-report -->', file: 'coverage-report.md', heading: '## Patch coverage', labels: false },
+              { key: 'tests', marker: '<!-- coverage-report -->', file: 'coverage-report.md', heading: '## Tests', labels: false },
             ];
 
             for (const r of reports) {
@@ -589,3 +671,15 @@ jobs:
                 content,
               });
             }
+
+      - name: Sync per-test failure comments
+        if: >-
+          steps.runs.outputs.tests_needed == 'true' &&
+          steps.backfill_test_comments.outcome == 'success'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ steps.runs.outputs.pr_number }}
+          TEST_FAILURE_COMMENTS_JSON: ${{ github.workspace }}/test-failure-comments.json
+          RESOLVE_MISSING: ${{ steps.runs.outputs.tests_conclusion == 'success' }}
+        run: python "$GITHUB_WORKSPACE/.github/scripts/sync_test_failure_comments.py"

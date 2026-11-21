@@ -65,7 +65,7 @@ def resolved_body(body):
     return "\n".join(lines).rstrip()
 
 
-def sync(payload, client, pr_number):
+def sync(payload, client, pr_number, resolve_missing=True):
     desired = {}
     for comment in payload.get("comments", []) or []:
         marker = comment.get("marker")
@@ -84,6 +84,8 @@ def sync(payload, client, pr_number):
             if body.strip() != target:
                 client.update_comment(comment["id"], target)
                 actions.append(("updated", marker))
+            continue
+        if not resolve_missing:
             continue
         target = resolved_body(body)
         if body.strip() != target.strip():
@@ -116,5 +118,8 @@ if __name__ == "__main__":
         owner,
         repo,
     )
-    actions = sync(payload, client, int(pr_number))
+    resolve_missing = os.environ.get("RESOLVE_MISSING", "true").strip().lower() in (
+        "1", "true", "yes",
+    )
+    actions = sync(payload, client, int(pr_number), resolve_missing=resolve_missing)
     print(json.dumps(actions))
