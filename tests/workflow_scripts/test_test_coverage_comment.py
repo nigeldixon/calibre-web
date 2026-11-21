@@ -46,8 +46,89 @@ def test_badge_helpers(load_quality_script, tmp_path):
     script = load_helpers(load_quality_script, tmp_path)
 
     assert script["pct_to_color"](95)[0] == "brightgreen"
+    assert script["pct_to_color"](85)[0] == "green"
+    assert script["pct_to_color"](75)[0] == "yellow"
     assert script["pct_to_color"](50)[0] == "orange"
+    assert script["pct_to_color"](10)[0] == "red"
+    assert script["bar"](0) == "░" * 20
     assert script["bar"](50) == "██████████░░░░░░░░░░"
+    assert script["bar"](100) == "█" * 20
+    assert script["bar"](150) == "█" * 20
+
+
+def test_coverage_by_file_ignores_malformed_and_empty_entries(load_quality_script, tmp_path):
+    script = load_helpers(load_quality_script, tmp_path)
+    coverage_by_file = script["coverage_by_file"]
+
+    assert coverage_by_file(str(tmp_path / "missing.xml")) == {}
+
+    invalid = tmp_path / "invalid.xml"
+    invalid.write_text("<coverage><broken>", encoding="utf-8")
+    assert coverage_by_file(str(invalid)) == {}
+
+    xml = tmp_path / "coverage.xml"
+    xml.write_text(
+        """<?xml version="1.0" ?>
+<coverage>
+  <classes>
+    <class name="empty" filename="" />
+    <class name="no-lines" filename="cps/no-lines.py" />
+    <class name="a" filename="cps/a.py">
+      <lines>
+        <line number="bad" hits="1"/>
+        <line number="3" hits="bad"/>
+        <line number="0" hits="1"/>
+        <line number="11" hits="2"/>
+      </lines>
+    </class>
+  </classes>
+</coverage>
+""",
+        encoding="utf-8",
+    )
+
+    assert coverage_by_file(str(xml)) == {"cps/a.py": {11: 2}}
+
+
+def test_load_changed_files_accepts_wrapped_lists_and_ignores_bad_input(
+    load_quality_script, tmp_path
+):
+    script = load_helpers(load_quality_script, tmp_path)
+    load_changed_files = script["load_changed_files"]
+
+    invalid = tmp_path / "invalid.json"
+    invalid.write_text("{not json", encoding="utf-8")
+    assert load_changed_files(str(invalid)) == []
+
+    wrapped = tmp_path / "wrapped.json"
+    wrapped.write_text('{"files": [{"filename": "cps/a.py"}]}', encoding="utf-8")
+    assert load_changed_files(str(wrapped)) == [{"filename": "cps/a.py"}]
+
+    wrong_type = tmp_path / "wrong.json"
+    wrong_type.write_text('"not a list"', encoding="utf-8")
+    assert load_changed_files(str(wrong_type)) == []
+
+
+def test_coverage_total_handles_missing_and_unformatted_totals(
+    load_quality_script, tmp_path
+):
+    script = load_helpers(load_quality_script, tmp_path)
+    coverage_total = script["coverage_total"]
+
+    assert coverage_total(str(tmp_path / "missing.txt")) is None
+    assert coverage_total(str(tmp_path)) is None
+
+    unformatted = tmp_path / "unformatted.txt"
+    unformatted.write_text("TOTAL 10 5\n", encoding="utf-8")
+    assert coverage_total(str(unformatted)) == "TOTAL 10 5"
+
+    no_total = tmp_path / "no-total.txt"
+    no_total.write_text("some coverage output\n", encoding="utf-8")
+    assert coverage_total(str(no_total)) == "some coverage output"
+
+    formatted = tmp_path / "formatted.txt"
+    formatted.write_text("TOTAL 100 20 80%\n", encoding="utf-8")
+    assert coverage_total(str(formatted)) == "100 statements · 20 missed · 80% covered"
 
 
 def test_patch_coverage_report_uses_normalized_paths(tmp_path, run_quality_script, write_json):
@@ -127,3 +208,115 @@ def test_missing_coverage_xml_is_not_an_error(tmp_path, run_quality_script):
     assert proc.returncode == 0
     assert "## Patch coverage" in proc.stdout
     assert "No coverage data was generated for this run." in proc.stdout
+
+
+def test_missing_coverage_xml_still_reports_workflow_coverage(tmp_path, run_quality_script):
+    (tmp_path / "coverage-workflow-scripts-term.txt").write_text(
+        "TOTAL 100 20 80%\n", encoding="utf-8"
+    )
+
+    proc = run_quality_script(
+        "test_coverage_comment.py",
+        tmp_path,
+        env={"COVERAGE_XML_PATH": str(tmp_path / "missing.xml")},
+    )
+
+    assert proc.returncode == 0
+    assert "**Workflow script coverage:** `100 statements · 20 missed · 80% covered`" in proc.stdout
+
+
+def write_simple_coverage_xml(tmp_path, covered_lines):
+    xml = tmp_path / "coverage.xml"
+    lines = "\n".join(
+        f'<line number="{number}" hits="1"/>' for number in covered_lines
+    )
+    xml.write_text(
+        f"""<?xml version="1.0" ?>
+<coverage>
+  <classes>
+    <class name="a" filename="cps/a.py">
+      <lines>{lines}</lines>
+    </class>
+  </classes>
+</coverage>
+""",
+        encoding="utf-8",
+    )
+    return xml
+
+
+def test_changed_files_without_covered_lines_cannot_compute_patch_coverage(
+    tmp_path, run_quality_script, write_json
+):
+    xml = write_simple_coverage_xml(tmp_path, [11])
+    changed = write_json(
+        tmp_path / "changed-files.json",
+        [
+            {
+                "filename": "cps/a.py",
+                "status": "modified",
+                "patch": "@@ -1 +20 @@\n+outside coverage data",
+            },
+            {"filename": "", "status": "modified", "patch": "@@ -1 +1 @@\n+new"},
+        ],
+    )
+
+    proc = run_quality_script(
+        "test_coverage_comment.py",
+        tmp_path,
+        env={
+            "COVERAGE_XML_PATH": str(xml),
+            "CHANGED_FILES_JSON": str(changed),
+        },
+    )
+
+    assert proc.returncode == 0
+    assert "_Patch coverage could not be computed for this run._" in proc.stdout
+
+
+def test_fully_covered_changed_file_has_no_missing_lines_detail(
+    tmp_path, run_quality_script, write_json
+):
+    xml = write_simple_coverage_xml(tmp_path, [11])
+    changed = write_json(
+        tmp_path / "changed-files.json",
+        [
+            {
+                "filename": "cps/a.py",
+                "status": "modified",
+                "patch": "@@ -1 +11 @@\n+covered",
+            }
+        ],
+    )
+
+    proc = run_quality_script(
+        "test_coverage_comment.py",
+        tmp_path,
+        env={
+            "COVERAGE_XML_PATH": str(xml),
+            "CHANGED_FILES_JSON": str(changed),
+        },
+    )
+
+    assert proc.returncode == 0
+    assert "- `cps/a.py`: 1/1 covered" in proc.stdout
+    assert "missing lines" not in proc.stdout
+
+
+def test_coverage_xml_without_changed_file_json_does_not_compute_patch(
+    tmp_path, run_quality_script
+):
+    xml = write_simple_coverage_xml(tmp_path, [11])
+    (tmp_path / "coverage-workflow-scripts-term.txt").write_text(
+        "TOTAL 100 20 80%\n", encoding="utf-8"
+    )
+
+    proc = run_quality_script(
+        "test_coverage_comment.py",
+        tmp_path,
+        env={"COVERAGE_XML_PATH": str(xml), "CHANGED_FILES_JSON": ""},
+    )
+
+    assert proc.returncode == 0
+    assert "_Patch coverage could not be computed for this run._" in proc.stdout
+    assert "**Workflow script coverage:** `100 statements · 20 missed · 80% covered`" in proc.stdout
