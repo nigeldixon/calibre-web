@@ -122,13 +122,25 @@ if changed_files_file:
             'warning_detail': notification_detail,
         }
 else:
-    # Legacy path used by the push workflow in the repository itself.
+    # Legacy path used by the push workflow in the repository itself. A
+    # missing or unreadable artifact means there are no trustworthy results;
+    # report an analysis error rather than a false all-clear.
+    sarif_exists = os.path.exists(sarif_path)
     sarif = load_json(sarif_path)
-    scope = {'scoped': False, 'reason': 'unknown', 'scan_ok': True, 'total_all': 0,
-             'warnings': 0, 'warning_detail': {}}
-    loaded_scope = load_json(scope_path)
-    if loaded_scope:
-        scope = loaded_scope
+    if sarif is None:
+        scope = {'scoped': False,
+                 'reason': 'invalid_sarif' if sarif_exists else 'no_sarif',
+                 'scan_ok': False, 'total_all': 0,
+                 'warnings': 0, 'warning_detail': {}}
+    else:
+        scope = {'scoped': False, 'reason': 'unknown', 'scan_ok': True, 'total_all': 0,
+                 'warnings': 0, 'warning_detail': {}}
+        loaded_scope = load_json(scope_path)
+        if loaded_scope:
+            scope = loaded_scope
+        elif not os.path.exists(scope_path):
+            scope = {'scoped': False, 'reason': 'invalid_sarif', 'scan_ok': False,
+                     'total_all': 0, 'warnings': 0, 'warning_detail': {}}
 
 totals = count_findings(sarif)
 
