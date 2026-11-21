@@ -53,6 +53,9 @@ def test_extract_summary_handles_unreadable_and_plain_count_lines(
     noise = tmp_path / "noise.txt"
     noise.write_text("nothing useful here\n", encoding="utf-8")
     assert extract_summary(str(noise)) == "no results"
+    assert script["status_icon"]("success", "no results") == "⚪"
+    assert script["status_icon"]("success", "12 passed") == "✅"
+    assert script["status_icon"]("unknown", "12 passed") == "⚪"
 
 
 def test_read_coverage_handles_unreadable_file(load_quality_script, tmp_path):
@@ -137,3 +140,22 @@ def test_summary_without_outputs_does_not_claim_results(tmp_path, run_quality_sc
     assert out.count("| ⚪ |") == 4
     assert out.count("`no results`") == 4
     assert out.count("No coverage data generated.") == 2
+
+
+def test_summary_with_success_outcome_but_no_results_is_neutral(tmp_path, run_quality_script):
+    proc = run_quality_script(
+        "test_summary.py",
+        tmp_path,
+        env={
+            "WORKFLOW_SCRIPT_OUTCOME": "success",
+            "UNIT_OUTCOME": "success",
+            "E2E_OUTCOME": "success",
+            "FUNCTIONAL_OUTCOME": "success",
+        },
+    )
+
+    out = proc.stdout
+    assert proc.returncode == 0
+    assert out.count("| ⚪ |") == 4
+    assert "| ✅ |" not in out
+    assert out.count("`no results`") == 4

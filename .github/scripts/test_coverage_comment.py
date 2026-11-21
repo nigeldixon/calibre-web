@@ -190,7 +190,9 @@ def load_test_results():
     return result
 
 
-def status_icon(outcome):
+def status_icon(outcome, summary=""):
+    if str(summary).strip() == "no results":
+        return "⚪"
     if outcome == "success":
         return "✅"
     if outcome in ("failure", "cancelled"):
@@ -207,7 +209,7 @@ def test_table(suites):
     ]
     for suite in suites:
         lines.append(
-            f"| {status_icon(suite['outcome'])} | {suite['name']} | "
+            f"| {status_icon(suite['outcome'], suite['summary'])} | {suite['name']} | "
             f"`{str(suite['summary']).replace('|', chr(92) + '|')}` | {len(suite['failures'])} |"
         )
     return lines

@@ -3,7 +3,9 @@ import os
 import re
 import subprocess
 
-def status_icon(outcome):
+def status_icon(outcome, summary=""):
+    if str(summary).strip() == "no results":
+        return "⚪"
     if outcome == "success":
         return "✅"
     if outcome == "failure":
@@ -41,7 +43,8 @@ print()
 print("| Status | Suite | Tests (pass/fail summary) |")
 print("|:------:|-------|----------------------------|")
 for name, outcome, path in suites:
-    print(f"| {status_icon(outcome)} | {name} | `{extract_summary(path).replace('|', '\\|')}` |")
+    summary = extract_summary(path)
+    print(f"| {status_icon(outcome, summary)} | {name} | `{summary.replace('|', '\\|')}` |")
 print()
 def read_coverage(path):
     if not os.path.exists(path):

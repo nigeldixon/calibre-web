@@ -87,6 +87,8 @@ def test_load_test_results_ignores_invalid_suites_and_status_icons(
     assert script["run_url"] == "https://example.test/run/1"
     assert script["status_icon"]("skipped") == "⏭️"
     assert script["status_icon"]("unknown") == "⚪"
+    assert script["status_icon"]("success", "no results") == "⚪"
+    assert script["status_icon"]("success", "12 passed") == "✅"
 
 
 def test_coverage_by_file_ignores_malformed_and_empty_entries(load_quality_script, tmp_path):
@@ -263,6 +265,13 @@ def test_test_panel_renders_suite_table_and_failure_details(
                     "summary": "12 passed in 1.50s",
                     "failures": [],
                 },
+                {
+                    "key": "functional_tests",
+                    "name": "HTTP functional",
+                    "outcome": "success",
+                    "summary": "no results",
+                    "failures": [],
+                },
             ],
         },
     )
@@ -281,6 +290,7 @@ def test_test_panel_renders_suite_table_and_failure_details(
     assert "| ❌ | Workflow script tests | `1 failed, 50 passed in 2.10s` | 1 |" in out
     assert "| ✅ | Unit (in-process) | `12 passed in 1.50s` | 0 |" in out
     assert "| ⚪ | Playwright E2E | `no results` | 0 |" in out
+    assert "| ⚪ | HTTP functional | `no results` | 0 |" in out
     assert "<details><summary>❌ Workflow script tests failures (1)</summary>" in out
     assert "- `tests/workflow_scripts/test_x.py::test_a` — AssertionError: bad" in out
     assert "**Analysis errors:**" not in out
