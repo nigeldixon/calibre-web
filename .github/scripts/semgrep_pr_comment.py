@@ -174,11 +174,6 @@ errors = 0
 if scan_failed or job_failed:
     errors = 1
 
-# TEMPORARY DEMO ONLY: remove with the other QUALITY_DEMO_FAILURE hooks.
-demo_failure = os.environ.get('QUALITY_DEMO_FAILURE') == 'semgrep'
-if demo_failure:
-    errors = 1
-
 
 def status_icon(n):
     return '✅' if n == 0 else '⚠️'
@@ -239,8 +234,6 @@ if scope.get('reason') == 'no_sarif':
     lines += ['', '_No Semgrep SARIF was produced; the scan did not complete._']
 if scope.get('reason') == 'invalid_sarif':
     lines += ['', '_Semgrep SARIF could not be parsed; the scan is marked as failed._']
-if demo_failure:
-    lines += ['', '❌ TEMPORARY DEMO: Semgrep scan failure injected.']
 if warnings:
     details = [f'- {v} × {k}' for k, v in (scope.get('warning_detail') or {}).items()]
     lines += [

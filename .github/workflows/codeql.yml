@@ -229,7 +229,6 @@ jobs:
           ANALYZE_RESULT: ${{ needs.analyze.result }}
           ANALYSIS_URL: ${{ github.server_url }}/${{ github.repository }}/security/code-scanning?query=tool%3Acodeql
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          QUALITY_DEMO_FAILURE: codeql # TEMPORARY DEMO ONLY
         run: python .github/scripts/codeql_pr_comment.py > codeql-comment.md
 
       - name: Update CodeQL report in PR body

@@ -165,7 +165,6 @@ jobs:
           CHANGED_FILES_JSON: changed-files.json
           COVERAGE_XML_PATH: coverage.xml
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          QUALITY_DEMO_FAILURE: coverage # TEMPORARY DEMO ONLY
         run: python .github/scripts/test_coverage_comment.py > coverage-comment.md
 
       - name: Publish test and coverage summary
