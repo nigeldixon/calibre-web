@@ -297,14 +297,14 @@ jobs:
               const reason = trusted
                 ? `${wr.name} workflow did not produce usable artifacts.`
                 : `this PR modified verification-sensitive files (${modified || 'unknown'}), so its artifacts cannot be trusted.`;
-              content = [
+              const parts = [
                 report.marker,
                 report.heading,
                 '',
                 `❌ Report unavailable: ${reason} See [workflow run](${runUrl}).`,
-              ].join('\n');
+              ];
               if (report.labels) {
-                content.push(
+                parts.push(
                   '',
                   '**Whole-solution issues:** 0 · **In changed files:** 0',
                   '**Analysis errors:** 1 · **Analysis warnings:** 0',
@@ -312,6 +312,7 @@ jobs:
                   '**Analyze job:** `failure`'
                 );
               }
+              content = parts.join('\n');
               core.warning(`Publishing fallback for ${report.marker}: ${reason}`);
             }
 
@@ -562,14 +563,14 @@ jobs:
                 core.warning(`Re-running ${r.key} push run ${runId}: no usable artifacts.`);
                 continue;
               } else {
-                content = [
+                const parts = [
                   r.marker,
                   r.heading,
                   '',
                   `❌ Report unavailable: no completed push run of ${r.key} exists for commit ${pr.head.sha}. See [pull request](${runUrl}).`,
-                ].join('\n');
+                ];
                 if (r.labels) {
-                  content.push(
+                  parts.push(
                     '',
                     '**Whole-solution issues:** 0 · **In changed files:** 0',
                     '**Analysis errors:** 1 · **Analysis warnings:** 0',
@@ -577,6 +578,7 @@ jobs:
                     '**Analyze job:** `failure`'
                   );
                 }
+                content = parts.join('\n');
                 core.warning(`No push run found for ${r.key} at ${pr.head.sha}.`);
               }
               await updateReportAndRefreshTotals({
