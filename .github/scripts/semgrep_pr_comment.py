@@ -167,6 +167,12 @@ def read_scan_exit():
         return None
 
 
+def scan_exit_is_ok(scan_exit):
+    # Semgrep returns 1 when findings were produced; that is a successful scan
+    # whose SARIF is safe to report and upload.
+    return scan_exit in (0, 1)
+
+
 # Trusted path: rebuild the summary from raw SARIF and a changed-file list
 # supplied by the privileged workflow_run publisher.
 if changed_files_file:
@@ -207,7 +213,7 @@ if changed_files_file:
             'changed_count': len(changed) if changed is not None else 0,
             'base': os.environ.get('PR_BASE_SHA', '').strip(),
             'head': os.environ.get('PR_HEAD_SHA', '').strip(),
-            'scan_ok': scan_exit == 0 and exec_errors == 0,
+            'scan_ok': scan_exit_is_ok(scan_exit) and exec_errors == 0,
             'scan_exit': scan_exit,
             'exec_errors': exec_errors,
             'total_all': total_all,

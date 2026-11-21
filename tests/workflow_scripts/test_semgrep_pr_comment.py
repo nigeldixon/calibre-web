@@ -143,6 +143,41 @@ def test_unreadable_changed_list_and_scan_exit_do_not_claim_success(
     assert "**Analysis errors:** 1" in out
 
 
+def test_findings_exit_code_is_not_reported_as_scan_failure(
+    tmp_path, run_quality_script, write_json
+):
+    write_json(
+        tmp_path / "semgrep.raw.sarif",
+        {
+            "version": "2.1.0",
+            "runs": [
+                {
+                    "tool": {"driver": {"name": "semgrep"}},
+                    "results": [finding("cps/a.py", "warning")],
+                }
+            ],
+        },
+    )
+    (tmp_path / "scan-exit-code.txt").write_text("1\n", encoding="utf-8")
+    changed = tmp_path / "changed-files.txt"
+    changed.write_text("cps/a.py\n", encoding="utf-8")
+
+    proc = run_quality_script(
+        "semgrep_pr_comment.py",
+        tmp_path,
+        env={
+            "CHANGED_FILES_FILE": str(changed),
+            "RAW_SARIF_PATH": "semgrep.raw.sarif",
+            "SCAN_EXIT_PATH": "scan-exit-code.txt",
+            "ANALYZE_RESULT": "success",
+        },
+    )
+
+    assert proc.returncode == 0
+    assert "❌ Semgrep scan failed" not in proc.stdout
+    assert "**Analysis errors:** 0" in proc.stdout
+
+
 def test_scope_line_without_base_and_head_hashes(tmp_path, run_quality_script, write_json):
     write_json(tmp_path / "semgrep.raw.sarif", make_raw_sarif())
     (tmp_path / "scan-exit-code.txt").write_text("0\n", encoding="utf-8")
