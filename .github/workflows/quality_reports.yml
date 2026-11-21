@@ -373,8 +373,8 @@ jobs:
               if (report.labels) {
                 parts.push(
                   '',
-                  '**Whole-solution issues:** 0 · **In changed files:** 0',
-                  '**Analysis errors:** 1 · **Analysis warnings:** 0',
+                  '**Whole-solution issues:** unknown · **In changed files:** unknown',
+                  '**Analysis errors:** unknown · **Analysis warnings:** unknown',
                   '',
                   '**Analyze job:** `failure`'
                 );
@@ -717,8 +717,8 @@ jobs:
                 if (r.labels) {
                   parts.push(
                     '',
-                    '**Whole-solution issues:** 0 · **In changed files:** 0',
-                    '**Analysis errors:** 1 · **Analysis warnings:** 0',
+                    '**Whole-solution issues:** unknown · **In changed files:** unknown',
+                    '**Analysis errors:** unknown · **Analysis warnings:** unknown',
                     '',
                     '**Analyze job:** `failure`'
                   );
@@ -825,8 +825,8 @@ jobs:
                 if (report.labels) {
                   parts.push(
                     '',
-                    '**Whole-solution issues:** 0 · **In changed files:** 0',
-                    '**Analysis errors:** 1 · **Analysis warnings:** 0',
+                    '**Whole-solution issues:** unknown · **In changed files:** unknown',
+                    '**Analysis errors:** unknown · **Analysis warnings:** unknown',
                     '',
                     '**Analyze job:** `failure`',
                   );
