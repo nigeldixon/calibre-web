@@ -165,7 +165,7 @@ analyze_outcome = os.environ.get('ANALYZE_RESULT', '')
 scan_failed = (
     scope.get('scan_ok') is False
     or scope.get('reason') in ('no_sarif', 'invalid_sarif')
-    or scope.get('exec_errors', 0) > 0
+    or (scope.get('exec_errors') or 0) > 0
 )
 job_failed = analyze_outcome not in ('', 'success')
 warnings = scope.get('warnings', 0)
