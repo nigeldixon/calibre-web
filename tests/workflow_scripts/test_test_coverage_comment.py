@@ -50,7 +50,8 @@ def test_badge_helpers(load_quality_script, tmp_path):
     assert script["pct_to_color"](75)[0] == "yellow"
     assert script["pct_to_color"](50)[0] == "orange"
     assert script["pct_to_color"](10)[0] == "red"
-    assert script["coverage_marker"]("100 statements · 20 missed · 80% covered") == "🟢"
+    assert script["coverage_marker"]("100 statements · 20 missed · 94% covered") == ""
+    assert script["coverage_marker"]("100 statements · 20 missed · 80% covered") == ""
     assert script["coverage_marker"]("75% covered") == "🟡"
     assert script["coverage_marker"]("35% covered") == "🔴"
     assert script["coverage_marker"]("no percentage") == ""
@@ -278,7 +279,7 @@ def test_missing_coverage_xml_still_reports_workflow_coverage(tmp_path, run_qual
     )
 
     assert proc.returncode == 0
-    assert "**Workflow script coverage:** 🟢 `100 statements · 20 missed · 80% covered`" in proc.stdout
+    assert "**Workflow script coverage:** `100 statements · 20 missed · 80% covered`" in proc.stdout
 
 
 def write_simple_coverage_xml(tmp_path, covered_lines):
@@ -375,4 +376,4 @@ def test_coverage_xml_without_changed_file_json_does_not_compute_patch(
 
     assert proc.returncode == 0
     assert "_Patch coverage could not be computed for this run._" in proc.stdout
-    assert "**Workflow script coverage:** 🟢 `100 statements · 20 missed · 80% covered`" in proc.stdout
+    assert "**Workflow script coverage:** `100 statements · 20 missed · 80% covered`" in proc.stdout

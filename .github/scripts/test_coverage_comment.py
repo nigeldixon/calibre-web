@@ -136,7 +136,8 @@ def coverage_marker(total):
     match = re.search(r"(\d+(?:\.\d+)?)\s*%", total or "")
     if not match:
         return ""
-    return pct_to_color(float(match.group(1)))[1]
+    _, marker, label = pct_to_color(float(match.group(1)))
+    return "" if label == "Good" else marker
 
 
 def workflow_coverage_line():
