@@ -227,11 +227,11 @@ def test_patch_coverage_report_uses_normalized_paths(tmp_path, run_quality_scrip
         "**Workflow script coverage:** ❌ Low coverage "
         "`673 statements · 432 missed · 36% covered`"
     ) in out
-    assert "**Diff lines:** 2 &nbsp;|&nbsp; **Missing:** 1 &nbsp;|&nbsp; **Covered:** 1" in out
+    assert "**Diff lines:** 3 &nbsp;|&nbsp; **Missing:** 2 &nbsp;|&nbsp; **Covered:** 1" in out
     assert "<details><summary>Patch coverage details</summary>" in out
     assert "- `cps/a.py`: 1/2 covered; missing lines 12" in out
+    assert "- `cps/unknown.py`: 0/1 covered; missing lines 1" in out
     assert "removed.py" not in out
-    assert "unknown.py" not in out
 
 
 def test_test_panel_renders_suite_table_and_failure_details(
@@ -381,6 +381,45 @@ def test_changed_files_without_covered_lines_cannot_compute_patch_coverage(
 
     assert proc.returncode == 0
     assert "_Patch coverage could not be computed for this run._" in proc.stdout
+
+
+def test_unmeasured_python_file_is_counted_as_uncovered(
+    tmp_path, run_quality_script, write_json
+):
+    xml = write_simple_coverage_xml(tmp_path, [11])
+    changed = write_json(
+        tmp_path / "changed-files.json",
+        [
+            {
+                "filename": "cps/a.py",
+                "status": "modified",
+                "patch": "@@ -1 +11 @@\n+covered",
+            },
+            {
+                "filename": "cps/new.py",
+                "status": "added",
+                "patch": "@@ -0,0 +1,2 @@\n+def new():\n+    pass",
+            },
+            {
+                "filename": "README.md",
+                "status": "modified",
+                "patch": "@@ -1 +1 @@\n+docs",
+            },
+        ],
+    )
+
+    proc = run_quality_script(
+        "test_coverage_comment.py",
+        tmp_path,
+        env={"COVERAGE_XML_PATH": str(xml), "CHANGED_FILES_JSON": str(changed)},
+    )
+
+    out = proc.stdout
+    assert proc.returncode == 0
+    assert "**Diff lines:** 3 &nbsp;|&nbsp; **Missing:** 2 &nbsp;|&nbsp; **Covered:** 1" in out
+    assert "- `cps/new.py`: 0/2 covered; missing lines 1, 2" in out
+    assert "README.md" not in out
+    assert "brightgreen" not in out
 
 
 def test_fully_covered_changed_file_has_no_missing_lines_detail(

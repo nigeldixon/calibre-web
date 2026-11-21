@@ -245,9 +245,16 @@ def coverage_section():
             filename = normalize_path(item.get("filename", ""))
             if not filename:
                 continue
+            added = sorted(added_lines_from_patch(item.get("patch", "")))
             file_cov = coverage.get(filename, {})
-            relevant = sorted(n for n in added_lines_from_patch(item.get("patch", "")) if n in file_cov)
+            relevant = sorted(n for n in added if n in file_cov)
             if not relevant:
+                # A new Python module that was never imported has no entry in
+                # the coverage XML at all. Count its added lines as uncovered
+                # instead of silently dropping them from the denominator.
+                if filename.endswith(".py") and added and filename not in coverage:
+                    total += len(added)
+                    per_file.append((filename, 0, len(added), added))
                 continue
             missing = [n for n in relevant if file_cov[n] <= 0]
             file_total = len(relevant)
