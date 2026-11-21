@@ -221,8 +221,8 @@ jobs:
             const fs = require('fs');
             const { updateReportAndRefreshTotals } = require('./.github/scripts/update_pr_body_reports.js');
             const path = 'report/coverage-comment.md';
-            if (!fs.existsSync(path)) {
-              core.info('coverage-comment.md not found; skipping PR body update.');
+            if (!fs.existsSync(path) || fs.statSync(path).size === 0) {
+              core.info('No usable coverage-comment.md artifact; skipping PR body update.');
             } else {
               const content = fs.readFileSync(path, 'utf8');
               await updateReportAndRefreshTotals({
