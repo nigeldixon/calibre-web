@@ -1,5 +1,7 @@
 import os
 
+import pytest
+
 
 def finding(uri, level):
     return {
@@ -240,10 +242,47 @@ def test_unreadable_sarif_is_reported_as_failed(tmp_path, run_quality_script, wr
     proc = run_quality_script("codeql_pr_comment.py", tmp_path)
 
     out = proc.stdout
-    assert proc.returncode == 0
+    assert proc.returncode != 0
     assert "| ⚪ | `python` | - | - | - | - |" in out
     assert "❌ A CodeQL SARIF file could not be parsed; the analysis is marked as failed." in out
     assert "- `codeql-results/codeql-sarif-python/results.sarif`: SARIF could not be parsed." in out
+
+
+def test_structurally_empty_sarif_fails_closed(tmp_path, run_quality_script, write_json):
+    directory = tmp_path / "codeql-results" / "codeql-sarif-python"
+    directory.mkdir(parents=True)
+    write_json(directory / "results.sarif", {"version": "2.1.0", "runs": []})
+
+    proc = run_quality_script("codeql_pr_comment.py", tmp_path)
+
+    assert proc.returncode != 0
+    assert "`codeql-results/codeql-sarif-python/results.sarif`: SARIF is empty or structurally invalid." in proc.stdout
+
+
+@pytest.mark.parametrize(
+    "invocations",
+    ["not-a-list", ["not-a-dict"], [{"toolExecutionNotifications": "not-a-list"}]],
+)
+def test_invalid_invocation_data_fails_closed(
+    tmp_path, run_quality_script, write_json, invocations
+):
+    directory = tmp_path / "codeql-results" / "codeql-sarif-python"
+    directory.mkdir(parents=True)
+    write_json(
+        directory / "results.sarif",
+        {
+            "version": "2.1.0",
+            "runs": [
+                {"tool": {"driver": {"name": "codeql"}}, "results": [],
+                 "invocations": invocations}
+            ],
+        },
+    )
+
+    proc = run_quality_script("codeql_pr_comment.py", tmp_path)
+
+    assert proc.returncode != 0
+    assert "SARIF contains invalid run data." in proc.stdout
 
 
 def test_changed_file_list_normalizes_prefixes_and_separators(
@@ -515,7 +554,7 @@ def test_no_sarif_artifacts_reports_one_analysis_error(tmp_path, run_quality_scr
     proc = run_quality_script("codeql_pr_comment.py", tmp_path, env={"ANALYZE_RESULT": "success"})
 
     out = proc.stdout
-    assert proc.returncode == 0
+    assert proc.returncode != 0
     assert "**Analysis errors:** 1 · **Analysis warnings:** 0" in out
     assert "<details><summary>❌ Analysis errors (1)</summary>" in out
     assert "- No CodeQL SARIF artifacts were produced for this run." in out

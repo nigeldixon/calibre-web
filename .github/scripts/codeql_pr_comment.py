@@ -3,6 +3,7 @@ import glob
 import json
 import os
 import subprocess
+import sys
 
 marker = "<!-- codeql-report -->"
 sarif_files = sorted(glob.glob("codeql-results/**/*.sarif", recursive=True))
@@ -137,6 +138,7 @@ total_all = 0
 analysis_warnings = 0
 error_details = []
 warning_details = []
+invalid_sarif = []
 
 
 def record_error(detail):
@@ -158,6 +160,44 @@ for path in sarif_files:
     except Exception:
         by_lang[lang] = empty_info(read_error=True)
         record_error(f"`{path}`: SARIF could not be parsed.")
+        invalid_sarif.append(path)
+        continue
+
+    runs = sarif.get("runs") if isinstance(sarif, dict) else None
+    if (not isinstance(sarif, dict)
+            or not isinstance(sarif.get("version"), str)
+            or not isinstance(runs, list)
+            or not runs):
+        by_lang[lang] = empty_info(read_error=True)
+        record_error(f"`{path}`: SARIF is empty or structurally invalid.")
+        invalid_sarif.append(path)
+        continue
+
+    valid_runs = True
+    for run in runs:
+        if (not isinstance(run, dict)
+                or not isinstance(run.get("tool"), dict)
+                or not run["tool"]
+                or not isinstance(run.get("results", []), list)):
+            valid_runs = False
+            break
+        invocations = run.get("invocations", []) or []
+        if not isinstance(invocations, list):
+            valid_runs = False
+            break
+        for invocation in invocations:
+            if not isinstance(invocation, dict):
+                valid_runs = False
+                break
+            notifications = invocation.get("toolExecutionNotifications", []) or []
+            if not isinstance(notifications, list) or not all(
+                    isinstance(n, dict) for n in notifications):
+                valid_runs = False
+                break
+    if not valid_runs:
+        by_lang[lang] = empty_info(read_error=True)
+        record_error(f"`{path}`: SARIF contains invalid run data.")
+        invalid_sarif.append(path)
         continue
 
     info = {
@@ -165,10 +205,11 @@ for path in sarif_files:
         "parse_error": False, "read_error": False,
         "exec_errors": 0, "exec_warnings": 0,
     }
-    for run in sarif.get("runs", []) or []:
-        total_all += len(run.get("results", []) or [])
-        for inv in run.get("invocations") or []:
-            for n in inv.get("toolExecutionNotifications") or []:
+    for run in runs:
+        results = run.get("results", []) or []
+        total_all += len(results)
+        for inv in run.get("invocations", []) or []:
+            for n in inv.get("toolExecutionNotifications", []) or []:
                 level = (n.get("level") or "").lower()
                 if level == "error":
                     info["exec_errors"] += 1
@@ -177,7 +218,7 @@ for path in sarif_files:
                     info["exec_warnings"] += 1
                     analysis_warnings += 1
                     warning_details.append(notification_detail(n))
-        for r in run.get("results", []) or []:
+        for r in results:
             if not result_in_changed_files(r, changed_files):
                 continue
             info["results"] += 1
@@ -308,3 +349,8 @@ if not sarif_files:
     ]
 
 print("\n".join(lines))
+
+# A missing or unusable SARIF is a failed analysis, not an all-clear. The
+# privileged publisher gates on this exit code before replacing a PR panel.
+if not sarif_files or invalid_sarif:
+    sys.exit(1)
