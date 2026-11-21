@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create, update, and resolve per-test failure comments on a pull request."""
+"""Create, update, minimize, and reopen grouped test-failure comments."""
 import json
 import os
 import re
@@ -8,6 +8,33 @@ import urllib.request
 
 
 MARKER_RE = re.compile(r"<!-- test-failure:[0-9a-f]{12} -->")
+STATUS_LINE = "Resolved in the latest passing run."
+DETAILS_MARKER = "<details><summary>Last reported failures</summary>"
+MINIMIZE_MUTATION = """
+mutation($id: ID!) {
+  minimizeComment(input: {subjectId: $id, classifier: RESOLVED}) {
+    minimizedComment {
+      ... on IssueComment { id isMinimized minimizedReason }
+    }
+  }
+}
+"""
+UNMINIMIZE_MUTATION = """
+mutation($id: ID!) {
+  unminimizeComment(input: {subjectId: $id}) {
+    minimizedComment {
+      ... on IssueComment { id isMinimized minimizedReason }
+    }
+  }
+}
+"""
+MINIMIZED_STATES_QUERY = """
+query($ids: [ID!]!) {
+  nodes(ids: $ids) {
+    ... on IssueComment { id isMinimized minimizedReason }
+  }
+}
+"""
 
 
 class GitHubClient:
@@ -17,14 +44,17 @@ class GitHubClient:
         self.owner = owner
         self.repo = repo
 
-    def _request(self, method, path, body=None):
-        url = f"{self.api_url}/repos/{self.owner}/{self.repo}{path}"
-        data = None
-        headers = {
+    def _headers(self):
+        return {
             "Accept": "application/vnd.github+json",
             "Authorization": f"Bearer {self.token}",
             "X-GitHub-Api-Version": "2022-11-28",
         }
+
+    def _request(self, method, path, body=None):
+        url = f"{self.api_url}/repos/{self.owner}/{self.repo}{path}"
+        data = None
+        headers = self._headers()
         if body is not None:
             data = json.dumps(body).encode("utf-8")
             headers["Content-Type"] = "application/json"
@@ -36,6 +66,49 @@ class GitHubClient:
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
             raise RuntimeError(f"GitHub {method} {path} failed: {exc.code} {detail}") from exc
+
+    @property
+    def graphql_url(self):
+        if self.api_url.endswith("/api/v3"):
+            return f"{self.api_url[:-3]}/graphql"
+        return f"{self.api_url}/graphql"
+
+    def graphql(self, query, variables=None):
+        body = {"query": query}
+        if variables:
+            body["variables"] = variables
+        data = json.dumps(body).encode("utf-8")
+        headers = self._headers()
+        headers["Content-Type"] = "application/json"
+        request = urllib.request.Request(
+            self.graphql_url, data=data, headers=headers, method="POST"
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"GitHub GraphQL failed: {exc.code} {detail}") from exc
+        if payload.get("errors"):
+            raise RuntimeError(f"GitHub GraphQL failed: {payload['errors']}")
+        return payload.get("data") or {}
+
+    def minimized_states(self, node_ids):
+        if not node_ids:
+            return {}
+        data = self.graphql(MINIMIZED_STATES_QUERY, {"ids": list(node_ids)})
+        states = {}
+        for node in data.get("nodes") or []:
+            if not node or not node.get("id"):
+                continue
+            states[node["id"]] = bool(node.get("isMinimized"))
+        return states
+
+    def minimize_comment(self, node_id):
+        return self.graphql(MINIMIZE_MUTATION, {"id": node_id})
+
+    def unminimize_comment(self, node_id):
+        return self.graphql(UNMINIMIZE_MUTATION, {"id": node_id})
 
     def list_comments(self, pr_number):
         return self._request("GET", f"/issues/{pr_number}/comments?per_page=100")
@@ -55,75 +128,156 @@ def marker_of(body):
     return match.group(0) if match else None
 
 
-def resolved_body(body):
+def suite_name_from_body(body):
+    for line in (body or "").splitlines():
+        for prefix in (
+            "## ❌ Test failures:",
+            "## ✅ Test failures resolved:",
+            "## ❌ Test failure:",
+            "## ✅ Resolved test failure:",
+        ):
+            if line.startswith(prefix):
+                name = line[len(prefix):].strip()
+                return re.sub(r"\s*\(\d+\)$", "", name)
+    return ""
+
+
+def resolved_body(body, name=None):
     lines = (body or "").splitlines()
-    for index, line in enumerate(lines):
-        if line.startswith("## ❌ Test failure:"):
-            lines[index] = line.replace("## ❌ Test failure:", "## ✅ Resolved test failure:", 1)
-            lines[index + 1:index + 1] = ["", "Resolved in the latest passing run."]
-            detail_start = index + 3
-        elif line.startswith("## ✅ Resolved test failure:"):
-            status_line = "Resolved in the latest passing run."
-            details_marker = "<details><summary>Original test failure</summary>"
-            details_at = lines.index(details_marker) if details_marker in lines else -1
-            status_at = lines.index(status_line) if status_line in lines else -1
-            if details_at != -1 and status_at > details_at:
-                lines.pop(status_at)
-                lines[index + 1:index + 1] = ["", status_line]
-            elif status_at == -1:
-                lines[index + 1:index + 1] = ["", status_line]
-            if details_at != -1:
-                return "\n".join(lines).rstrip()
-            detail_start = index + 1
-            while detail_start < len(lines) and (
-                not lines[detail_start].strip()
-                or lines[detail_start].startswith("Resolved in the latest passing run.")
-            ):
-                detail_start += 1
-        else:
+    marker = marker_of(body) or ""
+    suite_name = name or suite_name_from_body(body) or "Tests"
+    details = []
+    for line in lines:
+        if line == marker or line.startswith("## ") or line == STATUS_LINE:
             continue
-        while detail_start < len(lines) and not lines[detail_start].strip():
-            detail_start += 1
-        if detail_start < len(lines):
-            lines[detail_start:detail_start] = [
-                "<details><summary>Original test failure</summary>",
-                "",
-            ]
-            while lines and not lines[-1].strip():
-                lines.pop()
-            lines += ["", "</details>"]
-        return "\n".join(lines).rstrip()
-    return "\n".join(lines).rstrip()
+        if line.startswith("<details><summary>"):
+            continue
+        if line.strip() == "</details>":
+            continue
+        details.append(line)
+    while details and not details[0].strip():
+        details.pop(0)
+    while details and not details[-1].strip():
+        details.pop()
+
+    result = [
+        marker,
+        f"## ✅ Test failures resolved: {suite_name}",
+        "",
+        STATUS_LINE,
+    ]
+    if details:
+        result += ["", DETAILS_MARKER, ""] + details + ["", "</details>"]
+    return "\n".join(result).rstrip()
+
+
+def payload_index(payload):
+    suites = {}
+    legacy_to_primary = {}
+    name_to_primary = {}
+    for suite in payload.get("suites", []) or []:
+        if not isinstance(suite, dict):
+            continue
+        marker = suite.get("marker")
+        if not marker:
+            continue
+        suites[marker] = suite
+        name = suite.get("name") or ""
+        if name:
+            name_to_primary[name] = marker
+        for legacy in suite.get("legacy_markers", []) or []:
+            legacy_to_primary[legacy] = marker
+
+    for comment in payload.get("comments", []) or []:
+        if not isinstance(comment, dict):
+            continue
+        marker = comment.get("marker")
+        if not marker or marker in suites:
+            continue
+        suites[marker] = {
+            "marker": marker,
+            "name": suite_name_from_body(comment.get("body", "")),
+            "failure_count": 1,
+        }
+
+    return suites, legacy_to_primary, name_to_primary
+
+
+def primary_for(marker, body, suites, legacy_to_primary, name_to_primary):
+    if marker in suites:
+        return marker
+    if marker in legacy_to_primary:
+        return legacy_to_primary[marker]
+    return name_to_primary.get(suite_name_from_body(body), marker)
 
 
 def sync(payload, client, pr_number, resolve_missing=True):
+    suites, legacy_to_primary, name_to_primary = payload_index(payload)
     desired = {}
     for comment in payload.get("comments", []) or []:
-        marker = comment.get("marker")
-        if marker:
-            desired[marker] = comment.get("body", "").strip()
+        if not isinstance(comment, dict) or not comment.get("marker"):
+            continue
+        desired[comment["marker"]] = comment.get("body", "").strip()
+
+    passed = {
+        marker
+        for marker, suite in suites.items()
+        if suite.get("failure_count") == 0
+    }
+
+    existing = list(client.list_comments(pr_number) or [])
+    existing.sort(
+        key=lambda comment: 0 if marker_of(comment.get("body")) in suites else 1
+    )
+    node_ids = [
+        comment.get("node_id") for comment in existing if comment.get("node_id")
+    ]
+    states = {}
+    if hasattr(client, "minimized_states"):
+        states = client.minimized_states(node_ids) or {}
 
     actions = []
-    existing = client.list_comments(pr_number) or []
+    claimed = set()
     for comment in existing:
         body = comment.get("body") or ""
         marker = marker_of(body)
         if not marker:
             continue
-        if marker in desired:
-            target = desired.pop(marker)
+        primary = primary_for(marker, body, suites, legacy_to_primary, name_to_primary)
+        if primary in claimed:
+            client.delete_comment(comment["id"])
+            actions.append(("deleted-duplicate", marker))
+            continue
+        claimed.add(primary)
+
+        node_id = comment.get("node_id")
+        minimized = states.get(node_id) if node_id else None
+
+        if primary in desired:
+            target = desired[primary]
             if body.strip() != target:
                 client.update_comment(comment["id"], target)
-                actions.append(("updated", marker))
+                actions.append(("updated", primary))
+            if minimized is True:
+                client.unminimize_comment(node_id)
+                actions.append(("unminimized", primary))
             continue
-        if not resolve_missing:
+
+        suite = suites.get(primary) or {}
+        should_resolve = resolve_missing or primary in passed
+        if not should_resolve:
             continue
-        target = resolved_body(body)
+        target = resolved_body(body, suite.get("name"))
         if body.strip() != target.strip():
             client.update_comment(comment["id"], target)
-            actions.append(("resolved", marker))
+            actions.append(("resolved", primary))
+        if minimized is False:
+            client.minimize_comment(node_id)
+            actions.append(("minimized", primary))
 
     for marker, body in desired.items():
+        if marker in claimed:
+            continue
         client.create_comment(pr_number, body)
         actions.append(("created", marker))
     return actions
