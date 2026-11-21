@@ -74,9 +74,9 @@ jobs:
             core.setOutput('head_sha', pr.head.sha || '');
             core.setOutput('base_ref', pr.base.ref || '');
 
-            const { data: files } = await github.rest.pulls.listFiles({
+            const files = await github.paginate(github.rest.pulls.listFiles, {
               owner: context.repo.owner, repo: context.repo.repo,
-              pull_number: pr.number, per_page: 3000,
+              pull_number: pr.number, per_page: 100,
             });
             fs.writeFileSync('changed-files.txt', files.map((f) => f.filename).join('\n') + '\n');
             fs.writeFileSync('changed-files.json', JSON.stringify(files, null, 2));
