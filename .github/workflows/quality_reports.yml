@@ -474,7 +474,10 @@ jobs:
               const wanted = needsBackfill(cfg.marker);
               core.setOutput(`${cfg.key}_needed`, wanted ? 'true' : 'false');
               if (!wanted) continue;
-              const run = runs.find((r) => r.name === cfg.name);
+              const candidates = runs.filter((r) => r.name === cfg.name);
+              // The API returns newest runs first. Prefer a successful run so
+              // a newer failed re-run cannot hide valid artifacts from it.
+              const run = candidates.find((r) => r.conclusion === 'success') || candidates[0];
               if (!run) {
                 core.setOutput(`${cfg.key}_run`, '');
                 core.setOutput(`${cfg.key}_artifacts`, 'false');
