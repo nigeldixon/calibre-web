@@ -140,6 +140,7 @@ jobs:
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
+          config: .github/codeql/codeql-config.yml
 
       - name: Perform CodeQL Analysis
         id: analyze

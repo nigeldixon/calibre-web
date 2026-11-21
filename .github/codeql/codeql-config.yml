@@ -1,0 +1,6 @@
+name: "CodeQL configuration"
+# Jinja templates are server-rendered, not standalone JavaScript. The JS
+# extractor cannot parse their template expressions and reports extraction
+# errors that would otherwise invalidate the whole SARIF upload.
+paths-ignore:
+  - 'cps/themes/**/templates/**'
