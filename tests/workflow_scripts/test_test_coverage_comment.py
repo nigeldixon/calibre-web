@@ -109,7 +109,7 @@ def test_patch_coverage_report_uses_normalized_paths(tmp_path, run_quality_scrip
     out = proc.stdout
     assert proc.returncode == 0
     assert "**Full analysis:** [Workflow run](https://example.test/run/1)" in out
-    assert "**Workflow script coverage:** `TOTAL 673 432 36%`" in out
+    assert "**Workflow script coverage:** `673 statements · 432 missed · 36% covered`" in out
     assert "**Diff lines:** 2 &nbsp;|&nbsp; **Missing:** 1 &nbsp;|&nbsp; **Covered:** 1" in out
     assert "<details><summary>Patch coverage details</summary>" in out
     assert "- `cps/a.py`: 1/2 covered; missing lines 12" in out

@@ -66,11 +66,21 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p workflow-coverage-data
-          COVERAGE_FILE=workflow-coverage-data/scripts \
-            pytest tests/workflow_scripts -q \
-              --cov=.github/scripts \
-              --cov-report=xml:coverage-workflow-scripts.xml 2>&1 | tee workflow-script-test-output.txt
-          python -m coverage report --data-file=workflow-coverage-data/scripts -m > coverage-workflow-scripts-term.txt 2>&1
+          PYTHONPATH="$PWD/tests/workflow_scripts/coverage_support${PYTHONPATH:+:$PYTHONPATH}" \
+            COVERAGE_PROCESS_START="$PWD/tests/workflow_scripts/coverage_support/coveragerc" \
+            COVERAGE_FILE="$PWD/workflow-coverage-data/scripts" \
+            python -m pytest tests/workflow_scripts -q 2>&1 | tee workflow-script-test-output.txt
+          python -m coverage combine \
+            --rcfile=tests/workflow_scripts/coverage_support/coveragerc \
+            --data-file=workflow-coverage-data/scripts
+          python -m coverage report \
+            --rcfile=tests/workflow_scripts/coverage_support/coveragerc \
+            --data-file=workflow-coverage-data/scripts \
+            -m > coverage-workflow-scripts-term.txt
+          python -m coverage xml \
+            --rcfile=tests/workflow_scripts/coverage_support/coveragerc \
+            --data-file=workflow-coverage-data/scripts \
+            -o coverage-workflow-scripts.xml
 
       - name: Run unit tests with coverage
         id: unit_tests

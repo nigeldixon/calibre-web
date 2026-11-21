@@ -116,7 +116,10 @@ def coverage_total(path):
         return None
     for line in reversed(lines):
         if line.startswith("TOTAL"):
-            return line
+            parts = line.split()
+            if len(parts) >= 4 and parts[-1].endswith("%"):
+                return f"{parts[1]} statements · {parts[2]} missed · {parts[-1]} covered"
+            return " ".join(parts)
     return lines[-1] if lines else None
 
 
