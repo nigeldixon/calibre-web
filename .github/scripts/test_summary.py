@@ -64,7 +64,10 @@ def app_coverage():
                 capture_output=True,
                 text=True,
             )
-            return (r.stdout or r.stderr or "No coverage data generated.").rstrip()
+            # stderr on a failed command is not coverage data.
+            if r.returncode != 0:
+                return "No coverage data generated."
+            return (r.stdout or "No coverage data generated.").rstrip()
         except Exception:
             pass
     return "No coverage data generated."

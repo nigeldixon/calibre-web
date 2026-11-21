@@ -90,6 +90,45 @@ def test_app_coverage_command_failure_is_not_reported_as_data(tmp_path, run_qual
     assert proc.stdout.count("No coverage data generated.") == 2
 
 
+def test_app_coverage_command_stderr_is_not_reported_as_data(tmp_path, run_quality_script):
+    bin_dir = tmp_path / "fake-bin"
+    bin_dir.mkdir()
+    fake_python = bin_dir / "python"
+    fake_python.write_text(
+        "#!/bin/sh\nprintf 'ERROR: corrupt coverage data\\n' >&2\nexit 1\n", encoding="utf-8"
+    )
+    fake_python.chmod(0o755)
+    (tmp_path / ".coverage").write_text("dummy", encoding="utf-8")
+
+    proc = run_quality_script(
+        "test_summary.py",
+        tmp_path,
+        env={"PATH": f"{bin_dir}:{os.environ['PATH']}"},
+    )
+
+    assert proc.returncode == 0
+    assert "ERROR: corrupt coverage data" not in proc.stdout
+    assert proc.stdout.count("No coverage data generated.") == 2
+
+
+def test_app_coverage_empty_stdout_falls_back(tmp_path, run_quality_script):
+    bin_dir = tmp_path / "fake-bin"
+    bin_dir.mkdir()
+    fake_python = bin_dir / "python"
+    fake_python.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    fake_python.chmod(0o755)
+    (tmp_path / ".coverage").write_text("dummy", encoding="utf-8")
+
+    proc = run_quality_script(
+        "test_summary.py",
+        tmp_path,
+        env={"PATH": f"{bin_dir}:{os.environ['PATH']}"},
+    )
+
+    assert proc.returncode == 0
+    assert proc.stdout.count("No coverage data generated.") == 2
+
+
 def test_summary_without_outputs_does_not_claim_results(tmp_path, run_quality_script):
     proc = run_quality_script("test_summary.py", tmp_path)
 
