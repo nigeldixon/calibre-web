@@ -191,6 +191,10 @@ if sarif_files:
     for lang in expected_langs:
         if lang not in by_lang:
             by_lang[lang] = empty_info()
+            # In a partial run this expected language produced no SARIF. Count
+            # it here, because the failed-language loop below treats the
+            # parse_error flag as an already-counted failure.
+            analysis_errors += 1
 
 failed_langs = [lang for lang, outcome in lang_outcome.items() if outcome not in ("", "success")]
 for lang in failed_langs:

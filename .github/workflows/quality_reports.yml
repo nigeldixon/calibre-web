@@ -150,6 +150,8 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           pattern: semgrep-results
           path: artifacts/semgrep
+          # The regenerate step reads files directly from artifacts/semgrep.
+          merge-multiple: true
         continue-on-error: true
 
       - name: Download coverage artifacts
@@ -160,6 +162,8 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           pattern: coverage-data
           path: artifacts/tests
+          # The regenerate step reads files directly from artifacts/tests.
+          merge-multiple: true
         continue-on-error: true
 
       - name: Regenerate CodeQL report from SARIF

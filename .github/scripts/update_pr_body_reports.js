@@ -30,7 +30,6 @@ function upsertReport(body, marker, content) {
   let section = body.slice(startIdx + SECTION_START.length, endIdx);
   const after = body.slice(endIdx);
 
-  const replacement = '\n' + content + '\n';
   const markerIdx = section.indexOf(marker);
   if (markerIdx !== -1) {
     let end = section.length;
@@ -39,10 +38,14 @@ function upsertReport(body, marker, content) {
       const idx = section.indexOf(m, markerIdx + marker.length);
       if (idx !== -1 && idx < end) end = idx;
     }
-    section = section.slice(0, markerIdx) + replacement + section.slice(end);
+    // Normalize the whitespace before this report to exactly one blank line.
+    // Otherwise every update adds another newline and the PR body grows.
+    const prefix = section.slice(0, markerIdx).replace(/\s*$/, '\n\n');
+    const suffix = section.slice(end);
+    section = prefix + content + '\n' + (suffix ? '\n' + suffix : '');
   } else {
-    // Append before end of section, keeping a blank line separation if needed
-    section = section.replace(/\s*$/, '') + '\n' + replacement;
+    // Append before end of section, keeping a blank line separation
+    section = section.replace(/\s*$/, '') + '\n\n' + content + '\n';
   }
 
   // Normalize spacing before section end marker
