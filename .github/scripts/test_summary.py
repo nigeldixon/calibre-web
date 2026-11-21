@@ -67,9 +67,3 @@ elif os.path.exists(".coverage"):
 else:
     print("No coverage data generated.")
 print("```")
-if os.path.exists("diff-coverage.md"):
-    print()
-    print("## Patch coverage (PR diff)")
-    print()
-    with open("diff-coverage.md", "r", encoding="utf-8", errors="replace") as f:
-        print(f.read().rstrip())
