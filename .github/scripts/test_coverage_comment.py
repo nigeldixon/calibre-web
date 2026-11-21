@@ -38,7 +38,10 @@ def normalize_path(path):
         path = path[2:]
     marker_prefix = "/calibre-web/"
     if marker_prefix in path:
-        path = path.split(marker_prefix, 1)[1]
+        # CI workspace paths can contain the repository name twice
+        # (/home/runner/work/calibre-web/calibre-web/...). Strip at the last
+        # occurrence so the result matches GitHub's changed-file names.
+        path = path.rsplit(marker_prefix, 1)[1]
     return path
 
 
