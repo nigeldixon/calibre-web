@@ -147,10 +147,23 @@ def record_error(detail):
     error_details.append(detail if detail.startswith("- ") else f"- {detail}")
 
 
+def add_lang_info(lang, info):
+    # A language can produce several SARIF files. Keep every file's counts and
+    # failure flags instead of letting the last file overwrite earlier ones.
+    existing = by_lang.get(lang)
+    if existing is None:
+        by_lang[lang] = info
+        return
+    for key in ("results", "error", "warning", "note", "exec_errors", "exec_warnings"):
+        existing[key] += info[key]
+    existing["parse_error"] = existing["parse_error"] or info["parse_error"]
+    existing["read_error"] = existing["read_error"] or info["read_error"]
+
+
 if not sarif_files:
     record_error("No CodeQL SARIF artifacts were produced for this run.")
     for lang in expected_langs:
-        by_lang[lang] = empty_info()
+        add_lang_info(lang, empty_info())
 
 for path in sarif_files:
     lang = lang_from_path(path) or "unknown"
@@ -158,7 +171,7 @@ for path in sarif_files:
         with open(path, "r", encoding="utf-8") as f:
             sarif = json.load(f)
     except Exception:
-        by_lang[lang] = empty_info(read_error=True)
+        add_lang_info(lang, empty_info(read_error=True))
         record_error(f"`{path}`: SARIF could not be parsed.")
         invalid_sarif.append(path)
         continue
@@ -168,7 +181,7 @@ for path in sarif_files:
             or not isinstance(sarif.get("version"), str)
             or not isinstance(runs, list)
             or not runs):
-        by_lang[lang] = empty_info(read_error=True)
+        add_lang_info(lang, empty_info(read_error=True))
         record_error(f"`{path}`: SARIF is empty or structurally invalid.")
         invalid_sarif.append(path)
         continue
@@ -195,7 +208,7 @@ for path in sarif_files:
                 valid_runs = False
                 break
     if not valid_runs:
-        by_lang[lang] = empty_info(read_error=True)
+        add_lang_info(lang, empty_info(read_error=True))
         record_error(f"`{path}`: SARIF contains invalid run data.")
         invalid_sarif.append(path)
         continue
@@ -231,12 +244,12 @@ for path in sarif_files:
                 info["note"] += 1
             else:
                 info["warning"] += 1
-    by_lang[lang] = info
+    add_lang_info(lang, info)
 
 if sarif_files:
     for lang in expected_langs:
         if lang not in by_lang:
-            by_lang[lang] = empty_info()
+            add_lang_info(lang, empty_info())
             # In a partial run this expected language produced no SARIF. Record
             # it here, because the failed-language loop below treats the
             # parse_error flag as an already-recorded failure.

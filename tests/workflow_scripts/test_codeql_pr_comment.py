@@ -248,6 +248,39 @@ def test_unreadable_sarif_is_reported_as_failed(tmp_path, run_quality_script, wr
     assert "- `codeql-results/codeql-sarif-python/results.sarif`: SARIF could not be parsed." in out
 
 
+def test_multiple_sarif_files_for_one_language_are_aggregated(
+    tmp_path, run_quality_script, write_json
+):
+    changed = tmp_path / "changed-files.txt"
+    changed.write_text("cps/a.py\ncps/b.py\n", encoding="utf-8")
+    python_dir = write_language_artifact(
+        tmp_path,
+        "python",
+        '{"version": "2.1.0", "runs": []}',
+    )
+    write_json(
+        python_dir / "results.sarif",
+        sarif(results=[finding("cps/a.py", "warning")]),
+    )
+    write_json(
+        python_dir / "second.sarif",
+        sarif(results=[finding("cps/b.py", "error")]),
+    )
+    js_dir = tmp_path / "codeql-results" / "codeql-sarif-javascript-typescript"
+    js_dir.mkdir(parents=True)
+    write_json(js_dir / "results.sarif", sarif(results=[]))
+
+    proc = run_quality_script(
+        "codeql_pr_comment.py",
+        tmp_path,
+        env={"CHANGED_FILES_FILE": str(changed)},
+    )
+
+    assert proc.returncode == 0
+    assert "| ⚠️ | `python` | 2 | 1 | 1 | 0 |" in proc.stdout
+    assert "**Whole-solution issues:** 2 · **In changed files:** 2" in proc.stdout
+
+
 def test_structurally_empty_sarif_fails_closed(tmp_path, run_quality_script, write_json):
     directory = tmp_path / "codeql-results" / "codeql-sarif-python"
     directory.mkdir(parents=True)
