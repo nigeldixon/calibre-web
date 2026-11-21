@@ -537,3 +537,21 @@ def test_failed_analyze_job_without_status_files_is_reported(tmp_path, run_quali
     assert "**Analysis errors:** 1 · **Analysis warnings:** 0" in out
     assert "- CodeQL analyze job reported `failure`." in out
     assert "❌ CodeQL analyze job reported `failure`." in out
+
+
+def test_failed_analyze_job_with_successful_language_status_files_is_reported(
+    tmp_path, run_quality_script, write_json
+):
+    for language in ("javascript-typescript", "python"):
+        directory = tmp_path / "codeql-results" / f"codeql-sarif-{language}"
+        directory.mkdir(parents=True)
+        write_json(directory / "results.sarif", sarif(results=[]))
+        (directory / "status.txt").write_text("success", encoding="utf-8")
+
+    proc = run_quality_script("codeql_pr_comment.py", tmp_path, env={"ANALYZE_RESULT": "failure"})
+
+    out = proc.stdout
+    assert proc.returncode == 0
+    assert "**Analysis errors:** 1 · **Analysis warnings:** 0" in out
+    assert "- CodeQL analyze job reported `failure`." in out
+    assert "❌ CodeQL analyze job reported `failure`." in out

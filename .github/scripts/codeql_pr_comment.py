@@ -202,7 +202,11 @@ if sarif_files:
             record_error(f"No SARIF artifact was produced for `{lang}`.")
 
 failed_langs = [lang for lang, outcome in lang_outcome.items() if outcome not in ("", "success")]
+job_failure_recorded = False
 for lang in failed_langs:
+    # A failed language already represents the job failure, whether or not it
+    # added its own detail line (SARIF errors may have done that already).
+    job_failure_recorded = True
     info = by_lang.get(lang)
     # A missing, unreadable, or error-notification-bearing SARIF file already
     # contributed an analysis error; only record otherwise-uncounted failures.
@@ -210,7 +214,11 @@ for lang in failed_langs:
         record_error(f"CodeQL analyze failed for `{lang}` and no SARIF was available.")
     elif not (info.get("parse_error") or info.get("read_error") or info.get("exec_errors")):
         record_error(f"CodeQL analyze failed for `{lang}`.")
-if not failed_langs and analyze_outcomes not in ("", "success") and not lang_outcome and not error_details:
+# The aggregate job result is independent of the per-language status files:
+# a job can fail while every language status says success. Record it unless a
+# language-specific failure has already been recorded.
+job_failed = analyze_outcomes not in ("", "success")
+if job_failed and not job_failure_recorded:
     record_error(f"CodeQL analyze job reported `{analyze_outcomes}`.")
 
 analysis_errors = len(error_details)
@@ -279,7 +287,7 @@ if any(v.get("read_error") for v in by_lang.values()):
 
 if failed_langs:
     lines += ["", "❌ CodeQL analyze failed for: " + ", ".join(f"`{l}`" for l in failed_langs) + "."]
-elif analyze_outcomes not in ("", "success") and not lang_outcome:
+elif job_failed:
     lines += ["", f"❌ CodeQL analyze job reported `{analyze_outcomes}`."]
 
 if changed_files is not None:
