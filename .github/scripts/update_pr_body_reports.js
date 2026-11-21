@@ -4,8 +4,12 @@ const SECTION_HEADER = '\n\n---\n## Quality reports\n';
 const SUMMARY_MARKER = '<!-- quality-totals -->';
 const REPORT_MARKERS = [SUMMARY_MARKER, '<!-- codeql-report -->', '<!-- semgrep-report -->', '<!-- coverage-report -->'];
 const ISSUES_LABEL = '**Whole-solution issues:** ';
+const CHANGED_LABEL = '**In changed files:** ';
 const ERRORS_LABEL = '**Analysis errors:** ';
 const WARNINGS_LABEL = '**Analysis warnings:** ';
+// Generated metric lines start with one of these labels and may contain
+// several of them (for example errors and warnings share a line).
+const METRIC_LABELS = [ISSUES_LABEL, CHANGED_LABEL, ERRORS_LABEL, WARNINGS_LABEL];
 
 // Markers embedded in report text (for example a test message copied into a
 // failure bullet) must never be mistaken for a panel boundary. Only whole
@@ -112,13 +116,19 @@ async function updateReports({ github, context, core, owner, repo, pull_number, 
 
 function sumLabel(body, label) {
   let total = 0;
-  // Only generated lines beginning with the label contribute to the totals;
-  // quoted text inside an expandable failure detail cannot inflate them.
-  for (const line of body.split(/\r?\n/)) {
-    const text = line.trim();
-    if (!text.startsWith(label)) continue;
-    const n = Number.parseInt(text.slice(label.length).trim(), 10);
-    if (Number.isFinite(n)) total += n;
+  // Only trusted metric lines contribute. A failure bullet can quote label
+  // text inline, but it does not start with a generated metric label.
+  for (const rawLine of body.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!METRIC_LABELS.some((prefix) => line.startsWith(prefix))) continue;
+    let pos = 0;
+    while ((pos = line.indexOf(label, pos)) !== -1) {
+      const start = pos + label.length;
+      const value = line.slice(start).split('·')[0].trim();
+      const n = Number.parseInt(value, 10);
+      if (Number.isFinite(n)) total += n;
+      pos = start;
+    }
   }
   return total;
 }
