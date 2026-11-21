@@ -8,7 +8,7 @@ import requests
 
 
 MARKER_RE = re.compile(r"<!-- test-failure:[0-9a-f]{12} -->")
-STATUS_LINE = "Resolved in the latest passing run."
+STATUS_LINE = "Resolved: this failure is no longer present in the latest run."
 DETAILS_MARKER = "<details><summary>Last reported failures</summary>"
 MINIMIZE_MUTATION = """
 mutation($id: ID!) {
@@ -177,7 +177,7 @@ def resolved_body(body, name=None):
 def payload_index(payload):
     suites = {}
     legacy_to_primary = {}
-    name_to_primary = {}
+    name_to_markers = {}
     for suite in payload.get("suites", []) or []:
         if not isinstance(suite, dict):
             continue
@@ -187,7 +187,7 @@ def payload_index(payload):
         suites[marker] = suite
         name = suite.get("name") or ""
         if name:
-            name_to_primary[name] = marker
+            name_to_markers.setdefault(name, set()).add(marker)
         for legacy in suite.get("legacy_markers", []) or []:
             legacy_to_primary[legacy] = marker
 
@@ -197,25 +197,26 @@ def payload_index(payload):
         marker = comment.get("marker")
         if not marker or marker in suites:
             continue
+        name = suite_name_from_body(comment.get("body", ""))
         suites[marker] = {
             "marker": marker,
-            "name": suite_name_from_body(comment.get("body", "")),
+            "name": name,
             "failure_count": 1,
         }
+        if name:
+            name_to_markers.setdefault(name, set()).add(marker)
 
-    return suites, legacy_to_primary, name_to_primary
+    return suites, legacy_to_primary, name_to_markers
 
 
-def primary_for(marker, body, suites, legacy_to_primary, name_to_primary):
+def primary_for(marker, suites, legacy_to_primary):
     if marker in suites:
         return marker
-    if marker in legacy_to_primary:
-        return legacy_to_primary[marker]
-    return name_to_primary.get(suite_name_from_body(body), marker)
+    return legacy_to_primary.get(marker)
 
 
 def sync(payload, client, pr_number, resolve_missing=True):
-    suites, legacy_to_primary, name_to_primary = payload_index(payload)
+    suites, legacy_to_primary, name_to_markers = payload_index(payload)
     desired = {}
     for comment in payload.get("comments", []) or []:
         if not isinstance(comment, dict) or not comment.get("marker"):
@@ -246,17 +247,18 @@ def sync(payload, client, pr_number, resolve_missing=True):
         marker = marker_of(body)
         if not marker:
             continue
-        primary = primary_for(marker, body, suites, legacy_to_primary, name_to_primary)
-        if primary in claimed:
-            client.delete_comment(comment["id"])
-            actions.append(("deleted-duplicate", marker))
-            continue
-        claimed.add(primary)
+        primary = primary_for(marker, suites, legacy_to_primary)
+        if primary is not None:
+            if primary in claimed:
+                client.delete_comment(comment["id"])
+                actions.append(("deleted-duplicate", marker))
+                continue
+            claimed.add(primary)
 
         node_id = comment.get("node_id")
         minimized = states.get(node_id) if node_id else None
 
-        if primary in desired:
+        if primary is not None and primary in desired:
             target = desired[primary]
             if body.strip() != target:
                 client.update_comment(comment["id"], target)
@@ -266,17 +268,27 @@ def sync(payload, client, pr_number, resolve_missing=True):
                 actions.append(("unminimized", primary))
             continue
 
-        suite = suites.get(primary) or {}
-        should_resolve = resolve_missing or primary in passed
+        suite_name = suite_name_from_body(body)
+        if primary is None:
+            # A comment for a different failure signature of a suite we still
+            # report on is stale even when this run failed elsewhere.
+            should_resolve = resolve_missing or suite_name in name_to_markers
+            action_key = marker
+            resolved_name = suite_name or None
+        else:
+            suite = suites.get(primary) or {}
+            should_resolve = resolve_missing or primary in passed
+            action_key = primary
+            resolved_name = suite.get("name")
         if not should_resolve:
             continue
-        target = resolved_body(body, suite.get("name"))
+        target = resolved_body(body, resolved_name)
         if body.strip() != target.strip():
             client.update_comment(comment["id"], target)
-            actions.append(("resolved", primary))
+            actions.append(("resolved", action_key))
         if minimized is False:
             client.minimize_comment(node_id)
-            actions.append(("minimized", primary))
+            actions.append(("minimized", action_key))
 
     for marker, body in desired.items():
         if marker in claimed:

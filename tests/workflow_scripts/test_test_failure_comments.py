@@ -72,7 +72,7 @@ def comment_body(marker, name, bullets, minimized=False):
     )
     lines = [marker, heading, ""] + [f"- `{bullet}`" for bullet in bullets]
     if minimized:
-        lines += ["", "Resolved in the latest passing run."]
+        lines += ["", "Resolved: this failure is no longer present in the latest run."]
     return "\n".join(lines).strip()
 
 
@@ -111,7 +111,9 @@ def test_builds_one_grouped_comment_per_suite(load_quality_script, tmp_path):
 
     assert len(payload["comments"]) == 1
     comment = payload["comments"][0]
-    assert comment["marker"] == script["marker_for"]("workflow_script_tests")
+    assert comment["marker"] == script["failure_marker_for"](
+        "workflow_script_tests", results["suites"][0]["failures"]
+    )
     assert "## ❌ Test failures: Workflow script tests (2)" in comment["body"]
     assert "`tests/workflow_scripts/test_x.py::test_a` — `FAILED` — AssertionError: bad" in comment["body"]
     assert "`tests/workflow_scripts/test_x.py::test_b` — `ERROR` — setup failed" in comment["body"]
@@ -164,12 +166,24 @@ def test_group_marker_is_stable_and_distinct_from_legacy_markers(
     script = load_module(load_quality_script, tmp_path, "test_failure_comments.py")
 
     grouped = script["marker_for"]("workflow_script_tests")
+    failures = [
+        {"kind": "FAILED", "nodeid": "tests/x.py::test_a", "message": "boom"}
+    ]
+    failure_marker = script["failure_marker_for"]("workflow_script_tests", failures)
     legacy = script["legacy_marker_for"]("workflow_script_tests", "tests/x.py::test_a")
 
     assert grouped == script["marker_for"]("workflow_script_tests")
     assert re.fullmatch(r"<!-- test-failure:[0-9a-f]{12} -->", grouped)
     assert legacy != grouped
     assert script["marker_for"]("unit_tests") != grouped
+    assert failure_marker != grouped
+    assert failure_marker == script["failure_marker_for"](
+        "workflow_script_tests", list(reversed(failures))
+    )
+    assert script["failure_marker_for"](
+        "workflow_script_tests",
+        [{"kind": "FAILED", "nodeid": "tests/x.py::test_a", "message": "other"}],
+    ) != failure_marker
 
 
 def test_resolved_body_keeps_failure_details_collapsed_and_is_idempotent(
@@ -189,7 +203,7 @@ def test_resolved_body_keeps_failure_details_collapsed_and_is_idempotent(
 
     assert resolved.startswith(
         f"{marker}\n## ✅ Test failures resolved: Workflow script tests\n\n"
-        "Resolved in the latest passing run.\n\n"
+        "Resolved: this failure is no longer present in the latest run.\n\n"
         "<details><summary>Last reported failures</summary>\n"
     )
     assert "`tests/x.py::test_a` — `FAILED` — boom" in resolved
@@ -235,7 +249,7 @@ def test_sync_updates_active_comment_and_minimizes_resolved_comment(
     assert dict(client.updated)[1] == active_body
     resolved = dict(client.updated)[2]
     assert "## ✅ Test failures resolved: Unit (in-process)" in resolved
-    assert resolved.index("Resolved in the latest passing run.") < resolved.index("<details>")
+    assert resolved.index("Resolved: this failure is no longer present in the latest run.") < resolved.index("<details>")
     assert client.minimized == ["n2"]
     assert client.unminimized == []
     assert client.created == []
@@ -267,6 +281,39 @@ def test_sync_reopens_returning_failure(load_quality_script, tmp_path):
     assert dict(client.updated)[1] == active_body
     assert client.unminimized == ["n1"]
     assert client.minimized == []
+
+
+def test_sync_resolves_old_issue_and_creates_new_comment_for_changed_failure(
+    load_quality_script, tmp_path
+):
+    script = load_module(load_quality_script, tmp_path, "sync_test_failure_comments.py")
+    old_marker = "<!-- test-failure:aaaaaaaaaaaa -->"
+    new_marker = "<!-- test-failure:bbbbbbbbbbbb -->"
+    client = FakeClient(
+        comments=[
+            {
+                "id": 1,
+                "node_id": "n1",
+                "body": comment_body(old_marker, "Workflow script tests", ["old issue"]),
+            }
+        ]
+    )
+    new_body = comment_body(new_marker, "Workflow script tests", ["new issue"])
+    payload = {
+        "suites": [suite(new_marker, "Workflow script tests", 1)],
+        "comments": [{"marker": new_marker, "body": new_body}],
+    }
+
+    actions = script["sync"](payload, client, 5, resolve_missing=False)
+
+    assert ("resolved", old_marker) in actions
+    assert ("minimized", old_marker) in actions
+    assert ("created", new_marker) in actions
+    resolved = dict(client.updated)[1]
+    assert "## ✅ Test failures resolved: Workflow script tests" in resolved
+    assert "`old issue`" in resolved
+    assert client.created == [new_body]
+    assert client.minimized == ["n1"]
 
 
 def test_sync_resolves_passing_suite_in_partially_failing_run(
@@ -481,7 +528,7 @@ def test_helpers_handle_missing_metadata(load_quality_script, tmp_path):
     assert script["resolved_body"]("<!-- test-failure:aaaaaaaaaaaa -->") == (
         "<!-- test-failure:aaaaaaaaaaaa -->\n"
         "## ✅ Test failures resolved: Tests\n\n"
-        "Resolved in the latest passing run."
+        "Resolved: this failure is no longer present in the latest run."
     )
 
     suites, legacy, names = script["payload_index"](
@@ -510,17 +557,10 @@ def test_helpers_handle_missing_metadata(load_quality_script, tmp_path):
     }
     assert suites["<!-- test-failure:cccccccccccc -->"]["name"] == "Derived suite"
     assert legacy == {}
-    assert names == {}
-    assert (
-        script["primary_for"](
-            "unknown",
-            "## ❌ Test failures: Derived suite",
-            {},
-            {},
-            {"Derived suite": "<!-- test-failure:dddddddddddd -->"},
-        )
-        == "<!-- test-failure:dddddddddddd -->"
-    )
+    assert names == {
+        "Derived suite": {"<!-- test-failure:cccccccccccc -->"}
+    }
+    assert script["primary_for"]("unknown", {}, {}) is None
 
 
 def test_sync_skips_invalid_entries_and_unchanged_bodies(

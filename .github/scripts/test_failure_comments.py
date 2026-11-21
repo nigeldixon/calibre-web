@@ -13,6 +13,28 @@ def marker_for(suite_key):
     return f"{MARKER_PREFIX}{digest} -->"
 
 
+def failure_marker_for(suite_key, failures):
+    """Identify a specific failure set so a new issue gets a new comment."""
+    parts = [str(suite_key)]
+    for failure in sorted(
+        failures,
+        key=lambda f: (
+            str(f.get("nodeid", "")),
+            str(f.get("kind", "FAILED")),
+            str(f.get("message", "")),
+        ),
+    ):
+        parts.extend(
+            [
+                str(failure.get("nodeid", "")),
+                str(failure.get("kind", "FAILED")),
+                " ".join(str(failure.get("message", "")).split()),
+            ]
+        )
+    digest = hashlib.sha256("\x1f".join(parts).encode("utf-8")).hexdigest()[:12]
+    return f"{MARKER_PREFIX}{digest} -->"
+
+
 def legacy_marker_for(suite_key, nodeid):
     """Return the marker used by the old one-comment-per-failure format."""
     digest = hashlib.sha256(f"{suite_key}:{nodeid}".encode("utf-8")).hexdigest()[:12]
@@ -27,7 +49,7 @@ def failure_bullet(failure):
 
 
 def comment_for(suite, failures, run_url):
-    marker = marker_for(suite["key"])
+    marker = failure_marker_for(suite["key"], failures)
     lines = [
         marker,
         f"## ❌ Test failures: {suite['name']} ({len(failures)})",
@@ -53,7 +75,11 @@ def build_payload(results):
             {
                 "key": suite.get("key", ""),
                 "name": suite.get("name", "Tests"),
-                "marker": marker_for(suite.get("key", "")),
+                "marker": (
+                    failure_marker_for(suite.get("key", ""), failures)
+                    if failures
+                    else marker_for(suite.get("key", ""))
+                ),
                 "legacy_markers": [
                     legacy_marker_for(suite.get("key", ""), failure["nodeid"])
                     for failure in failures
