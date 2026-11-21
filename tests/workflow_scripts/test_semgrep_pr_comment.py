@@ -197,7 +197,7 @@ def test_legacy_path_missing_scope_file_is_an_error(tmp_path, run_quality_script
     assert "_Semgrep SARIF could not be parsed; the scan is marked as failed._" in out
 
 
-def test_empty_scope_file_is_ignored(tmp_path, run_quality_script, write_json):
+def test_empty_scope_file_is_reported_as_an_error(tmp_path, run_quality_script, write_json):
     results = tmp_path / "semgrep-results"
     results.mkdir()
     write_json(
@@ -215,8 +215,9 @@ def test_empty_scope_file_is_ignored(tmp_path, run_quality_script, write_json):
     out = proc.stdout
     assert proc.returncode == 0
     assert "Automated Semgrep summary (scheduled full scan)." in out
-    assert "**Analysis errors:** 0" in out
+    assert "**Analysis errors:** 1" in out
     assert "**Analysis warnings:** 0" in out
+    assert "_Semgrep SARIF could not be parsed; the scan is marked as failed._" in out
 
 
 def test_trusted_path_filters_findings_and_reports_exec_errors(tmp_path, run_quality_script, write_json):

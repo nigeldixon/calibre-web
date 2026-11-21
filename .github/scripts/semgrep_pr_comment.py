@@ -155,7 +155,9 @@ else:
         loaded_scope = load_json(scope_path)
         if loaded_scope:
             scope = loaded_scope
-        elif not os.path.exists(scope_path):
+        else:
+            # Missing, empty, or corrupt scope data means the scan status is
+            # unknown. Never keep the default scan_ok=True in that case.
             scope = {'scoped': False, 'reason': 'invalid_sarif', 'scan_ok': False,
                      'total_all': 0, 'warnings': 0, 'warning_detail': {}, 'exec_errors': 0}
 
