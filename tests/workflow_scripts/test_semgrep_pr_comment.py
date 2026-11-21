@@ -315,6 +315,7 @@ def test_trusted_path_filters_findings_and_reports_exec_errors(tmp_path, run_qua
 
     out = proc.stdout
     assert proc.returncode == 0
+    assert "### 🛡️ Semgrep analysis" in out
     assert "| ⚠️ | 2 | 1 | 1 | 0 |" in out
     assert "**Whole-solution issues:** 3 · **In changed files:** 2" in out
     assert "**Analysis errors:** 1 · **Analysis warnings:** 1" in out

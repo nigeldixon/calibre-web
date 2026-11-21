@@ -47,7 +47,8 @@ jobs:
         with:
           script: |
             const {
-              updateReports, SECTION_START, sectionBounds, lineMarkerIndices, reportBlockText,
+              updateReports, SECTION_START, REPORT_HEADINGS, sectionBounds,
+              lineMarkerIndices, reportBlockText,
             } = require('./.github/scripts/update_pr_body_reports.js');
 
             const placeholders = [
@@ -55,7 +56,7 @@ jobs:
                 marker: '<!-- codeql-report -->',
                 content: [
                   '<!-- codeql-report -->',
-                  '## CodeQL analysis',
+                  REPORT_HEADINGS.codeql,
                   '',
                   '⏳ CodeQL analysis is queued/running. Results will appear here when the workflow completes.',
                 ].join('\n'),
@@ -64,7 +65,7 @@ jobs:
                 marker: '<!-- semgrep-report -->',
                 content: [
                   '<!-- semgrep-report -->',
-                  '## Semgrep analysis',
+                  REPORT_HEADINGS.semgrep,
                   '',
                   '⏳ Semgrep analysis is queued/running. Results will appear here when the workflow completes.',
                 ].join('\n'),
@@ -73,7 +74,7 @@ jobs:
                 marker: '<!-- coverage-report -->',
                 content: [
                   '<!-- coverage-report -->',
-                  '## Patch coverage',
+                  REPORT_HEADINGS.tests,
                   '',
                   '⏳ Tests are queued/running. Coverage and test results will appear here when the workflow completes.',
                 ].join('\n'),

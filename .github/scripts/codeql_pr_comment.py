@@ -352,7 +352,7 @@ total = sum(v.get("results", 0) for v in by_lang.values() if not v.get("parse_er
 
 lines = [
     marker,
-    "## CodeQL analysis",
+    "### 🔍 CodeQL analysis",
     "",
     scope_note,
     "Jinja templates are rendered into parseable copies before JavaScript extraction; raw template expressions are not analyzed directly.",

@@ -278,7 +278,7 @@ if analysis_url:
     full_analysis.append(f'**Code scanning:** [{analysis_label}]({analysis_url})')
 full_analysis = '\n'.join(full_analysis)
 
-lines = [marker, '## Semgrep analysis', '']
+lines = [marker, '### 🛡️ Semgrep analysis', '']
 if scope.get('scoped'):
     lines.append('Automated Semgrep summary for files changed in this PR (filtered SARIF).')
 elif scope.get('reason') == 'diff_failed_full_scan':

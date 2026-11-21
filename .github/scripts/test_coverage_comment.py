@@ -229,7 +229,7 @@ def failure_details(suites):
 
 
 def coverage_section():
-    out = ["### Patch coverage", ""]
+    out = ["#### Patch coverage", ""]
 
     if not os.path.exists(coverage_xml_path):
         out += ["No coverage data was generated for this run."]
@@ -306,7 +306,7 @@ def coverage_section():
 
 def main():
     suites = load_test_results()
-    lines = [marker, "## Tests", ""]
+    lines = [marker, "### 🧪 Tests", ""]
     if run_url:
         lines += [f"**Full analysis:** [Workflow run]({run_url})", ""]
     lines += ["Automated test summary for files changed in this PR.", ""]
@@ -318,7 +318,7 @@ def main():
         lines += [
             "",
             "",
-            "### Patch coverage",
+            "#### Patch coverage",
             "",
             "❌ Coverage XML could not be parsed; patch coverage is unavailable for this run.",
             f"`{coverage_xml_path}`: {exc}",

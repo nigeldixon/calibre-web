@@ -301,14 +301,14 @@ jobs:
         with:
           script: |
             const fs = require('fs');
-            const { updateReportAndRefreshTotals } = require('./.github/scripts/update_pr_body_reports.js');
+            const { updateReportAndRefreshTotals, REPORT_HEADINGS } = require('./.github/scripts/update_pr_body_reports.js');
             const path = 'report/coverage-comment.md';
             let content;
             if (!fs.existsSync(path) || fs.statSync(path).size === 0) {
               core.warning('No usable coverage-comment.md artifact; publishing an explicit fallback.');
               content = [
                 '<!-- coverage-report -->',
-                '## Tests',
+                REPORT_HEADINGS.tests,
                 '',
                 `❌ Report unavailable: the test workflow did not produce a usable report. See [workflow run](${process.env.RUN_URL}).`,
               ].join('\n');

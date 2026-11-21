@@ -320,28 +320,28 @@ jobs:
         with:
           script: |
             const fs = require('fs');
-            const { updateReportAndRefreshTotals } = require('./.github/scripts/update_pr_body_reports.js');
+            const { updateReportAndRefreshTotals, REPORT_HEADINGS } = require('./.github/scripts/update_pr_body_reports.js');
 
             const wr = context.payload.workflow_run;
             const reports = {
               codeql: {
                 file: 'codeql-report.md',
                 marker: '<!-- codeql-report -->',
-                heading: '## CodeQL analysis',
+                heading: REPORT_HEADINGS.codeql,
                 label: 'CodeQL',
                 labels: true,
               },
               semgrep: {
                 file: 'semgrep-report.md',
                 marker: '<!-- semgrep-report -->',
-                heading: '## Semgrep analysis',
+                heading: REPORT_HEADINGS.semgrep,
                 label: 'Semgrep',
                 labels: true,
               },
               tests: {
                 file: 'coverage-report.md',
                 marker: '<!-- coverage-report -->',
-                heading: '## Tests',
+                heading: REPORT_HEADINGS.tests,
                 label: 'Tests',
                 labels: false,
               },
@@ -679,12 +679,12 @@ jobs:
         with:
           script: |
             const fs = require('fs');
-            const { updateReportAndRefreshTotals } = require('./.github/scripts/update_pr_body_reports.js');
+            const { updateReportAndRefreshTotals, REPORT_HEADINGS } = require('./.github/scripts/update_pr_body_reports.js');
             const pr = context.payload.pull_request;
             const reports = [
-              { key: 'codeql', marker: '<!-- codeql-report -->', file: 'codeql-report.md', heading: '## CodeQL analysis', labels: true },
-              { key: 'semgrep', marker: '<!-- semgrep-report -->', file: 'semgrep-report.md', heading: '## Semgrep analysis', labels: true },
-              { key: 'tests', marker: '<!-- coverage-report -->', file: 'coverage-report.md', heading: '## Tests', labels: false },
+              { key: 'codeql', marker: '<!-- codeql-report -->', file: 'codeql-report.md', heading: REPORT_HEADINGS.codeql, labels: true },
+              { key: 'semgrep', marker: '<!-- semgrep-report -->', file: 'semgrep-report.md', heading: REPORT_HEADINGS.semgrep, labels: true },
+              { key: 'tests', marker: '<!-- coverage-report -->', file: 'coverage-report.md', heading: REPORT_HEADINGS.tests, labels: false },
             ];
 
             for (const r of reports) {
@@ -774,13 +774,13 @@ jobs:
           script: |
             const {
               updateReportAndRefreshTotals, SECTION_START, SUMMARY_MARKER,
-              sectionBounds, lineMarkerIndices, reportBlockText,
+              REPORT_HEADINGS, sectionBounds, lineMarkerIndices, reportBlockText,
             } = require('./.github/scripts/update_pr_body_reports.js');
             const { owner, repo } = context.repo;
             const reports = [
-              { marker: '<!-- codeql-report -->', heading: '## CodeQL analysis', labels: true },
-              { marker: '<!-- semgrep-report -->', heading: '## Semgrep analysis', labels: true },
-              { marker: '<!-- coverage-report -->', heading: '## Tests', labels: false },
+              { marker: '<!-- codeql-report -->', heading: REPORT_HEADINGS.codeql, labels: true },
+              { marker: '<!-- semgrep-report -->', heading: REPORT_HEADINGS.semgrep, labels: true },
+              { marker: '<!-- coverage-report -->', heading: REPORT_HEADINGS.tests, labels: false },
             ];
             const allMarkers = [SUMMARY_MARKER, ...reports.map((r) => r.marker)];
             const pulls = await github.paginate(github.rest.pulls.list, {

@@ -86,6 +86,7 @@ def test_partial_run_counts_missing_language_and_keeps_details_in_sync(
 
     out = proc.stdout
     assert proc.returncode == 0
+    assert "### 🔍 CodeQL analysis" in out
     assert "Jinja templates are rendered into parseable copies" in out
     assert "**Whole-solution issues:** 2 · **In changed files:** 1" in out
     assert "**Analysis errors:** 2 · **Analysis warnings:** 2" in out

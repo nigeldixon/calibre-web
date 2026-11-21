@@ -1,7 +1,13 @@
 const SECTION_START = '<!-- quality-reports:start -->';
 const SECTION_END = '<!-- quality-reports:end -->';
-const SECTION_HEADER = '\n\n---\n## Quality reports\n';
+const SECTION_HEADER = '\n\n---\n## 📊 Quality reports\n';
+const LEGACY_SECTION_HEADER = '\n\n---\n## Quality reports\n';
 const SUMMARY_MARKER = '<!-- quality-totals -->';
+const REPORT_HEADINGS = {
+  codeql: '### 🔍 CodeQL analysis',
+  semgrep: '### 🛡️ Semgrep analysis',
+  tests: '### 🧪 Tests',
+};
 const REPORT_MARKERS = [SUMMARY_MARKER, '<!-- codeql-report -->', '<!-- semgrep-report -->', '<!-- coverage-report -->'];
 const ISSUES_LABEL = '**Whole-solution issues:** ';
 const CHANGED_LABEL = '**In changed files:** ';
@@ -32,6 +38,8 @@ function stripQualityMarkers(text) {
     .filter((line) => line !== SECTION_START && line !== SECTION_END)
     .join('\n')
     .split(SECTION_HEADER)
+    .join('')
+    .split(LEGACY_SECTION_HEADER)
     .join('');
 }
 
@@ -75,13 +83,21 @@ function stripPriorSections(body, keepStart) {
   return cleaned + body.slice(cursor);
 }
 
+function qualityHeaderIndex(body) {
+  const current = body.indexOf(SECTION_HEADER);
+  const legacy = body.indexOf(LEGACY_SECTION_HEADER);
+  if (current === -1) return legacy;
+  if (legacy === -1) return current;
+  return Math.min(current, legacy);
+}
+
 function canonicalizeSection(body) {
   body = body || '';
   const originalBounds = sectionBounds(body);
   if (originalBounds.start === -1 || originalBounds.end === -1) {
     // Without section markers, anything from a generated header onward is a
     // stale report body. Keep the PR's own text before that header only.
-    const headerAt = body.indexOf(SECTION_HEADER);
+    const headerAt = qualityHeaderIndex(body);
     const prefix = headerAt === -1 ? body : body.slice(0, headerAt);
     return stripQualityMarkers(prefix).replace(/\s*$/, '') + SECTION_HEADER + SECTION_START + '\n' + SECTION_END + '\n';
   }
@@ -290,6 +306,8 @@ module.exports = {
   SECTION_START,
   SECTION_END,
   SECTION_HEADER,
+  LEGACY_SECTION_HEADER,
+  REPORT_HEADINGS,
   SUMMARY_MARKER,
   lineMarkerIndices,
   ensureSection,

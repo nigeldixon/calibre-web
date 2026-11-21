@@ -275,7 +275,7 @@ def test_test_panel_renders_suite_table_and_failure_details(
 
     out = proc.stdout
     assert proc.returncode == 0
-    assert "## Tests" in out
+    assert "### 🧪 Tests" in out
     assert out.count("**Full analysis:**") == 1
     assert "**Full analysis:** [Workflow run](https://example.test/run/9)" in out
     assert "| ❌ | Workflow script tests | `1 failed, 50 passed in 2.10s` | 1 |" in out
@@ -284,7 +284,7 @@ def test_test_panel_renders_suite_table_and_failure_details(
     assert "<details><summary>❌ Workflow script tests failures (1)</summary>" in out
     assert "- `tests/workflow_scripts/test_x.py::test_a` — AssertionError: bad" in out
     assert "**Analysis errors:**" not in out
-    assert "### Patch coverage" in out
+    assert "#### Patch coverage" in out
 
 
 def test_missing_coverage_xml_is_not_an_error(tmp_path, run_quality_script):
@@ -295,7 +295,7 @@ def test_missing_coverage_xml_is_not_an_error(tmp_path, run_quality_script):
     )
 
     assert proc.returncode == 0
-    assert "## Patch coverage" in proc.stdout
+    assert "#### Patch coverage" in proc.stdout
     assert "No coverage data was generated for this run." in proc.stdout
 
 
