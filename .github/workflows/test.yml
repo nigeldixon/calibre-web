@@ -302,6 +302,10 @@ jobs:
               });
             }
 
+      - name: Install comment sync dependencies
+        shell: bash
+        run: python -m pip install --quiet 'requests>=2.32.0,<2.35.0'
+
       - name: Sync per-test failure comments
         shell: bash
         env:

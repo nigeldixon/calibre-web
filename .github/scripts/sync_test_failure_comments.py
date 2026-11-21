@@ -3,8 +3,8 @@
 import json
 import os
 import re
-import urllib.error
-import urllib.request
+
+import requests
 
 
 MARKER_RE = re.compile(r"<!-- test-failure:[0-9a-f]{12} -->")
@@ -53,19 +53,14 @@ class GitHubClient:
 
     def _request(self, method, path, body=None):
         url = f"{self.api_url}/repos/{self.owner}/{self.repo}{path}"
-        data = None
-        headers = self._headers()
-        if body is not None:
-            data = json.dumps(body).encode("utf-8")
-            headers["Content-Type"] = "application/json"
-        request = urllib.request.Request(url, data=data, headers=headers, method=method)
-        try:
-            with urllib.request.urlopen(request, timeout=30) as response:
-                payload = response.read().decode("utf-8")
-                return json.loads(payload) if payload else None
-        except urllib.error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"GitHub {method} {path} failed: {exc.code} {detail}") from exc
+        response = requests.request(
+            method, url, headers=self._headers(), json=body, timeout=30
+        )
+        if not response.ok:
+            raise RuntimeError(
+                f"GitHub {method} {path} failed: {response.status_code} {response.text}"
+            )
+        return response.json() if response.content else None
 
     @property
     def graphql_url(self):
@@ -77,18 +72,14 @@ class GitHubClient:
         body = {"query": query}
         if variables:
             body["variables"] = variables
-        data = json.dumps(body).encode("utf-8")
-        headers = self._headers()
-        headers["Content-Type"] = "application/json"
-        request = urllib.request.Request(
-            self.graphql_url, data=data, headers=headers, method="POST"
+        response = requests.post(
+            self.graphql_url, headers=self._headers(), json=body, timeout=30
         )
-        try:
-            with urllib.request.urlopen(request, timeout=30) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-        except urllib.error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"GitHub GraphQL failed: {exc.code} {detail}") from exc
+        if not response.ok:
+            raise RuntimeError(
+                f"GitHub GraphQL failed: {response.status_code} {response.text}"
+            )
+        payload = response.json()
         if payload.get("errors"):
             raise RuntimeError(f"GitHub GraphQL failed: {payload['errors']}")
         return payload.get("data") or {}

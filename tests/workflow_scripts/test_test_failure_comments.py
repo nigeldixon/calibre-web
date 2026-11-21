@@ -1,9 +1,23 @@
 import json
 import re
 
+import pytest
+
 
 def load_module(load_quality_script, tmp_path, name):
     return load_quality_script(name, tmp_path)
+
+
+class FakeResponse:
+    def __init__(self, ok=True, status_code=200, text="", payload=None, content=b"{}"):
+        self.ok = ok
+        self.status_code = status_code
+        self.text = text
+        self._payload = payload
+        self.content = content
+
+    def json(self):
+        return self._payload
 
 
 class FakeClient:
@@ -348,6 +362,54 @@ def test_graphql_helpers_query_and_mutate_minimized_state(
     assert "minimizedComment" in calls[1][0]
     assert "unminimizeComment" in calls[2][0]
     assert "unminimizedComment" in calls[2][0]
+
+
+def test_rest_and_graphql_requests_use_requests_with_errors(
+    load_quality_script, tmp_path, monkeypatch
+):
+    script = load_module(load_quality_script, tmp_path, "sync_test_failure_comments.py")
+    client = script["GitHubClient"]("token", "https://api.github.com", "owner", "repo")
+    calls = []
+
+    def fake_request(method, url, headers=None, json=None, timeout=None):
+        calls.append((method, url, json))
+        return FakeResponse(payload={"id": 7})
+
+    monkeypatch.setattr(script["requests"], "request", fake_request)
+    assert client._request("POST", "/issues/5/comments", {"body": "x"}) == {"id": 7}
+    assert calls == [
+        (
+            "POST",
+            "https://api.github.com/repos/owner/repo/issues/5/comments",
+            {"body": "x"},
+        )
+    ]
+
+    def fake_failed_request(method, url, headers=None, json=None, timeout=None):
+        return FakeResponse(ok=False, status_code=422, text="bad request")
+
+    monkeypatch.setattr(script["requests"], "request", fake_failed_request)
+    with pytest.raises(RuntimeError, match="422 bad request"):
+        client._request("GET", "/issues/5/comments")
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        calls.append(("POST", url, json))
+        return FakeResponse(payload={"data": {"nodes": []}, "errors": None})
+
+    monkeypatch.setattr(script["requests"], "post", fake_post)
+    assert client.graphql("query { viewer { login } }") == {"nodes": []}
+    assert calls[-1] == (
+        "POST",
+        "https://api.github.com/graphql",
+        {"query": "query { viewer { login } }"},
+    )
+
+    def fake_graphql_error(url, headers=None, json=None, timeout=None):
+        return FakeResponse(payload={"errors": [{"message": "nope"}]})
+
+    monkeypatch.setattr(script["requests"], "post", fake_graphql_error)
+    with pytest.raises(RuntimeError, match="nope"):
+        client.graphql("query { viewer { login } }")
 
 
 def test_writes_payload_from_artifact(tmp_path, run_quality_script, write_json):
