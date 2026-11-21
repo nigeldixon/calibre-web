@@ -60,10 +60,12 @@ jobs:
               return;
             }
 
-            if (!pr.head.repo || !pr.head.repo.fork) {
+            const fromFork = pr.head.repo && pr.base.repo &&
+              pr.head.repo.full_name !== pr.base.repo.full_name;
+            if (!fromFork) {
               core.setOutput('number', '');
               core.setOutput('trusted', 'false');
-              core.info(`PR #${pr.number} is not from a fork; push workflow publishes its reports.`);
+              core.info(`PR #${pr.number} is not from a different repository; push workflow publishes its reports.`);
               return;
             }
 

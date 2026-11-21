@@ -22,7 +22,7 @@ jobs:
   tests:
     # Internal PRs are covered by the push workflow; only fork PRs need the
     # read-only pull_request run (their reports are published by workflow_run).
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.event.pull_request.base.repo.full_name
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
