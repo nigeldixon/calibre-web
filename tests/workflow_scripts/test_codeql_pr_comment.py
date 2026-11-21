@@ -248,6 +248,34 @@ def test_unreadable_sarif_is_reported_as_failed(tmp_path, run_quality_script, wr
     assert "- `codeql-results/codeql-sarif-python/results.sarif`: SARIF could not be parsed." in out
 
 
+def test_sarif_shape_validators_reject_bad_nested_types(load_quality_script, tmp_path):
+    script = load_quality_script("codeql_pr_comment.py", tmp_path)
+
+    assert script["valid_artifact_location"]({"uri": "cps/a.py"}) is True
+    assert script["valid_artifact_location"]({"uri": 7}) is False
+    assert script["valid_artifact_location"]("bad") is False
+    assert script["valid_location"]({}) is True
+    assert script["valid_location"]({"physicalLocation": "bad"}) is False
+    assert script["valid_location"]("bad") is False
+    assert script["valid_message"]({"text": "ok"}) is True
+    assert script["valid_message"]({"text": 7}) is False
+    assert script["valid_message"]("bad") is False
+    assert script["valid_result_shape"]({"level": "warning"}) is True
+    assert script["valid_result_shape"]({"level": 7}) is False
+    assert script["valid_result_shape"]({"message": "bad"}) is False
+    assert script["valid_result_shape"]({"locations": "bad"}) is False
+    assert script["valid_result_shape"]({"locations": ["bad"]}) is False
+    assert script["valid_result_shape"]("bad") is False
+    assert script["valid_notification_shape"]({"level": "warning"}) is True
+    assert script["valid_notification_shape"]({"level": 7}) is False
+    assert script["valid_notification_shape"]({"message": "bad"}) is False
+    assert script["valid_notification_shape"]({"descriptor": "bad"}) is False
+    assert script["valid_notification_shape"]({"locations": "bad"}) is False
+    assert script["valid_notification_shape"]("bad") is False
+    assert script["valid_run_shape"]({"tool": {"driver": {}}, "results": "bad"}) is False
+    assert script["valid_run_shape"]({"tool": {"driver": {}}, "results": [{"level": 7}]}) is False
+
+
 def test_multiple_sarif_files_for_one_language_are_aggregated(
     tmp_path, run_quality_script, write_json
 ):

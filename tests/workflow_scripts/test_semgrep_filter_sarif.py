@@ -46,6 +46,34 @@ def write_fake_git(bin_dir, body):
     return bin_dir
 
 
+def test_sarif_shape_validators_reject_bad_nested_types(load_quality_script, tmp_path):
+    (tmp_path / "semgrep-results").mkdir()
+    script = load_quality_script("semgrep_filter_sarif.py", tmp_path)
+
+    assert script["valid_artifact_location"]({"uri": "a.py"}) is True
+    assert script["valid_artifact_location"]({"uri": 7}) is False
+    assert script["valid_artifact_location"]("bad") is False
+    assert script["valid_location"]({}) is True
+    assert script["valid_location"]({"physicalLocation": "bad"}) is False
+    assert script["valid_location"]("bad") is False
+    assert script["valid_message"]({"text": "ok"}) is True
+    assert script["valid_message"]({"text": 7}) is False
+    assert script["valid_message"]("bad") is False
+    assert script["valid_result_shape"]({"level": "warning"}) is True
+    assert script["valid_result_shape"]({"level": 7}) is False
+    assert script["valid_result_shape"]({"message": "bad"}) is False
+    assert script["valid_result_shape"]({"locations": "bad"}) is False
+    assert script["valid_result_shape"]({"locations": ["bad"]}) is False
+    assert script["valid_result_shape"]("bad") is False
+    assert script["valid_notification_shape"]({"level": "warning"}) is True
+    assert script["valid_notification_shape"]({"level": 7}) is False
+    assert script["valid_notification_shape"]({"message": "bad"}) is False
+    assert script["valid_notification_shape"]({"descriptor": "bad"}) is False
+    assert script["valid_notification_shape"]("bad") is False
+    assert script["valid_run_shape"]({"tool": {"driver": {}}, "results": "bad"}) is False
+    assert script["valid_run_shape"]({"tool": {"driver": {}}, "results": [{"level": 7}]}) is False
+
+
 def test_unreadable_scan_exit_code_fails_closed(tmp_path, run_quality_script):
     results = prepare(tmp_path, json.dumps(make_sarif()), exit_code="not-a-number")
 

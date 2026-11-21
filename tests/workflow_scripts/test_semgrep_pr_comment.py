@@ -55,6 +55,29 @@ def test_json_uri_and_counting_helpers(load_quality_script, tmp_path):
     assert script["result_in_changed"](finding("cps/a.py", "warning"), None) is True
     assert script["result_in_changed"]({"level": "warning"}, {"cps/a.py"}) is False
 
+    assert script["valid_artifact_location"]({"uri": "a.py"}) is True
+    assert script["valid_artifact_location"]({"uri": 7}) is False
+    assert script["valid_artifact_location"]("bad") is False
+    assert script["valid_location"]({}) is True
+    assert script["valid_location"]({"physicalLocation": "bad"}) is False
+    assert script["valid_location"]("bad") is False
+    assert script["valid_message"]({"text": "ok"}) is True
+    assert script["valid_message"]({"text": 7}) is False
+    assert script["valid_message"]("bad") is False
+    assert script["valid_result_shape"]({"level": "warning"}) is True
+    assert script["valid_result_shape"]({"level": 7}) is False
+    assert script["valid_result_shape"]({"message": "bad"}) is False
+    assert script["valid_result_shape"]({"locations": "bad"}) is False
+    assert script["valid_result_shape"]({"locations": ["bad"]}) is False
+    assert script["valid_result_shape"]("bad") is False
+    assert script["valid_notification_shape"]({"level": "warning"}) is True
+    assert script["valid_notification_shape"]({"level": 7}) is False
+    assert script["valid_notification_shape"]({"message": "bad"}) is False
+    assert script["valid_notification_shape"]({"descriptor": "bad"}) is False
+    assert script["valid_notification_shape"]("bad") is False
+    assert script["valid_sarif"]({"runs": ["bad"]}) is False
+    assert script["valid_sarif"]({"runs": [{"tool": {}, "results": [{"level": 7}]}]}) is False
+
     sarif = {
         "runs": [
             {
