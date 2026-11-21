@@ -198,6 +198,57 @@ def test_patch_coverage_report_uses_normalized_paths(tmp_path, run_quality_scrip
     assert "unknown.py" not in out
 
 
+def test_test_panel_renders_suite_table_and_failure_details(
+    tmp_path, run_quality_script, write_json
+):
+    write_json(
+        tmp_path / "test-results.json",
+        {
+            "run_url": "https://example.test/run/9",
+            "suites": [
+                {
+                    "key": "workflow_script_tests",
+                    "name": "Workflow script tests",
+                    "outcome": "failure",
+                    "summary": "1 failed, 50 passed in 2.10s",
+                    "failures": [
+                        {
+                            "kind": "FAILED",
+                            "nodeid": "tests/workflow_scripts/test_x.py::test_a",
+                            "message": "AssertionError: bad",
+                        }
+                    ],
+                },
+                {
+                    "key": "unit_tests",
+                    "name": "Unit (in-process)",
+                    "outcome": "success",
+                    "summary": "12 passed in 1.50s",
+                    "failures": [],
+                },
+            ],
+        },
+    )
+
+    proc = run_quality_script(
+        "test_coverage_comment.py",
+        tmp_path,
+        env={"COVERAGE_XML_PATH": str(tmp_path / "missing.xml")},
+    )
+
+    out = proc.stdout
+    assert proc.returncode == 0
+    assert "## Tests" in out
+    assert "**Full analysis:** [Workflow run](https://example.test/run/9)" in out
+    assert "| ❌ | Workflow script tests | `1 failed, 50 passed in 2.10s` | 1 |" in out
+    assert "| ✅ | Unit (in-process) | `12 passed in 1.50s` | 0 |" in out
+    assert "| ⚪ | Playwright E2E | `no results` | 0 |" in out
+    assert "<details><summary>❌ Workflow script tests failures (1)</summary>" in out
+    assert "- `tests/workflow_scripts/test_x.py::test_a` — AssertionError: bad" in out
+    assert "**Analysis errors:**" not in out
+    assert "### Patch coverage" in out
+
+
 def test_missing_coverage_xml_is_not_an_error(tmp_path, run_quality_script):
     proc = run_quality_script(
         "test_coverage_comment.py",
