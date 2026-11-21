@@ -85,6 +85,16 @@ assert.ok(!rebuilt.includes('stale'), rebuilt);
 const legacy = m.canonicalizeSection('Intro' + m.LEGACY_SECTION_HEADER + 'stale\n');
 assert.ok(legacy.includes(m.SECTION_HEADER), legacy);
 assert.ok(!legacy.includes('stale'), legacy);
+
+// A quoted, unmatched start marker after the section must not discard the
+// real reports or the PR text that follows them.
+const trailingMarker = 'Intro\n\n---\n## 📊 Quality reports\n' + START + '\n' +
+  '<!-- coverage-report -->\n' + H.tests + '\nreal report\n' + END + '\n' +
+  'Tail text\n' + START + '\n';
+const trailingClean = m.canonicalizeSection(trailingMarker);
+assert.strictEqual(trailingClean.split(START).length - 1, 1, trailingClean);
+assert.ok(trailingClean.includes('real report'), trailingClean);
+assert.ok(trailingClean.includes('Tail text'), trailingClean);
 """
 
 

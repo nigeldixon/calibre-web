@@ -69,8 +69,16 @@ function dedupeReportMarkers(section) {
 function sectionBounds(body) {
   const starts = lineMarkerIndices(body || '', SECTION_START);
   const ends = lineMarkerIndices(body || '', SECTION_END);
-  const start = starts.length ? starts[starts.length - 1] : -1;
-  const end = start === -1 ? -1 : ends.find((i) => i > start) ?? -1;
+  let start = -1;
+  let end = -1;
+  // A trailing unmatched START marker (for example, quoted in the PR text)
+  // must not hide the genuine report section.
+  for (const candidate of starts) {
+    const candidateEnd = ends.find((i) => i > candidate) ?? -1;
+    if (candidateEnd === -1) continue;
+    start = candidate;
+    end = candidateEnd;
+  }
   return { start, end };
 }
 
