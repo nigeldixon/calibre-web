@@ -175,7 +175,7 @@ def valid_run_shape(run):
 def notification_detail(n):
     uri = ''
     for loc in (n.get('locations') or []):
-        found = normalize_uri((loc.get('physicalLocation') or {}).get('artifactLocation', {}).get('uri', ''))
+        found = normalize_uri(((loc.get('physicalLocation') or {}).get('artifactLocation') or {}).get('uri', ''))
         if found:
             uri = found
             break
