@@ -25,58 +25,184 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Find associated pull request
+      - name: Resolve PR, change list, and artifact trust
         id: pr
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
           script: |
+            const fs = require('fs');
             const wr = context.payload.workflow_run;
-            let number = (wr.pull_requests || [])[0]?.number;
+            let pr = null;
 
-            if (!number && wr.head_repository?.owner?.login && wr.head_branch) {
+            if ((wr.pull_requests || []).length) {
+              const number = wr.pull_requests[0].number;
+              pr = (await github.rest.pulls.get({
+                owner: context.repo.owner, repo: context.repo.repo, pull_number: number,
+              })).data;
+            } else if (wr.head_repository?.owner?.login && wr.head_branch) {
               const head = `${wr.head_repository.owner.login}:${wr.head_branch}`;
               const { data: pulls } = await github.rest.pulls.list({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                head,
-                state: 'open',
-                per_page: 100,
+                owner: context.repo.owner, repo: context.repo.repo,
+                head, state: 'open', per_page: 100,
               });
               const match = pulls.find((p) => p.head.sha === wr.head_sha) || pulls[0];
-              number = match?.number;
+              if (match) {
+                pr = (await github.rest.pulls.get({
+                  owner: context.repo.owner, repo: context.repo.repo, pull_number: match.number,
+                })).data;
+              }
             }
 
-            if (number) {
-              core.setOutput('number', number.toString());
-              core.info(`Found PR #${number} for ${wr.name} run ${wr.id}.`);
-            } else {
+            if (!pr) {
               core.setOutput('number', '');
+              core.setOutput('trusted', 'false');
               core.info(`No open PR found for ${wr.name} run ${wr.id}; skipping.`);
+              return;
             }
 
-      - name: Download report artifacts
-        if: steps.pr.outputs.number != ''
+            if (!pr.head.repo || !pr.head.repo.fork) {
+              core.setOutput('number', '');
+              core.setOutput('trusted', 'false');
+              core.info(`PR #${pr.number} is not from a fork; push workflow publishes its reports.`);
+              return;
+            }
+
+            core.setOutput('number', pr.number.toString());
+            core.setOutput('base_sha', pr.base.sha || '');
+            core.setOutput('head_sha', pr.head.sha || '');
+            core.setOutput('base_ref', pr.base.ref || '');
+
+            const { data: files } = await github.rest.pulls.listFiles({
+              owner: context.repo.owner, repo: context.repo.repo,
+              pull_number: pr.number, per_page: 3000,
+            });
+            fs.writeFileSync('changed-files.txt', files.map((f) => f.filename).join('\n') + '\n');
+            fs.writeFileSync('changed-files.json', JSON.stringify(files, null, 2));
+
+            const { data: repo } = await github.rest.repos.get({
+              owner: context.repo.owner, repo: context.repo.repo,
+            });
+            const trustedBase = repo.default_branch;
+            const requiredFiles = {
+              'CodeQL': ['.github/workflows/codeql.yml'],
+              'Semgrep': ['.github/workflows/semgrep.yml', '.github/scripts/semgrep_filter_sarif.py'],
+              'Tests': ['.github/workflows/test.yml', '.github/scripts/combine_coverage.sh'],
+            }[wr.name] || [];
+
+            async function fileAt(ref, path) {
+              try {
+                const { data } = await github.rest.repos.getContent({
+                  owner: context.repo.owner, repo: context.repo.repo, path, ref,
+                });
+                return data.type === 'file' ? data.content : null;
+              } catch (err) {
+                return null;
+              }
+            }
+
+            const modified = [];
+            for (const path of requiredFiles) {
+              const atHead = await fileAt(pr.head.sha, path);
+              const atBase = await fileAt(trustedBase, path);
+              if (atHead !== atBase) modified.push(path);
+            }
+
+            if (modified.length) {
+              core.warning(`PR modifies analysis files: ${modified.join(', ')}; artifacts will not be trusted.`);
+              core.setOutput('trusted', 'false');
+              core.setOutput('modified', modified.join(', '));
+            } else {
+              core.setOutput('trusted', 'true');
+              core.setOutput('modified', '');
+            }
+
+      - name: Download CodeQL SARIF artifacts
+        if: steps.pr.outputs.number != '' && steps.pr.outputs.trusted == 'true' && github.event.workflow_run.name == 'CodeQL'
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           run-id: ${{ github.event.workflow_run.id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          pattern: quality-report-*
-          path: quality-reports
-          merge-multiple: true
+          pattern: codeql-sarif-*
+          path: artifacts/codeql/codeql-results
+          merge-multiple: false
         continue-on-error: true
 
+      - name: Download Semgrep artifacts
+        if: steps.pr.outputs.number != '' && steps.pr.outputs.trusted == 'true' && github.event.workflow_run.name == 'Semgrep'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pattern: semgrep-results
+          path: artifacts/semgrep
+        continue-on-error: true
+
+      - name: Download coverage artifacts
+        if: steps.pr.outputs.number != '' && steps.pr.outputs.trusted == 'true' && github.event.workflow_run.name == 'Tests'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pattern: coverage-data
+          path: artifacts/tests
+        continue-on-error: true
+
+      - name: Regenerate CodeQL report from SARIF
+        if: steps.pr.outputs.number != '' && steps.pr.outputs.trusted == 'true' && github.event.workflow_run.name == 'CodeQL'
+        continue-on-error: true
+        shell: bash
+        env:
+          CHANGED_FILES_FILE: ${{ github.workspace }}/changed-files.txt
+          PR_BASE_SHA: ${{ steps.pr.outputs.base_sha }}
+          PR_HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+          ANALYZE_RESULT: ${{ github.event.workflow_run.conclusion }}
+          ANALYSIS_URL: ${{ github.server_url }}/${{ github.repository }}/security/code-scanning?query=tool%3Acodeql
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          cd artifacts/codeql
+          python "$GITHUB_WORKSPACE/.github/scripts/codeql_pr_comment.py" > "$GITHUB_WORKSPACE/codeql-report.md"
+
+      - name: Regenerate Semgrep report from raw SARIF
+        if: steps.pr.outputs.number != '' && steps.pr.outputs.trusted == 'true' && github.event.workflow_run.name == 'Semgrep'
+        continue-on-error: true
+        shell: bash
+        env:
+          CHANGED_FILES_FILE: ${{ github.workspace }}/changed-files.txt
+          PR_BASE_SHA: ${{ steps.pr.outputs.base_sha }}
+          PR_HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+          RAW_SARIF_PATH: semgrep.raw.sarif
+          SCAN_EXIT_PATH: scan-exit-code.txt
+          ANALYZE_RESULT: ${{ github.event.workflow_run.conclusion }}
+          ANALYSIS_URL: ${{ github.server_url }}/${{ github.repository }}/security/code-scanning?query=tool%3ASemgrep
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          cd artifacts/semgrep
+          python "$GITHUB_WORKSPACE/.github/scripts/semgrep_pr_comment.py" > "$GITHUB_WORKSPACE/semgrep-report.md"
+
+      - name: Regenerate coverage report from coverage XML
+        if: steps.pr.outputs.number != '' && steps.pr.outputs.trusted == 'true' && github.event.workflow_run.name == 'Tests'
+        continue-on-error: true
+        shell: bash
+        env:
+          CHANGED_FILES_JSON: ${{ github.workspace }}/changed-files.json
+          COVERAGE_XML_PATH: coverage.xml
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          cd artifacts/tests
+          python "$GITHUB_WORKSPACE/.github/scripts/test_coverage_comment.py" > "$GITHUB_WORKSPACE/coverage-report.md"
+
       - name: Publish quality report to PR body
-        if: steps.pr.outputs.number != ''
+        if: always() && steps.pr.outputs.number != ''
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         env:
           PR_NUMBER: ${{ steps.pr.outputs.number }}
+          TRUSTED: ${{ steps.pr.outputs.trusted }}
+          MODIFIED: ${{ steps.pr.outputs.modified }}
         with:
           script: |
             const fs = require('fs');
-            const path = require('path');
-            const { updateReport, refreshTotals } = require('./.github/scripts/update_pr_body_reports.js');
+            const { updateReportAndRefreshTotals } = require('./.github/scripts/update_pr_body_reports.js');
 
-            const pullNumber = Number(process.env.PR_NUMBER);
             const wr = context.payload.workflow_run;
             const reports = {
               'CodeQL': {
@@ -104,18 +230,23 @@ jobs:
               return;
             }
 
-            const artifact = path.join('quality-reports', report.file);
             const runUrl = wr.html_url || `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${wr.id}`;
-            let content;
-            if (fs.existsSync(artifact)) {
-              content = fs.readFileSync(artifact, 'utf8');
-              core.info(`Using ${report.file} from workflow run ${wr.id}.`);
+            const trusted = process.env.TRUSTED === 'true';
+            const modified = process.env.MODIFIED || '';
+            let content = '';
+
+            if (fs.existsSync(report.file) && fs.statSync(report.file).size > 0) {
+              content = fs.readFileSync(report.file, 'utf8');
+              core.info(`Using regenerated ${report.file} from workflow run ${wr.id}.`);
             } else {
+              const reason = trusted
+                ? `${wr.name} workflow did not produce usable artifacts.`
+                : `this PR modified verification-sensitive files (${modified || 'unknown'}), so its artifacts cannot be trusted.`;
               content = [
                 report.marker,
                 report.heading,
                 '',
-                `❌ ${wr.name} workflow did not produce a report. See [workflow run](${runUrl}).`,
+                `❌ Report unavailable: ${reason} See [workflow run](${runUrl}).`,
               ];
               if (report.labels) {
                 content.push(
@@ -126,14 +257,12 @@ jobs:
                   '**Analyze job:** `failure`'
                 );
               }
-              content = content.join('\n');
-              core.warning(`${report.file} missing from workflow run ${wr.id}; publishing failure report.`);
+              core.warning(`Publishing fallback for ${report.marker}: ${reason}`);
             }
 
-            await updateReport({
+            await updateReportAndRefreshTotals({
               github, context, core,
-              pull_number: pullNumber,
+              pull_number: Number(process.env.PR_NUMBER),
               marker: report.marker,
               content,
             });
-            await refreshTotals({ github, context, core, pull_number: pullNumber });

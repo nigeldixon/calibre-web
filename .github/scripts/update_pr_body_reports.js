@@ -106,6 +106,15 @@ function sumLabel(body, label) {
   return total;
 }
 
+function totalsContent(body) {
+  return [
+    SUMMARY_MARKER,
+    `**Quality total:** ${sumLabel(body, ISSUES_LABEL)} issues found · ` +
+      `${sumLabel(body, ERRORS_LABEL)} analysis errors · ` +
+      `${sumLabel(body, WARNINGS_LABEL)} analysis warnings`,
+  ].join('\n');
+}
+
 async function refreshTotals({ github, context, core, owner, repo, pull_number }) {
   owner = owner || context.repo.owner;
   repo = repo || context.repo.repo;
@@ -116,15 +125,47 @@ async function refreshTotals({ github, context, core, owner, repo, pull_number }
   }
 
   const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number: pullNumber });
-  const body = pr.body || '';
-  const content = [
-    SUMMARY_MARKER,
-    `**Quality total:** ${sumLabel(body, ISSUES_LABEL)} issues found · ` +
-      `${sumLabel(body, ERRORS_LABEL)} analysis errors · ` +
-      `${sumLabel(body, WARNINGS_LABEL)} analysis warnings`,
-  ].join('\n');
+  return updateReport({
+    github, context, core, owner, repo, pull_number,
+    marker: SUMMARY_MARKER,
+    content: totalsContent(pr.body || ''),
+  });
+}
 
-  return updateReport({ github, context, core, owner, repo, pull_number, marker: SUMMARY_MARKER, content });
+// Update a report and the aggregate totals in one API write, so concurrent
+// workflows cannot leave a stale summary behind.
+async function updateReportAndRefreshTotals({ github, context, core, owner, repo, pull_number, marker, content }) {
+  owner = owner || context.repo.owner;
+  repo = repo || context.repo.repo;
+  const pullNumber = Number(pull_number);
+  if (!pullNumber) {
+    core.info('No pull request number provided; skipping PR body update.');
+    return { updated: false, reason: 'no_pr' };
+  }
+
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number: pullNumber });
+    const currentBody = pr.body || '';
+    let newBody = upsertReport(currentBody, marker, content);
+    newBody = upsertReport(newBody, SUMMARY_MARKER, totalsContent(newBody));
+    if (newBody === currentBody) {
+      core.info(`PR #${pullNumber} body already up to date for ${marker}.`);
+      return { updated: false, reason: 'unchanged' };
+    }
+    try {
+      await github.rest.pulls.update({ owner, repo, pull_number: pullNumber, body: newBody });
+      core.info(`Updated PR #${pullNumber} report ${marker} and quality totals.`);
+      return { updated: true };
+    } catch (err) {
+      const status = err && err.status;
+      if (attempt < 2 && (status === 409 || status === 422)) {
+        core.info(`Retrying PR body update after conflict/error (${status})...`);
+        continue;
+      }
+      throw err;
+    }
+  }
+  return { updated: false, reason: 'retries_exhausted' };
 }
 
 module.exports = {
@@ -136,4 +177,5 @@ module.exports = {
   updateReport,
   updateReports,
   refreshTotals,
+  updateReportAndRefreshTotals,
 };

@@ -114,6 +114,7 @@ jobs:
         shell: bash
         env:
           BASE_REF: ${{ steps.find_pr.outputs.base || github.base_ref || 'develop' }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: python .github/scripts/test_coverage_comment.py > coverage-comment.md
 
       - name: Publish test and coverage summary
@@ -125,12 +126,18 @@ jobs:
           FUNCTIONAL_OUTCOME: ${{ steps.functional_tests.outcome }}
         run: python .github/scripts/test_summary.py >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload coverage report artifact for fork PRs
-        if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork && hashFiles('coverage-comment.md') != ''
+      - name: Upload coverage data artifact for fork PRs
+        if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: quality-report-coverage
-          path: coverage-comment.md
+          name: coverage-data
+          path: |
+            coverage.xml
+            coverage-term.txt
+            diff-coverage.md
+            unit-test-output.txt
+            e2e-test-output.txt
+            functional-test-output.txt
           if-no-files-found: warn
           retention-days: 5
 
@@ -142,19 +149,18 @@ jobs:
         with:
           script: |
             const fs = require('fs');
-            const { updateReport, refreshTotals } = require('./.github/scripts/update_pr_body_reports.js');
+            const { updateReportAndRefreshTotals } = require('./.github/scripts/update_pr_body_reports.js');
             if (!fs.existsSync('coverage-comment.md')) {
               core.info('coverage-comment.md not found; skipping PR body update.');
             } else {
               const content = fs.readFileSync('coverage-comment.md', 'utf8');
-              await updateReport({
+              await updateReportAndRefreshTotals({
                 github, context, core,
                 pull_number: process.env.PR_NUMBER,
                 marker: '<!-- coverage-report -->',
                 content,
               });
             }
-            await refreshTotals({ github, context, core, pull_number: process.env.PR_NUMBER });
 
       - name: Fail if any test suite failed
         if: always()

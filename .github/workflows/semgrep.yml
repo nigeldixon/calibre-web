@@ -101,7 +101,7 @@ jobs:
   comment:
     name: PR comment
     runs-on: ubuntu-latest
-    if: always() && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork))
+    if: always() && github.event_name == 'push'
     needs: analyze
     permissions:
       actions: read
@@ -138,15 +138,6 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: python .github/scripts/semgrep_pr_comment.py > semgrep-comment.md
 
-      - name: Upload Semgrep report artifact for fork PRs
-        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork && hashFiles('semgrep-comment.md') != ''
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: quality-report-semgrep
-          path: semgrep-comment.md
-          if-no-files-found: warn
-          retention-days: 5
-
       - name: Update Semgrep report in PR body
         if: github.event_name == 'push' && steps.find_pr.outputs.number != '' && hashFiles('semgrep-comment.md') != ''
         continue-on-error: true
@@ -156,12 +147,11 @@ jobs:
         with:
           script: |
             const fs = require('fs');
-            const { updateReport, refreshTotals } = require('./.github/scripts/update_pr_body_reports.js');
+            const { updateReportAndRefreshTotals } = require('./.github/scripts/update_pr_body_reports.js');
             const content = fs.readFileSync('semgrep-comment.md', 'utf8');
-            await updateReport({
+            await updateReportAndRefreshTotals({
               github, context, core,
               pull_number: process.env.PR_NUMBER,
               marker: '<!-- semgrep-report -->',
               content,
             });
-            await refreshTotals({ github, context, core, pull_number: process.env.PR_NUMBER });

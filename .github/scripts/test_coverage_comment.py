@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
+import json
 import os
 import re
 import subprocess
 import xml.etree.ElementTree as ET
 
 marker = "<!-- coverage-report -->"
-xml_path = "coverage.xml"
+xml_path = os.environ.get("COVERAGE_XML_PATH", "coverage.xml")
+run_url = os.environ.get("RUN_URL", "").strip()
+changed_json_path = os.environ.get("CHANGED_FILES_JSON", "").strip()
 
 # Resolve base ref without propagating tainted env data into subprocess args.
 # Allow only known-safe branch names as explicit constants; default to develop.
@@ -14,12 +17,9 @@ if _raw_base_ref == "main":
     base_ref = "main"
 elif _raw_base_ref == "master":
     base_ref = "master"
-elif _raw_base_ref == "develop" or re.fullmatch(r"[A-Za-z0-9._/-]+", _raw_base_ref):
-    # Default to develop for arbitrary (but validated-format) branch names to
-    # avoid passing environment-derived values into subprocess arguments.
-    base_ref = "develop"
 else:
     base_ref = "develop"
+
 
 def pct_to_color(p):
     if p >= 90:
@@ -32,50 +32,150 @@ def pct_to_color(p):
         return "orange", "🟠", "Poor"
     return "red", "🔴", "Poor"
 
+
 def bar(p, width=20):
     filled = int(round((p / 100.0) * width))
     filled = max(0, min(width, filled))
     return "█" * filled + "░" * (width - filled)
 
+
 def badge(pct_i, color):
     return f"![coverage](https://img.shields.io/badge/coverage-{pct_i}%25-{color})"
 
-def status_icon(outcome):
-    if outcome == "success":
-        return "✅"
-    if outcome == "failure":
-        return "❌"
-    if outcome in ("skipped", "cancelled"):
-        return "⏭️"
-    return "⚪"
 
-def extract_summary(path):
+def normalize_path(path):
+    path = (path or "").replace("\\", "/")
+    while path.startswith("./"):
+        path = path[2:]
+    marker_prefix = "/calibre-web/"
+    if marker_prefix in path:
+        path = path.split(marker_prefix, 1)[1]
+    return path
+
+
+def coverage_by_file(path):
+    by_file = {}
     if not os.path.exists(path):
-        return "no results"
+        return by_file
     try:
-        with open(path, "r", encoding="utf-8", errors="replace") as f:
-            content = f.read()
+        root = ET.parse(path).getroot()
     except Exception:
-        return "no results"
-    # Prefer the standard pytest short summary line near the end.
-    for line in reversed([ln.strip() for ln in content.splitlines() if ln.strip()]):
-        if re.search(r"\b(passed|failed|error|errors|skipped|xfailed|xpassed|deselected|warnings?)\b", line) and re.search(r"\b(in|no tests ran)\b", line):
-            return line
-        if line.startswith("no tests ran"):
-            return line
-    for line in reversed([ln.strip() for ln in content.splitlines() if ln.strip()]):
-        if re.search(r"\b(passed|failed|error|errors|skipped)\b", line):
-            return line
-    return "no results"
+        return by_file
+    for cls in root.iter("class"):
+        filename = normalize_path(cls.get("filename", ""))
+        if not filename:
+            continue
+        lines_el = cls.find("lines")
+        if lines_el is None:
+            continue
+        for line in lines_el.findall("line"):
+            try:
+                number = int(line.get("number", "0"))
+                hits = int(line.get("hits", "0") or 0)
+            except (TypeError, ValueError):
+                continue
+            if number > 0:
+                by_file.setdefault(filename, {})[number] = hits
+    return by_file
 
-lines_out = [marker, "## Patch coverage"]
+
+def added_lines_from_patch(patch):
+    added = set()
+    new_line = None
+    for raw in (patch or "").splitlines():
+        if raw.startswith("@@"):
+            match = re.search(r"\+(\d+)(?:,(\d+))?", raw)
+            new_line = int(match.group(1)) if match else None
+            continue
+        if new_line is None or raw.startswith("+++"):
+            continue
+        if raw.startswith("+"):
+            added.add(new_line)
+            new_line += 1
+        elif raw.startswith("-") or raw.startswith("\\"):
+            continue
+        else:
+            new_line += 1
+    return added
+
+
+def load_changed_files(path):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return []
+    if isinstance(data, dict):
+        data = data.get("files", [])
+    return data if isinstance(data, list) else []
+
+
+def header():
+    out = [marker, "## Patch coverage", ""]
+    if run_url:
+        out += [f"**Full analysis:** [Workflow run]({run_url})", ""]
+    return out
+
 
 if not os.path.exists(xml_path):
-    lines_out += ["", "No coverage data was generated for this run."]
+    print("\n".join(header() + ["No coverage data was generated for this run."]))
+    raise SystemExit(0)
+
+lines_out = header()
+
+# Trusted path: compute patch coverage from coverage XML + GitHub's file patches.
+# This is used by the privileged workflow_run publisher and needs no git checkout.
+if changed_json_path:
+    coverage = coverage_by_file(xml_path)
+    per_file = []
+    total = 0
+    covered = 0
+
+    for item in load_changed_files(changed_json_path):
+        if item.get("status") == "removed":
+            continue
+        filename = normalize_path(item.get("filename", ""))
+        if not filename:
+            continue
+        file_cov = coverage.get(filename, {})
+        relevant = sorted(n for n in added_lines_from_patch(item.get("patch", "")) if n in file_cov)
+        if not relevant:
+            continue
+        missing = [n for n in relevant if file_cov[n] <= 0]
+        file_total = len(relevant)
+        file_covered = file_total - len(missing)
+        total += file_total
+        covered += file_covered
+        per_file.append((filename, file_covered, file_total, missing))
+
+    lines_out += ["", "Diff vs changed files in this PR."]
+    if total:
+        diff_pct = 100.0 * covered / total
+        diff_pct_i = int(round(diff_pct))
+        d_color, d_emoji, d_label = pct_to_color(diff_pct)
+        lines_out += [
+            "",
+            f"{badge(diff_pct_i, d_color)} **{diff_pct:.1f}%** ({d_label}) {d_emoji}",
+            "",
+            f"`{bar(diff_pct_i)}` {diff_pct_i}%",
+            "",
+            f"**Diff lines:** {total} &nbsp;|&nbsp; **Missing:** {total - covered} &nbsp;|&nbsp; **Covered:** {covered}",
+        ]
+        details = []
+        for filename, file_covered, file_total, missing in sorted(per_file):
+            if missing:
+                details.append(f"- `{filename}`: {file_covered}/{file_total} covered; missing lines {', '.join(map(str, missing[:20]))}")
+            else:
+                details.append(f"- `{filename}`: {file_covered}/{file_total} covered")
+        if details:
+            lines_out += ["", "<details><summary>Patch coverage details</summary>", ""] + details + ["", "</details>"]
+    else:
+        lines_out += ["", "_Patch coverage could not be computed for this run._"]
+
     print("\n".join(lines_out))
     raise SystemExit(0)
 
-# Diff/patch coverage via diff-cover
+# Legacy path: diff-cover against the branch used by the push workflow.
 diff_md_path = "diff-coverage.md"
 compare_branch = f"origin/{base_ref}"
 diff_pct = None
@@ -100,7 +200,6 @@ try:
     cmd = diff_base + [xml_path, "--compare-branch", compare_branch, "--format", f"markdown:{diff_md_path}"]
     # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
     subprocess.run(cmd, capture_output=True, text=True)
-    # console summary for parsing
     summary_cmd = diff_base + [xml_path, "--compare-branch", compare_branch]
     # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
     res2 = subprocess.run(summary_cmd, capture_output=True, text=True)
@@ -122,10 +221,7 @@ except Exception:
     diff_md = ""
     diff_pct = None
 
-lines_out += [
-    "",
-    f"Diff vs `{compare_branch}` (changed/diff lines present in the combined coverage report).",
-]
+lines_out += ["", f"Diff vs `{compare_branch}` (changed/diff lines present in the combined coverage report)."]
 if diff_pct is not None:
     d_color, d_emoji, d_label = pct_to_color(diff_pct)
     lines_out += [
@@ -138,10 +234,7 @@ if diff_pct is not None:
         lines_out.append("")
         lines_out.append(f"**Diff lines:** {diff_total} &nbsp;|&nbsp; **Missing:** {diff_missing} &nbsp;|&nbsp; **Covered:** {max(0, diff_total - diff_missing)}")
 else:
-    lines_out += [
-        "",
-        "_Patch coverage could not be computed for this run._",
-    ]
+    lines_out += ["", "_Patch coverage could not be computed for this run._"]
 
 if diff_md:
     lines_out += [
@@ -152,4 +245,5 @@ if diff_md:
         "",
         "</details>",
     ]
+
 print("\n".join(lines_out))

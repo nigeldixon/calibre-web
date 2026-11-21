@@ -32,9 +32,24 @@ for status_file in status_files:
 base_sha = os.environ.get("PR_BASE_SHA", "").strip()
 head_sha = os.environ.get("PR_HEAD_SHA", "").strip()
 base_ref = os.environ.get("PR_BASE_REF", "").strip()
+changed_files_file = os.environ.get("CHANGED_FILES_FILE", "").strip()
 changed_files = None
 scope_note = "Automated CodeQL summary for this PR (generated from analysis SARIF)."
-if base_sha and head_sha:
+
+if changed_files_file:
+    try:
+        with open(changed_files_file, "r", encoding="utf-8") as f:
+            changed_files = set()
+            for line in f:
+                line = line.strip().replace("\\", "/")
+                while line.startswith("./"):
+                    line = line[2:]
+                if line:
+                    changed_files.add(line)
+        scope_note = "Automated CodeQL summary for files changed in this PR (generated from analysis SARIF)."
+    except Exception:
+        changed_files = None
+elif base_sha and head_sha:
     try:
         if base_ref:
             subprocess.run(["git", "fetch", "origin", base_ref, "--depth=1"], check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -125,6 +140,7 @@ error_details = []
 warning_details = []
 
 if not sarif_files:
+    analysis_errors += 1
     for lang in expected_langs:
         by_lang[lang] = empty_info()
 

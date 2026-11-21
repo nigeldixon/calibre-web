@@ -144,7 +144,7 @@ jobs:
   comment:
     name: PR comment
     runs-on: ubuntu-latest
-    if: always() && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork))
+    if: always() && github.event_name == 'push'
     needs: analyze
     permissions:
       actions: read
@@ -187,15 +187,6 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: python .github/scripts/codeql_pr_comment.py > codeql-comment.md
 
-      - name: Upload CodeQL report artifact for fork PRs
-        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork && hashFiles('codeql-comment.md') != ''
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: quality-report-codeql
-          path: codeql-comment.md
-          if-no-files-found: warn
-          retention-days: 5
-
       - name: Update CodeQL report in PR body
         if: github.event_name == 'push' && steps.find_pr.outputs.number != ''
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
@@ -204,12 +195,11 @@ jobs:
         with:
           script: |
             const fs = require('fs');
-            const { updateReport, refreshTotals } = require('./.github/scripts/update_pr_body_reports.js');
+            const { updateReportAndRefreshTotals } = require('./.github/scripts/update_pr_body_reports.js');
             const content = fs.readFileSync('codeql-comment.md', 'utf8');
-            await updateReport({
+            await updateReportAndRefreshTotals({
               github, context, core,
               pull_number: process.env.PR_NUMBER,
               marker: '<!-- codeql-report -->',
               content,
             });
-            await refreshTotals({ github, context, core, pull_number: process.env.PR_NUMBER });

@@ -5,27 +5,47 @@ import os
 marker = '<!-- semgrep-report -->'
 sarif_path = 'semgrep-results/semgrep.sarif'
 scope_path = 'semgrep-results/scope.json'
+raw_sarif_path = os.environ.get('RAW_SARIF_PATH', 'semgrep-results/semgrep.raw.sarif').strip()
+scan_exit_path = os.environ.get('SCAN_EXIT_PATH', 'semgrep-results/scan-exit-code.txt').strip()
+changed_files_file = os.environ.get('CHANGED_FILES_FILE', '').strip()
 
-sarif = None
-if os.path.exists(sarif_path):
+
+def load_json(path):
+    if not os.path.exists(path):
+        return None
     try:
-        with open(sarif_path, 'r', encoding='utf-8') as f:
-            sarif = json.load(f)
+        with open(path, 'r', encoding='utf-8') as f:
+            return json.load(f)
     except Exception:
-        sarif = None
+        return None
 
-scope = {'scoped': False, 'reason': 'unknown', 'scan_ok': True, 'total_all': 0,
-         'warnings': 0, 'warning_detail': {}}
-if os.path.exists(scope_path):
-    try:
-        with open(scope_path, 'r', encoding='utf-8') as f:
-            scope = json.load(f)
-    except Exception:
-        pass
 
-totals = {'results': 0, 'error': 0, 'warning': 0, 'note': 0}
-if sarif is not None:
-    for run in sarif.get('runs', []) or []:
+def norm_uri(uri):
+    if not uri:
+        return ''
+    uri = uri.replace('\\', '/')
+    while uri.startswith('./'):
+        uri = uri[2:]
+    return uri
+
+
+def result_in_changed(result, changed):
+    if changed is None:
+        return True
+    locs = list(result.get('locations') or []) + list(result.get('relatedLocations') or [])
+    if not locs:
+        return False
+    for loc in locs:
+        phys = (loc or {}).get('physicalLocation') or {}
+        art = phys.get('artifactLocation') or {}
+        if norm_uri(art.get('uri', '')) in changed:
+            return True
+    return False
+
+
+def count_findings(sarif):
+    totals = {'results': 0, 'error': 0, 'warning': 0, 'note': 0}
+    for run in (sarif or {}).get('runs', []) or []:
         for r in run.get('results', []) or []:
             totals['results'] += 1
             level = (r.get('level') or 'warning').lower()
@@ -35,6 +55,82 @@ if sarif is not None:
                 totals['note'] += 1
             else:
                 totals['warning'] += 1
+    return totals
+
+
+def count_notifications(sarif):
+    detail = {}
+    for run in (sarif or {}).get('runs', []) or []:
+        for inv in run.get('invocations') or []:
+            for n in inv.get('toolExecutionNotifications') or []:
+                key = (n.get('descriptor') or {}).get('id') or (n.get('level') or 'warning')
+                detail[key] = detail.get(key, 0) + 1
+    return detail
+
+
+def read_scan_exit():
+    try:
+        with open(scan_exit_path, 'r', encoding='utf-8') as f:
+            return int(f.read().strip())
+    except Exception:
+        return None
+
+
+# Trusted path: rebuild the summary from raw SARIF and a changed-file list
+# supplied by the privileged workflow_run publisher.
+if changed_files_file:
+    changed = set()
+    try:
+        with open(changed_files_file, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = norm_uri(line.strip())
+                if line:
+                    changed.add(line)
+    except Exception:
+        changed = None
+
+    raw_exists = os.path.exists(raw_sarif_path)
+    raw = load_json(raw_sarif_path)
+    if raw is None:
+        sarif = None
+        scope = {
+            'scoped': False,
+            'reason': 'invalid_sarif' if raw_exists else 'no_sarif',
+            'changed_count': len(changed) if changed is not None else 0,
+            'scan_ok': False, 'scan_exit': read_scan_exit(), 'total_all': 0,
+        }
+    else:
+        total_all = sum(len(run.get('results', []) or []) for run in raw.get('runs', []) or [])
+        runs = []
+        for run in raw.get('runs', []) or []:
+            filtered = dict(run)
+            filtered['results'] = [r for r in (run.get('results') or []) if result_in_changed(r, changed)]
+            runs.append(filtered)
+        sarif = {'version': raw.get('version', '2.1.0'), 'runs': runs}
+        notification_detail = count_notifications(raw)
+        scan_exit = read_scan_exit()
+        scope = {
+            'scoped': changed is not None,
+            'reason': 'pr_changed_files' if changed is not None else 'full_scan',
+            'changed_count': len(changed) if changed is not None else 0,
+            'base': os.environ.get('PR_BASE_SHA', '').strip(),
+            'head': os.environ.get('PR_HEAD_SHA', '').strip(),
+            'scan_ok': scan_exit == 0,
+            'scan_exit': scan_exit,
+            'total_all': total_all,
+            'warnings': sum(notification_detail.values()),
+            'warning_detail': notification_detail,
+        }
+else:
+    # Legacy path used by the push workflow in the repository itself.
+    sarif = load_json(sarif_path)
+    scope = {'scoped': False, 'reason': 'unknown', 'scan_ok': True, 'total_all': 0,
+             'warnings': 0, 'warning_detail': {}}
+    loaded_scope = load_json(scope_path)
+    if loaded_scope:
+        scope = loaded_scope
+
+totals = count_findings(sarif)
 
 analyze_outcome = os.environ.get('ANALYZE_RESULT', '')
 scan_failed = scope.get('scan_ok') is False or scope.get('reason') in ('no_sarif', 'invalid_sarif')
@@ -42,9 +138,7 @@ job_failed = analyze_outcome not in ('', 'success')
 warnings = scope.get('warnings', 0)
 
 errors = 0
-if scan_failed:
-    errors = 1
-elif job_failed:
+if scan_failed or job_failed:
     errors = 1
 
 
@@ -113,6 +207,9 @@ if warnings:
 if scope.get('scoped'):
     base = (scope.get('base') or '')[:7]
     head = (scope.get('head') or '')[:7]
-    lines += ['', f"_Scope: {scope.get('changed_count', 0)} changed file(s) in this PR (`{base}...{head}`)._"]
+    scope_line = f"_Scope: {scope.get('changed_count', 0)} changed file(s) in this PR"
+    if base and head:
+        scope_line += f" (`{base}...{head}`)"
+    lines += ['', scope_line + '._']
 
 print('\n'.join(lines))
