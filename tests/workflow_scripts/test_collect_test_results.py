@@ -1,4 +1,5 @@
 import json
+import os
 
 
 def test_collects_failures_from_failed_suites(tmp_path, run_quality_script):
@@ -57,6 +58,16 @@ def test_successful_outcome_ignores_stale_failure_lines(tmp_path, run_quality_sc
     assert proc.returncode == 0
     data = json.loads((tmp_path / "test-results.json").read_text(encoding="utf-8"))
     assert data["suites"][0]["failures"] == []
+
+
+def test_demo_failure_one_for_grouped_comment(load_quality_script, tmp_path):
+    if os.environ.get("QUALITY_DEMO_FAILURE"):
+        assert False, "TEMPORARY DEMO first failure"
+
+
+def test_demo_failure_two_for_grouped_comment(load_quality_script, tmp_path):
+    if os.environ.get("QUALITY_DEMO_FAILURE"):
+        assert False, "TEMPORARY DEMO second failure"
 
 
 def test_custom_output_paths_are_honoured(tmp_path, run_quality_script):
