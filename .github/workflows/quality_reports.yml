@@ -131,11 +131,12 @@ jobs:
             fs.writeFileSync('changed-files.txt', files.map((f) => f.filename).join('\n') + '\n');
             fs.writeFileSync('changed-files.json', JSON.stringify(files, null, 2));
 
-            const { data: repo } = await github.rest.repos.get({
-              owner: context.repo.owner, repo: context.repo.repo,
-            });
-            const trustedBase = repo.default_branch;
             const requiredFiles = config.required;
+            // Compare against the PR's own base commit, not the repository's
+            // default branch: a PR may legitimately target another branch, and
+            // comparing to the default branch would report files as "modified"
+            // when the PR never touched them.
+            const baseRef = pr.base.sha;
 
             async function fileAt(ref, path) {
               try {
@@ -151,7 +152,7 @@ jobs:
             const modified = [];
             for (const path of requiredFiles) {
               const atHead = await fileAt(wr.head_sha, path);
-              const atBase = await fileAt(trustedBase, path);
+              const atBase = await fileAt(baseRef, path);
               if (atHead !== atBase) modified.push(path);
             }
 
