@@ -140,7 +140,7 @@ def test_git_failure_keeps_full_scan_when_diff_cannot_run(
             "EVENT_NAME": "push",
             "PR_BASE_SHA": "a" * 40,
             "PR_HEAD_SHA": "b" * 40,
-            "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
+            "PATH": str(bin_dir),
         },
     )
 
