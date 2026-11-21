@@ -108,12 +108,30 @@ jobs:
             const script = require('./.github/scripts/find_associated_pr.js');
             await script({ github, context, core });
 
+      - name: Write PR changed files
+        if: always() && steps.find_pr.outputs.number != ''
+        continue-on-error: true
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        env:
+          PR_NUMBER: ${{ steps.find_pr.outputs.number }}
+        with:
+          script: |
+            const fs = require('fs');
+            const { data: files } = await github.rest.pulls.listFiles({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: Number(process.env.PR_NUMBER),
+              per_page: 3000,
+            });
+            fs.writeFileSync('changed-files.json', JSON.stringify(files, null, 2));
+
       - name: Generate coverage and test PR comment
         if: always()
         id: coverage_comment
         shell: bash
         env:
-          BASE_REF: ${{ steps.find_pr.outputs.base || github.base_ref || 'develop' }}
+          CHANGED_FILES_JSON: changed-files.json
+          COVERAGE_XML_PATH: coverage.xml
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: python .github/scripts/test_coverage_comment.py > coverage-comment.md
 
