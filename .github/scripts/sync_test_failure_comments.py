@@ -102,7 +102,19 @@ class GitHubClient:
         return self.graphql(UNMINIMIZE_MUTATION, {"id": node_id})
 
     def list_comments(self, pr_number):
-        return self._request("GET", f"/issues/{pr_number}/comments?per_page=100")
+        comments = []
+        page = 1
+        while True:
+            batch = self._request(
+                "GET", f"/issues/{pr_number}/comments?per_page=100&page={page}"
+            )
+            if not batch:
+                break
+            comments.extend(batch)
+            if len(batch) < 100:
+                break
+            page += 1
+        return comments
 
     def create_comment(self, pr_number, body):
         return self._request("POST", f"/issues/{pr_number}/comments", {"body": body})

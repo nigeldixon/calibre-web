@@ -399,6 +399,8 @@ def test_github_client_wrappers_call_rest(load_quality_script, tmp_path, monkeyp
 
     def fake_request(method, url, headers=None, json=None, timeout=None):
         calls.append((method, url, json))
+        if method == "GET":
+            return FakeResponse(payload=[{"id": 1}], content=b"[{}]")
         return FakeResponse(
             payload=None if method == "DELETE" else {"ok": True},
             content=b"" if method == "DELETE" else b"{}",
@@ -406,16 +408,40 @@ def test_github_client_wrappers_call_rest(load_quality_script, tmp_path, monkeyp
 
     monkeypatch.setattr(script["requests"], "request", fake_request)
 
-    assert client.list_comments(5) == {"ok": True}
+    assert client.list_comments(5) == [{"id": 1}]
     assert client.create_comment(5, "body") == {"ok": True}
     assert client.update_comment(7, "body") == {"ok": True}
     assert client.delete_comment(7) is None
     assert calls == [
-        ("GET", "https://api.github.com/repos/owner/repo/issues/5/comments?per_page=100", None),
+        ("GET", "https://api.github.com/repos/owner/repo/issues/5/comments?per_page=100&page=1", None),
         ("POST", "https://api.github.com/repos/owner/repo/issues/5/comments", {"body": "body"}),
         ("PATCH", "https://api.github.com/repos/owner/repo/issues/comments/7", {"body": "body"}),
         ("DELETE", "https://api.github.com/repos/owner/repo/issues/comments/7", None),
     ]
+
+
+def test_github_client_paginates_all_comments(load_quality_script, tmp_path, monkeypatch):
+    script = load_module(load_quality_script, tmp_path, "sync_test_failure_comments.py")
+    client = script["GitHubClient"]("token", "https://api.github.com", "owner", "repo")
+    pages = {}
+
+    def fake_request(method, url, headers=None, json=None, timeout=None):
+        page = int(url.rsplit("page=", 1)[1])
+        pages[page] = url
+        if page in (1, 2):
+            payload = [{"id": n} for n in range((page - 1) * 100, page * 100)]
+        else:
+            payload = []
+        return FakeResponse(payload=payload, content=b"[]")
+
+    monkeypatch.setattr(script["requests"], "request", fake_request)
+
+    assert [c["id"] for c in client.list_comments(5)] == list(range(200))
+    assert pages == {
+        1: "https://api.github.com/repos/owner/repo/issues/5/comments?per_page=100&page=1",
+        2: "https://api.github.com/repos/owner/repo/issues/5/comments?per_page=100&page=2",
+        3: "https://api.github.com/repos/owner/repo/issues/5/comments?per_page=100&page=3",
+    }
 
 
 def test_graphql_variables_empty_state_and_http_errors(
