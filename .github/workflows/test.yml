@@ -149,8 +149,10 @@ jobs:
           FUNCTIONAL_OUTCOME: ${{ steps.functional_tests.outcome }}
         run: python .github/scripts/test_summary.py >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload coverage data artifact for fork PRs
-        if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.event.pull_request.base.repo.full_name
+      - name: Upload coverage data artifact
+        # Always upload so a PR created after this push can backfill its report
+        # from these artifacts instead of re-running the whole test suite.
+        if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: coverage-data

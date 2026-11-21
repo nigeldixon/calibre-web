@@ -28,6 +28,11 @@ jobs:
     name: Placeholder PR comments
     if: github.event_name == 'pull_request_target'
     runs-on: ubuntu-latest
+    # Serialize PR body writes with the backfill and push publishers.
+    concurrency:
+      group: quality-pr-body
+      cancel-in-progress: false
+      queue: max
     permissions:
       contents: read
       pull-requests: write
@@ -41,40 +46,72 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
         with:
           script: |
-            const { updateReports } = require('./.github/scripts/update_pr_body_reports.js');
-            await updateReports({
-              github, context, core,
-              pull_number: process.env.PR_NUMBER,
-              reports: [
-                {
-                  marker: '<!-- codeql-report -->',
-                  content: [
-                    '<!-- codeql-report -->',
-                    '## CodeQL analysis',
-                    '',
-                    '⏳ CodeQL analysis is queued/running. Results will appear here when the workflow completes.',
-                  ].join('\n'),
-                },
-                {
-                  marker: '<!-- semgrep-report -->',
-                  content: [
-                    '<!-- semgrep-report -->',
-                    '## Semgrep analysis',
-                    '',
-                    '⏳ Semgrep analysis is queued/running. Results will appear here when the workflow completes.',
-                  ].join('\n'),
-                },
-                {
-                  marker: '<!-- coverage-report -->',
-                  content: [
-                    '<!-- coverage-report -->',
-                    '## Patch coverage',
-                    '',
-                    '⏳ Tests are queued/running. Coverage and test results will appear here when the workflow completes.',
-                  ].join('\n'),
-                },
-              ],
+            const {
+              updateReports, SECTION_START, SECTION_END,
+            } = require('./.github/scripts/update_pr_body_reports.js');
+
+            const placeholders = [
+              {
+                marker: '<!-- codeql-report -->',
+                content: [
+                  '<!-- codeql-report -->',
+                  '## CodeQL analysis',
+                  '',
+                  '⏳ CodeQL analysis is queued/running. Results will appear here when the workflow completes.',
+                ].join('\n'),
+              },
+              {
+                marker: '<!-- semgrep-report -->',
+                content: [
+                  '<!-- semgrep-report -->',
+                  '## Semgrep analysis',
+                  '',
+                  '⏳ Semgrep analysis is queued/running. Results will appear here when the workflow completes.',
+                ].join('\n'),
+              },
+              {
+                marker: '<!-- coverage-report -->',
+                content: [
+                  '<!-- coverage-report -->',
+                  '## Patch coverage',
+                  '',
+                  '⏳ Tests are queued/running. Coverage and test results will appear here when the workflow completes.',
+                ].join('\n'),
+              },
+            ];
+
+            // Backfill runs in another workflow and may win the race. Never
+            // overwrite a panel that already holds real results.
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner, repo: context.repo.repo,
+              pull_number: Number(process.env.PR_NUMBER),
             });
+            const body = pr.body || '';
+            const start = body.indexOf(SECTION_START);
+            const end = start === -1 ? -1 : body.indexOf(SECTION_END, start);
+            const section = start !== -1 && end !== -1 ? body.slice(start, end) : '';
+            const markers = placeholders.map((r) => r.marker);
+            const todo = placeholders.filter((r) => {
+              const idx = section.indexOf(r.marker);
+              if (idx === -1) return true;
+              let next = section.length;
+              for (const m of markers) {
+                if (m === r.marker) continue;
+                const at = section.indexOf(m, idx + r.marker.length);
+                if (at !== -1 && at < next) next = at;
+              }
+              return section.slice(idx, next).includes('⏳');
+            });
+
+            if (todo.length) {
+              await updateReports({
+                github, context, core,
+                pull_number: Number(process.env.PR_NUMBER),
+                reports: todo,
+              });
+            } else {
+              core.info('Quality reports already present; skipping placeholders.');
+            }
 
   analyze:
     if: github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.event.pull_request.base.repo.full_name)
