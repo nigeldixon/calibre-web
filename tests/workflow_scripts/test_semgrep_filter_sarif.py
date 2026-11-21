@@ -69,6 +69,9 @@ def test_sarif_shape_validators_reject_bad_nested_types(load_quality_script, tmp
     assert script["valid_notification_shape"]({"level": 7}) is False
     assert script["valid_notification_shape"]({"message": "bad"}) is False
     assert script["valid_notification_shape"]({"descriptor": "bad"}) is False
+    assert script["valid_notification_shape"]({"descriptor": {"id": {"nested": 1}}}) is False
+    assert script["valid_notification_shape"]({"descriptor": {"id": ["x"]}}) is False
+    assert script["valid_notification_shape"]({"descriptor": {"id": "W1"}}) is True
     assert script["valid_notification_shape"]("bad") is False
     assert script["valid_run_shape"]({"tool": {"driver": {}}, "results": "bad"}) is False
     assert script["valid_run_shape"]({"tool": {"driver": {}}, "results": [{"level": 7}]}) is False

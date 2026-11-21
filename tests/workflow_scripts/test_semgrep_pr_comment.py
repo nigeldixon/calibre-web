@@ -74,6 +74,9 @@ def test_json_uri_and_counting_helpers(load_quality_script, tmp_path):
     assert script["valid_notification_shape"]({"level": 7}) is False
     assert script["valid_notification_shape"]({"message": "bad"}) is False
     assert script["valid_notification_shape"]({"descriptor": "bad"}) is False
+    assert script["valid_notification_shape"]({"descriptor": {"id": {"nested": 1}}}) is False
+    assert script["valid_notification_shape"]({"descriptor": {"id": ["x"]}}) is False
+    assert script["valid_notification_shape"]({"descriptor": {"id": "W1"}}) is True
     assert script["valid_notification_shape"]("bad") is False
     assert script["valid_sarif"]({"runs": ["bad"]}) is False
     assert script["valid_sarif"]({"runs": [{"tool": {"driver": {}}, "results": [{"level": 7}]}]}) is False

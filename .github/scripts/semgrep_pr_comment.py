@@ -81,8 +81,12 @@ def valid_notification_shape(notification):
     if not valid_message(notification.get('message')):
         return False
     descriptor = notification.get('descriptor')
-    if descriptor is not None and not isinstance(descriptor, dict):
-        return False
+    if descriptor is not None:
+        if not isinstance(descriptor, dict):
+            return False
+        descriptor_id = descriptor.get('id')
+        if descriptor_id is not None and not isinstance(descriptor_id, str):
+            return False
     return True
 
 
