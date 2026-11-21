@@ -52,9 +52,9 @@ def test_badge_helpers(load_quality_script, tmp_path):
     assert script["pct_to_color"](10)[0] == "red"
     assert script["coverage_marker"]("100 statements · 20 missed · 94% covered") == ""
     assert script["coverage_marker"]("100 statements · 20 missed · 80% covered") == ""
-    assert script["coverage_marker"]("75% covered") == "🟠 Low coverage"
-    assert script["coverage_marker"]("65% covered") == "🔴 Low coverage"
-    assert script["coverage_marker"]("35% covered") == "🔴 Low coverage"
+    assert script["coverage_marker"]("75% covered") == "⚠️ Low coverage"
+    assert script["coverage_marker"]("65% covered") == "❌ Low coverage"
+    assert script["coverage_marker"]("35% covered") == "❌ Low coverage"
     assert script["coverage_marker"]("no percentage") == ""
     assert script["bar"](0) == "░" * 20
     assert script["bar"](50) == "██████████░░░░░░░░░░"
@@ -224,7 +224,7 @@ def test_patch_coverage_report_uses_normalized_paths(tmp_path, run_quality_scrip
     assert proc.returncode == 0
     assert "**Full analysis:** [Workflow run](https://example.test/run/1)" in out
     assert (
-        "**Workflow script coverage:** 🔴 Low coverage "
+        "**Workflow script coverage:** ❌ Low coverage "
         "`673 statements · 432 missed · 36% covered`"
     ) in out
     assert "**Diff lines:** 2 &nbsp;|&nbsp; **Missing:** 1 &nbsp;|&nbsp; **Covered:** 1" in out
@@ -319,7 +319,7 @@ def test_missing_coverage_xml_still_reports_workflow_coverage(tmp_path, run_qual
 def test_medium_and_low_coverage_use_severity_icons(tmp_path, run_quality_script):
     term = tmp_path / "coverage-workflow-scripts-term.txt"
 
-    for percent, marker in ((75, "🟠 Low coverage"), (45, "🔴 Low coverage")):
+    for percent, marker in ((75, "⚠️ Low coverage"), (45, "❌ Low coverage")):
         term.write_text(f"TOTAL 100 30 {percent}%\n", encoding="utf-8")
         proc = run_quality_script(
             "test_coverage_comment.py",

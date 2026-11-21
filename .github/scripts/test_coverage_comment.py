@@ -140,8 +140,8 @@ def coverage_marker(total):
     if percent >= 80:
         return ""
     if percent >= 70:
-        return "🟠 Low coverage"
-    return "🔴 Low coverage"
+        return "⚠️ Low coverage"
+    return "❌ Low coverage"
 
 
 def workflow_coverage_line():
