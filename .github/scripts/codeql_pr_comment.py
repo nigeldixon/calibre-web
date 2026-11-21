@@ -355,7 +355,7 @@ lines = [
     "## CodeQL analysis",
     "",
     scope_note,
-    "Jinja templates are excluded from JavaScript extraction because their template expressions are not parseable as JavaScript.",
+    "Jinja templates are rendered into parseable copies before JavaScript extraction; raw template expressions are not analyzed directly.",
     "",
 ]
 if full_analysis:
