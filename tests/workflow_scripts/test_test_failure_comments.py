@@ -332,7 +332,7 @@ def test_graphql_helpers_query_and_mutate_minimized_state(
         return {
             "nodes": [{"id": "n1", "isMinimized": True}],
             "minimizeComment": {"minimizedComment": {"id": "n1"}},
-            "unminimizeComment": {"minimizedComment": {"id": "n1"}},
+            "unminimizeComment": {"unminimizedComment": {"id": "n1"}},
         }
 
     client.graphql = graphql
@@ -343,7 +343,9 @@ def test_graphql_helpers_query_and_mutate_minimized_state(
 
     assert all(variables == {"ids": ["n1"]} or variables == {"id": "n1"} for _, variables in calls)
     assert "RESOLVED" in calls[1][0]
+    assert "minimizedComment" in calls[1][0]
     assert "unminimizeComment" in calls[2][0]
+    assert "unminimizedComment" in calls[2][0]
 
 
 def test_writes_payload_from_artifact(tmp_path, run_quality_script, write_json):

@@ -22,7 +22,7 @@ mutation($id: ID!) {
 UNMINIMIZE_MUTATION = """
 mutation($id: ID!) {
   unminimizeComment(input: {subjectId: $id}) {
-    minimizedComment {
+    unminimizedComment {
       ... on IssueComment { id isMinimized minimizedReason }
     }
   }
