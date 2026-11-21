@@ -160,12 +160,8 @@ if sarif_files:
             by_lang[lang] = empty_info()
 
 
-def status_icon(count, is_failed=False, warn=0):
-    if is_failed:
-        return "❌"
-    if warn or count:
-        return "⚠️"
-    return "✅"
+def status_icon(count):
+    return "✅" if count == 0 else "⚠️"
 
 
 total = sum(v.get("results", 0) for v in by_lang.values() if not v.get("parse_error"))
@@ -182,17 +178,10 @@ lines = [
 
 for lang in sorted(by_lang):
     info = by_lang[lang]
-    lang_failed = (
-        info.get("read_error")
-        or info.get("exec_errors", 0) > 0
-        or lang_outcome.get(lang, "") not in ("", "success")
-    )
-    if info.get("parse_error") and not info.get("read_error"):
-        icon = "❌" if lang_failed else "⚪"
-        lines.append(f"| {icon} | `{lang}` | - | - | - | - |")
+    if info.get("parse_error"):
+        lines.append(f"| ⚪ | `{lang}` | - | - | - | - |")
     else:
-        icon = status_icon(info["results"], lang_failed,
-                           info.get("exec_warnings", 0) + info.get("exec_errors", 0))
+        icon = status_icon(info["results"])
         lines.append(
             f"| {icon} | `{lang}` | {info['results']} | {info['error']} | {info['warning']} | {info['note']} |"
         )

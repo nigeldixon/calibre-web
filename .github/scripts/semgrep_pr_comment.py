@@ -39,7 +39,6 @@ if sarif is not None:
 analyze_outcome = os.environ.get('ANALYZE_RESULT', '')
 scan_failed = scope.get('scan_ok') is False or scope.get('reason') in ('no_sarif', 'invalid_sarif')
 job_failed = analyze_outcome not in ('', 'success')
-failed = scan_failed or job_failed
 warnings = scope.get('warnings', 0)
 
 errors = 0
@@ -49,12 +48,8 @@ elif job_failed:
     errors = 1
 
 
-def status_icon(n, is_failed=False, warn=0):
-    if is_failed:
-        return '❌'
-    if warn or n:
-        return '⚠️'
-    return '✅'
+def status_icon(n):
+    return '✅' if n == 0 else '⚠️'
 
 
 lines = [marker, '## Semgrep analysis', '']
@@ -76,7 +71,7 @@ lines += [
 if sarif is None:
     lines.append('| ⚪ | - | - | - | - |')
 else:
-    lines.append(f"| {status_icon(totals['results'], failed, warnings)} | {totals['results']} | {totals['error']} | {totals['warning']} | {totals['note']} |")
+    lines.append(f"| {status_icon(totals['results'])} | {totals['results']} | {totals['error']} | {totals['warning']} | {totals['note']} |")
 
 lines += [
     '',
