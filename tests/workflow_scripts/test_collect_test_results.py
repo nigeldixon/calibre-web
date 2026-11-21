@@ -86,6 +86,7 @@ def test_summary_of_no_tests_and_word_only_fallback(
         "no tests ran in 0.10s"
     )
     assert script["summary_of"](["all good", "5 passed"]) == "5 passed"
+    assert script["summary_of"](["not a summary"]) == "no results"
 
 
 def test_custom_output_paths_are_honoured(tmp_path, run_quality_script):

@@ -271,8 +271,7 @@ def coverage_section():
                     details.append(f"- `{filename}`: {file_covered}/{file_total} covered; missing lines {', '.join(map(str, missing[:20]))}")
                 else:
                     details.append(f"- `{filename}`: {file_covered}/{file_total} covered")
-            if details:
-                out += ["", "<details><summary>Patch coverage details</summary>", ""] + details + ["", "</details>"]
+            out += ["", "<details><summary>Patch coverage details</summary>", ""] + details + ["", "</details>"]
         else:
             out += ["", "_Patch coverage could not be computed for this run._"]
     else:

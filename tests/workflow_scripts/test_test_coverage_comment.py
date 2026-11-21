@@ -61,6 +61,33 @@ def test_badge_helpers(load_quality_script, tmp_path):
     assert script["bar"](150) == "█" * 20
 
 
+def test_load_test_results_ignores_invalid_suites_and_status_icons(
+    load_quality_script, tmp_path, monkeypatch, write_json
+):
+    script = load_helpers(load_quality_script, tmp_path)
+    results_path = write_json(
+        tmp_path / "test-results.json",
+        {
+            "suites": [
+                "not-a-suite",
+                {"key": "unit_tests", "outcome": "skipped", "summary": "skipped"},
+                {"key": "e2e_tests", "outcome": "unknown"},
+            ],
+            "run_url": "https://example.test/run/1",
+        },
+    )
+    monkeypatch.setitem(script, "test_results_path", str(results_path))
+
+    suites = script["load_test_results"]()
+
+    assert len(suites) == 4
+    assert suites[1]["outcome"] == "skipped"
+    assert suites[2]["outcome"] == "unknown"
+    assert script["run_url"] == "https://example.test/run/1"
+    assert script["status_icon"]("skipped") == "⏭️"
+    assert script["status_icon"]("unknown") == "⚪"
+
+
 def test_coverage_by_file_ignores_malformed_and_empty_entries(load_quality_script, tmp_path):
     script = load_helpers(load_quality_script, tmp_path)
     coverage_by_file = script["coverage_by_file"]

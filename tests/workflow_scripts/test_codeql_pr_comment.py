@@ -57,6 +57,12 @@ def test_partial_run_counts_missing_language_and_keeps_details_in_sync(
             notifications=[
                 notification("error", "E1", "scan aborted", "cps/a.py"),
                 notification("warning", "W1", "timeout", "cps/a.py"),
+                {
+                    "level": "note",
+                    "descriptor": {"id": "N1"},
+                    "message": {"text": "informational"},
+                },
+                {"level": "warning", "message": {"text": "no location"}},
             ],
         ),
     )
@@ -79,14 +85,15 @@ def test_partial_run_counts_missing_language_and_keeps_details_in_sync(
     out = proc.stdout
     assert proc.returncode == 0
     assert "**Whole-solution issues:** 2 · **In changed files:** 1" in out
-    assert "**Analysis errors:** 2 · **Analysis warnings:** 1" in out
+    assert "**Analysis errors:** 2 · **Analysis warnings:** 2" in out
     assert "| ⚪ | `javascript-typescript` | - | - | - | - |" in out
     assert "| ⚠️ | `python` | 1 | 1 | 0 | 0 |" in out
     assert "<details><summary>❌ Analysis errors (2)</summary>" in out
     assert "- `cps/a.py` — E1: scan aborted" in out
     assert "- No SARIF artifact was produced for `javascript-typescript`." in out
-    assert "<details><summary>⚠️ Analysis warnings (1)</summary>" in out
+    assert "<details><summary>⚠️ Analysis warnings (2)</summary>" in out
     assert "- `cps/a.py` — W1: timeout" in out
+    assert "- warning: no location" in out
     assert "❌ CodeQL analyze failed for: `python`." in out
     assert "**Full analysis:** [All CodeQL alerts](https://example.test/alerts) · [Workflow run](https://example.test/run/1)" in out
 
@@ -102,11 +109,11 @@ def write_fake_git(tmp_path, log_path, diff_fail=False):
         'if [ "$1" = "diff" ]; then\n'
         '  if [ "$3" = "$FAKE_BASE...$FAKE_HEAD" ] && [ "$FAKE_DIFF_FAIL" = "1" ]; then exit 1; fi\n'
         '  if [ "$3" = "$FAKE_BASE...$FAKE_HEAD" ]; then\n'
-        '    printf "%s\\n" "cps/a.py" "./cps/b.py"\n'
+        '    printf "%s\\n" "cps/a.py" "" "./cps/b.py"\n'
         "    exit 0\n"
         "  fi\n"
         '  if [ "$FAKE_SECOND_DIFF_FAIL" = "1" ]; then exit 1; fi\n'
-        '  printf "%s\\n" "cps/c.py"\n'
+        '  printf "%s\\n" "cps/c.py" ""\n'
         "  exit 0\n"
         "fi\n"
         "exit 0\n",
@@ -267,6 +274,113 @@ def test_changed_file_list_normalizes_prefixes_and_separators(
     out = proc.stdout
     assert proc.returncode == 0
     assert "**Whole-solution issues:** 3 · **In changed files:** 2" in out
+
+
+def test_unreadable_status_file_is_recorded_as_failed(
+    tmp_path, run_quality_script, write_json
+):
+    python_dir = tmp_path / "codeql-results" / "codeql-sarif-python"
+    python_dir.mkdir(parents=True)
+    write_json(python_dir / "results.sarif", sarif(results=[]))
+    (python_dir / "status.txt").mkdir()
+    js_dir = tmp_path / "codeql-results" / "codeql-sarif-javascript-typescript"
+    js_dir.mkdir(parents=True)
+    write_json(js_dir / "results.sarif", sarif(results=[]))
+
+    proc = run_quality_script("codeql_pr_comment.py", tmp_path)
+
+    out = proc.stdout
+    assert proc.returncode == 0
+    assert "- CodeQL analyze failed for `python`." in out
+    assert "❌ CodeQL analyze failed for: `python`." in out
+
+
+def test_unreadable_changed_file_list_falls_back_to_all_results(
+    tmp_path, run_quality_script, write_json
+):
+    changed = tmp_path / "changed-files.txt"
+    changed.mkdir()
+    python_dir = tmp_path / "codeql-results" / "codeql-sarif-python"
+    python_dir.mkdir(parents=True)
+    write_json(python_dir / "results.sarif", sarif(results=[finding("cps/a.py", "warning")]))
+    js_dir = tmp_path / "codeql-results" / "codeql-sarif-javascript-typescript"
+    js_dir.mkdir(parents=True)
+    write_json(js_dir / "results.sarif", sarif(results=[]))
+
+    proc = run_quality_script(
+        "codeql_pr_comment.py",
+        tmp_path,
+        env={"CHANGED_FILES_FILE": str(changed)},
+    )
+
+    out = proc.stdout
+    assert proc.returncode == 0
+    assert "**Whole-solution issues:** 1 · **In changed files:** 1" in out
+
+
+def test_missing_git_executable_reports_all_results(
+    tmp_path, run_quality_script, write_json
+):
+    empty_bin = tmp_path / "empty-bin"
+    empty_bin.mkdir()
+    python_dir = tmp_path / "codeql-results" / "codeql-sarif-python"
+    python_dir.mkdir(parents=True)
+    write_json(python_dir / "results.sarif", sarif(results=[finding("cps/a.py", "warning")]))
+    js_dir = tmp_path / "codeql-results" / "codeql-sarif-javascript-typescript"
+    js_dir.mkdir(parents=True)
+    write_json(js_dir / "results.sarif", sarif(results=[]))
+
+    proc = run_quality_script(
+        "codeql_pr_comment.py",
+        tmp_path,
+        env={
+            "PATH": str(empty_bin),
+            "PR_BASE_SHA": "a" * 40,
+            "PR_HEAD_SHA": "b" * 40,
+        },
+    )
+
+    out = proc.stdout
+    assert proc.returncode == 0
+    assert "_Scope: could not determine PR diff; showing all SARIF results._" in out
+    assert "**In changed files:** 1" in out
+
+
+def test_result_uri_normalization_and_related_locations(
+    tmp_path, run_quality_script, write_json
+):
+    changed = tmp_path / "changed-files.txt"
+    changed.write_text("cps/a.py\ncps/related.py\n", encoding="utf-8")
+    python_dir = tmp_path / "codeql-results" / "codeql-sarif-python"
+    python_dir.mkdir(parents=True)
+    write_json(
+        python_dir / "results.sarif",
+        sarif(
+            results=[
+                finding("./cps/a.py", "warning"),
+                {
+                    "level": "note",
+                    "message": {"text": "found via related location"},
+                    "relatedLocations": [
+                        {"physicalLocation": {"artifactLocation": {"uri": "cps/other.py"}}},
+                        {"physicalLocation": {"artifactLocation": {"uri": "./cps/related.py"}}},
+                    ],
+                },
+            ]
+        ),
+    )
+    js_dir = tmp_path / "codeql-results" / "codeql-sarif-javascript-typescript"
+    js_dir.mkdir(parents=True)
+    write_json(js_dir / "results.sarif", sarif(results=[]))
+
+    proc = run_quality_script(
+        "codeql_pr_comment.py",
+        tmp_path,
+        env={"CHANGED_FILES_FILE": str(changed)},
+    )
+
+    assert proc.returncode == 0
+    assert "**In changed files:** 2" in proc.stdout
 
 
 def test_result_levels_and_missing_changed_file_scope_are_counted(

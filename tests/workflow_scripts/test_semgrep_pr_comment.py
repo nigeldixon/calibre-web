@@ -197,6 +197,28 @@ def test_legacy_path_missing_scope_file_is_an_error(tmp_path, run_quality_script
     assert "_Semgrep SARIF could not be parsed; the scan is marked as failed._" in out
 
 
+def test_empty_scope_file_is_ignored(tmp_path, run_quality_script, write_json):
+    results = tmp_path / "semgrep-results"
+    results.mkdir()
+    write_json(
+        results / "semgrep.sarif",
+        {"version": "2.1.0", "runs": [{"tool": {"driver": {"name": "semgrep"}}, "results": []}]},
+    )
+    write_json(results / "scope.json", {})
+
+    proc = run_quality_script(
+        "semgrep_pr_comment.py",
+        tmp_path,
+        env={"ANALYZE_RESULT": "success", "GITHUB_EVENT_NAME": "schedule"},
+    )
+
+    out = proc.stdout
+    assert proc.returncode == 0
+    assert "Automated Semgrep summary (scheduled full scan)." in out
+    assert "**Analysis errors:** 0" in out
+    assert "**Analysis warnings:** 0" in out
+
+
 def test_trusted_path_filters_findings_and_reports_exec_errors(tmp_path, run_quality_script, write_json):
     write_json(tmp_path / "semgrep.raw.sarif", make_raw_sarif())
     (tmp_path / "scan-exit-code.txt").write_text("0\n", encoding="utf-8")
