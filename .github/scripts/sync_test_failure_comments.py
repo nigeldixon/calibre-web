@@ -274,7 +274,7 @@ def sync(payload, client, pr_number, resolve_missing=True):
     return actions
 
 
-if __name__ == "__main__":
+def main():
     payload_path = os.environ.get("TEST_FAILURE_COMMENTS_JSON", "test-failure-comments.json").strip() or "test-failure-comments.json"
     repository = os.environ.get("GITHUB_REPOSITORY", "").strip()
     owner, _, repo = repository.partition("/")
@@ -299,3 +299,7 @@ if __name__ == "__main__":
     )
     actions = sync(payload, client, int(pr_number), resolve_missing=resolve_missing)
     print(json.dumps(actions))
+
+
+if __name__ == "__main__":
+    main()

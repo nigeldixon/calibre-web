@@ -130,6 +130,34 @@ def test_builds_one_grouped_comment_per_suite(load_quality_script, tmp_path):
     assert passing_suite["legacy_markers"] == []
 
 
+def test_build_payload_skips_invalid_entries_and_empty_run_url(
+    load_quality_script, tmp_path
+):
+    script = load_module(load_quality_script, tmp_path, "test_failure_comments.py")
+
+    payload = script["build_payload"](
+        {
+            "suites": [
+                "not-a-suite",
+                {
+                    "key": "unit_tests",
+                    "name": "Unit (in-process)",
+                    "failures": [
+                        {"nodeid": "tests/x.py::test_a"},
+                        None,
+                        {"message": "missing nodeid"},
+                    ],
+                },
+            ]
+        }
+    )
+
+    assert len(payload["suites"]) == 1
+    assert payload["suites"][0]["failure_count"] == 1
+    assert len(payload["comments"]) == 1
+    assert "**Full analysis:**" not in payload["comments"][0]["body"]
+
+
 def test_group_marker_is_stable_and_distinct_from_legacy_markers(
     load_quality_script, tmp_path
 ):
@@ -362,6 +390,271 @@ def test_graphql_helpers_query_and_mutate_minimized_state(
     assert "minimizedComment" in calls[1][0]
     assert "unminimizeComment" in calls[2][0]
     assert "unminimizedComment" in calls[2][0]
+
+
+def test_github_client_wrappers_call_rest(load_quality_script, tmp_path, monkeypatch):
+    script = load_module(load_quality_script, tmp_path, "sync_test_failure_comments.py")
+    client = script["GitHubClient"]("token", "https://api.github.com", "owner", "repo")
+    calls = []
+
+    def fake_request(method, url, headers=None, json=None, timeout=None):
+        calls.append((method, url, json))
+        return FakeResponse(
+            payload=None if method == "DELETE" else {"ok": True},
+            content=b"" if method == "DELETE" else b"{}",
+        )
+
+    monkeypatch.setattr(script["requests"], "request", fake_request)
+
+    assert client.list_comments(5) == {"ok": True}
+    assert client.create_comment(5, "body") == {"ok": True}
+    assert client.update_comment(7, "body") == {"ok": True}
+    assert client.delete_comment(7) is None
+    assert calls == [
+        ("GET", "https://api.github.com/repos/owner/repo/issues/5/comments?per_page=100", None),
+        ("POST", "https://api.github.com/repos/owner/repo/issues/5/comments", {"body": "body"}),
+        ("PATCH", "https://api.github.com/repos/owner/repo/issues/comments/7", {"body": "body"}),
+        ("DELETE", "https://api.github.com/repos/owner/repo/issues/comments/7", None),
+    ]
+
+
+def test_graphql_variables_empty_state_and_http_errors(
+    load_quality_script, tmp_path, monkeypatch
+):
+    script = load_module(load_quality_script, tmp_path, "sync_test_failure_comments.py")
+    client = script["GitHubClient"]("token", "https://api.github.com", "owner", "repo")
+    calls = []
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        calls.append(json)
+        return FakeResponse(
+            payload={"data": {"nodes": [None, {"isMinimized": False}]}}
+        )
+
+    monkeypatch.setattr(script["requests"], "post", fake_post)
+
+    assert client.minimized_states([]) == {}
+    assert calls == []
+    assert client.minimized_states(["n1"]) == {}
+    assert calls[-1]["variables"] == {"ids": ["n1"]}
+    assert client.graphql("query", {"x": 1}) == {"nodes": [None, {"isMinimized": False}]}
+    assert calls[-1]["variables"] == {"x": 1}
+
+    def fake_failed_post(url, headers=None, json=None, timeout=None):
+        return FakeResponse(ok=False, status_code=403, text="forbidden")
+
+    monkeypatch.setattr(script["requests"], "post", fake_failed_post)
+    with pytest.raises(RuntimeError, match="403 forbidden"):
+        client.graphql("query")
+
+
+def test_helpers_handle_missing_metadata(load_quality_script, tmp_path):
+    script = load_module(load_quality_script, tmp_path, "sync_test_failure_comments.py")
+
+    assert script["suite_name_from_body"]("no heading") == ""
+    assert script["resolved_body"]("<!-- test-failure:aaaaaaaaaaaa -->") == (
+        "<!-- test-failure:aaaaaaaaaaaa -->\n"
+        "## ✅ Test failures resolved: Tests\n\n"
+        "Resolved in the latest passing run."
+    )
+
+    suites, legacy, names = script["payload_index"](
+        {
+            "suites": [
+                "not-a-suite",
+                {"name": "Missing marker"},
+                {"marker": "<!-- test-failure:bbbbbbbbbbbb -->"},
+            ],
+            "comments": [
+                "not-a-comment",
+                {"body": "missing marker"},
+                {
+                    "marker": "<!-- test-failure:cccccccccccc -->",
+                    "body": "## ❌ Test failures: Derived suite",
+                },
+                {"marker": "<!-- test-failure:eeeeeeeeeeee -->", "body": "body"},
+            ],
+        }
+    )
+
+    assert set(suites) == {
+        "<!-- test-failure:bbbbbbbbbbbb -->",
+        "<!-- test-failure:cccccccccccc -->",
+        "<!-- test-failure:eeeeeeeeeeee -->",
+    }
+    assert suites["<!-- test-failure:cccccccccccc -->"]["name"] == "Derived suite"
+    assert legacy == {}
+    assert names == {}
+    assert (
+        script["primary_for"](
+            "unknown",
+            "## ❌ Test failures: Derived suite",
+            {},
+            {},
+            {"Derived suite": "<!-- test-failure:dddddddddddd -->"},
+        )
+        == "<!-- test-failure:dddddddddddd -->"
+    )
+
+
+def test_sync_skips_invalid_entries_and_unchanged_bodies(
+    load_quality_script, tmp_path
+):
+    script = load_module(load_quality_script, tmp_path, "sync_test_failure_comments.py")
+    marker = "<!-- test-failure:aaaaaaaaaaaa -->"
+    body = comment_body(marker, "Workflow script tests", ["test_a"])
+    client = FakeClient(
+        comments=[
+            {"id": 1, "body": "not a bot comment"},
+            {"id": 2, "node_id": "n2", "body": body},
+        ]
+    )
+    payload = {
+        "suites": [suite(marker, "Workflow script tests", 1)],
+        "comments": ["bad", {"body": "missing marker"}, {"marker": marker, "body": body}],
+    }
+
+    actions = script["sync"](payload, client, 5, resolve_missing=False)
+
+    assert actions == []
+    assert client.updated == []
+    assert client.created == []
+
+
+def test_sync_handles_clients_without_minimized_state_support(
+    load_quality_script, tmp_path
+):
+    script = load_module(load_quality_script, tmp_path, "sync_test_failure_comments.py")
+    marker = "<!-- test-failure:aaaaaaaaaaaa -->"
+
+    class BareClient:
+        def __init__(self, comments):
+            self.comments = comments
+            self.updated = []
+            self.minimized = []
+
+        def list_comments(self, pr_number):
+            return self.comments
+
+        def update_comment(self, comment_id, body):
+            self.updated.append((comment_id, body))
+
+        def minimize_comment(self, node_id):
+            self.minimized.append(node_id)
+
+    client = BareClient(
+        comments=[
+            {
+                "id": 1,
+                "node_id": "n1",
+                "body": comment_body(marker, "Workflow script tests", ["old"]),
+            }
+        ]
+    )
+    payload = {
+        "suites": [suite(marker, "Workflow script tests", 0)],
+        "comments": [],
+    }
+
+    actions = script["sync"](payload, client, 5, resolve_missing=False)
+
+    assert ("resolved", marker) in actions
+    assert client.minimized == []
+
+
+def test_sync_leaves_unresolved_suite_when_run_still_fails(
+    load_quality_script, tmp_path
+):
+    script = load_module(load_quality_script, tmp_path, "sync_test_failure_comments.py")
+    marker = "<!-- test-failure:aaaaaaaaaaaa -->"
+    body = comment_body(marker, "Workflow script tests", ["old"])
+    client = FakeClient(comments=[{"id": 1, "node_id": "n1", "body": body}])
+    payload = {
+        "suites": [suite(marker, "Workflow script tests", 1)],
+        "comments": [],
+    }
+
+    actions = script["sync"](payload, client, 5, resolve_missing=False)
+
+    assert actions == []
+    assert client.updated == []
+
+
+def test_sync_keeps_already_resolved_comment_body_when_minimizing(
+    load_quality_script, tmp_path
+):
+    script = load_module(load_quality_script, tmp_path, "sync_test_failure_comments.py")
+    marker = "<!-- test-failure:aaaaaaaaaaaa -->"
+    body = script["resolved_body"](
+        comment_body(marker, "Workflow script tests", ["old"]),
+        "Workflow script tests",
+    )
+    client = FakeClient(comments=[{"id": 1, "node_id": "n1", "body": body}])
+    payload = {
+        "suites": [suite(marker, "Workflow script tests", 0)],
+        "comments": [],
+    }
+
+    actions = script["sync"](payload, client, 5, resolve_missing=False)
+
+    assert ("minimized", marker) in actions
+    assert all(action[0] != "resolved" for action in actions)
+    assert client.updated == []
+
+
+def test_main_reads_environment_and_prints_actions(
+    load_quality_script, tmp_path, monkeypatch, capsys, write_json
+):
+    script = load_module(load_quality_script, tmp_path, "sync_test_failure_comments.py")
+    payload_path = write_json(tmp_path / "payload.json", {"suites": [], "comments": []})
+    calls = {}
+
+    class FakeClient:
+        def __init__(self, token, api_url, owner, repo):
+            calls["client"] = (token, api_url, owner, repo)
+
+    def fake_sync(payload, client, pr_number, resolve_missing=True):
+        calls["sync"] = (payload, pr_number, resolve_missing)
+        return [("created", "<!-- test-failure:aaaaaaaaaaaa -->")]
+
+    monkeypatch.setenv("TEST_FAILURE_COMMENTS_JSON", str(payload_path))
+    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
+    monkeypatch.setenv("PR_NUMBER", "7")
+    monkeypatch.setenv("GITHUB_TOKEN", "token")
+    monkeypatch.setenv("RESOLVE_MISSING", "false")
+    monkeypatch.setitem(script, "GitHubClient", FakeClient)
+    monkeypatch.setitem(script, "sync", fake_sync)
+
+    script["main"]()
+
+    assert calls["client"] == ("token", "https://api.github.com", "owner", "repo")
+    assert calls["sync"][1:] == (7, False)
+    assert json.loads(capsys.readouterr().out) == [
+        ["created", "<!-- test-failure:aaaaaaaaaaaa -->"]
+    ]
+
+
+@pytest.mark.parametrize(
+    ("env", "message"),
+    [
+        ({"GITHUB_REPOSITORY": "owner/repo"}, "PR_NUMBER are required"),
+        (
+            {"GITHUB_REPOSITORY": "owner/repo", "PR_NUMBER": "7"},
+            "GITHUB_TOKEN is required",
+        ),
+    ],
+)
+def test_main_validates_required_environment(
+    load_quality_script, tmp_path, monkeypatch, env, message
+):
+    script = load_module(load_quality_script, tmp_path, "sync_test_failure_comments.py")
+    for key in ("GITHUB_REPOSITORY", "PR_NUMBER", "GITHUB_TOKEN"):
+        monkeypatch.delenv(key, raising=False)
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+
+    with pytest.raises(SystemExit, match=message):
+        script["main"]()
 
 
 def test_rest_and_graphql_requests_use_requests_with_errors(

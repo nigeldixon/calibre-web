@@ -59,6 +59,35 @@ def test_successful_outcome_ignores_stale_failure_lines(tmp_path, run_quality_sc
     assert data["suites"][0]["failures"] == []
 
 
+def test_read_lines_handles_missing_files_and_read_errors(
+    load_quality_script, tmp_path, monkeypatch
+):
+    script = load_quality_script("collect_test_results.py", tmp_path)
+
+    assert script["read_lines"]("") == []
+    assert script["read_lines"](str(tmp_path / "missing.txt")) == []
+
+    existing = tmp_path / "existing.txt"
+    existing.write_text("data", encoding="utf-8")
+
+    def fail_open(*args, **kwargs):
+        raise OSError("cannot read")
+
+    monkeypatch.setattr("builtins.open", fail_open)
+    assert script["read_lines"](str(existing)) == []
+
+
+def test_summary_of_no_tests_and_word_only_fallback(
+    load_quality_script, tmp_path
+):
+    script = load_quality_script("collect_test_results.py", tmp_path)
+
+    assert script["summary_of"](["noise", "no tests ran in 0.10s"]) == (
+        "no tests ran in 0.10s"
+    )
+    assert script["summary_of"](["all good", "5 passed"]) == "5 passed"
+
+
 def test_custom_output_paths_are_honoured(tmp_path, run_quality_script):
     (tmp_path / "custom.txt").write_text(
         "FAILED tests/unit/test_a.py::test_fail - boom\n2 failed in 0.10s\n",
