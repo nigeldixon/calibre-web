@@ -123,6 +123,11 @@ kobo = [
 [project.scripts]
 cps = "calibreweb.__main__:main"
 
+[tool.pytest.ini_options]
+# .github/scripts contains helpers named test_*.py that are CLI programs, not
+# pytest modules. Keep bare `pytest` from importing and executing them.
+testpaths = ["tests"]
+
 [tool.setuptools]
 include-package-data = true
 
