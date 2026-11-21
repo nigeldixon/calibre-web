@@ -125,7 +125,7 @@ jobs:
         with:
           script: |
             const fs = require('fs');
-            const { updateReport } = require('./.github/scripts/update_pr_body_reports.js');
+            const { updateReport, refreshTotals } = require('./.github/scripts/update_pr_body_reports.js');
             if (!fs.existsSync('coverage-comment.md')) {
               core.info('coverage-comment.md not found; skipping PR body update.');
             } else {
@@ -137,6 +137,7 @@ jobs:
                 content,
               });
             }
+            await refreshTotals({ github, context, core, pull_number: process.env.PR_NUMBER });
 
       - name: Fail if any test suite failed
         if: always()

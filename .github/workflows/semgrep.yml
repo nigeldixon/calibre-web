@@ -53,13 +53,17 @@ jobs:
         shell: bash
         run: |
           mkdir -p semgrep-results
+          set +e
           semgrep scan \
             --config p/default \
             --config p/python \
             --config p/javascript \
             --metrics=off \
             --sarif --output semgrep-results/semgrep.raw.sarif \
-            . || true
+            . 2>&1 | tee semgrep-scan.log
+          status=${PIPESTATUS[0]}
+          printf '%s\n' "$status" > semgrep-results/scan-exit-code.txt
+          exit "$status"
 
       - name: Filter SARIF to PR-changed files
         if: always()
@@ -134,7 +138,7 @@ jobs:
         with:
           script: |
             const fs = require('fs');
-            const { updateReport } = require('./.github/scripts/update_pr_body_reports.js');
+            const { updateReport, refreshTotals } = require('./.github/scripts/update_pr_body_reports.js');
             const content = fs.readFileSync('semgrep-comment.md', 'utf8');
             await updateReport({
               github, context, core,
@@ -142,3 +146,4 @@ jobs:
               marker: '<!-- semgrep-report -->',
               content,
             });
+            await refreshTotals({ github, context, core, pull_number: process.env.PR_NUMBER });

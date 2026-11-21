@@ -106,12 +106,33 @@ jobs:
           output: codeql-results/${{ matrix.language }}
           upload: always
 
+      - name: Record analyze outcome
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p codeql-results/${{ matrix.language }}
+          echo '${{ steps.analyze.outcome }}' > codeql-results/${{ matrix.language }}/status.txt
+
+      - name: Validate CodeQL SARIF
+        if: always()
+        shell: bash
+        run: |
+          shopt -s nullglob
+          files=(codeql-results/${{ matrix.language }}/*.sarif)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No CodeQL SARIF was produced for ${{ matrix.language }}"
+            exit 1
+          fi
+          for f in "${files[@]}"; do
+            python -m json.tool "$f" > /dev/null || { echo "Invalid SARIF: $f"; exit 1; }
+          done
+
       - name: Upload SARIF artifact
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: codeql-sarif-${{ matrix.language }}
-          path: codeql-results/${{ matrix.language }}/*.sarif
+          path: codeql-results/${{ matrix.language }}/
           if-no-files-found: warn
           retention-days: 5
 
@@ -167,7 +188,7 @@ jobs:
         with:
           script: |
             const fs = require('fs');
-            const { updateReport } = require('./.github/scripts/update_pr_body_reports.js');
+            const { updateReport, refreshTotals } = require('./.github/scripts/update_pr_body_reports.js');
             const content = fs.readFileSync('codeql-comment.md', 'utf8');
             await updateReport({
               github, context, core,
@@ -175,3 +196,4 @@ jobs:
               marker: '<!-- codeql-report -->',
               content,
             });
+            await refreshTotals({ github, context, core, pull_number: process.env.PR_NUMBER });

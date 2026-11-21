@@ -1,7 +1,11 @@
 const SECTION_START = '<!-- quality-reports:start -->';
 const SECTION_END = '<!-- quality-reports:end -->';
 const SECTION_HEADER = '\n\n---\n## Quality reports\n';
-const REPORT_MARKERS = ['<!-- codeql-report -->', '<!-- semgrep-report -->', '<!-- coverage-report -->'];
+const SUMMARY_MARKER = '<!-- quality-totals -->';
+const REPORT_MARKERS = [SUMMARY_MARKER, '<!-- codeql-report -->', '<!-- semgrep-report -->', '<!-- coverage-report -->'];
+const ISSUES_LABEL = '**Whole-solution issues:** ';
+const ERRORS_LABEL = '**Analysis errors:** ';
+const WARNINGS_LABEL = '**Analysis warnings:** ';
 
 function ensureSection(body) {
   body = body || '';
@@ -88,11 +92,48 @@ async function updateReports({ github, context, core, owner, repo, pull_number, 
   return result;
 }
 
+function sumLabel(body, label) {
+  let total = 0;
+  let pos = 0;
+  while ((pos = body.indexOf(label, pos)) !== -1) {
+    const start = pos + label.length;
+    const end = body.indexOf('\n', start);
+    const text = body.slice(start, end === -1 ? body.length : end).trim();
+    const n = Number.parseInt(text, 10);
+    if (Number.isFinite(n)) total += n;
+    pos = start;
+  }
+  return total;
+}
+
+async function refreshTotals({ github, context, core, owner, repo, pull_number }) {
+  owner = owner || context.repo.owner;
+  repo = repo || context.repo.repo;
+  const pullNumber = Number(pull_number);
+  if (!pullNumber) {
+    core.info('No pull request number provided; skipping quality totals update.');
+    return { updated: false, reason: 'no_pr' };
+  }
+
+  const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number: pullNumber });
+  const body = pr.body || '';
+  const content = [
+    SUMMARY_MARKER,
+    `**Quality total:** ${sumLabel(body, ISSUES_LABEL)} issues found · ` +
+      `${sumLabel(body, ERRORS_LABEL)} analysis errors · ` +
+      `${sumLabel(body, WARNINGS_LABEL)} analysis warnings`,
+  ].join('\n');
+
+  return updateReport({ github, context, core, owner, repo, pull_number, marker: SUMMARY_MARKER, content });
+}
+
 module.exports = {
   SECTION_START,
   SECTION_END,
+  SUMMARY_MARKER,
   ensureSection,
   upsertReport,
   updateReport,
   updateReports,
+  refreshTotals,
 };

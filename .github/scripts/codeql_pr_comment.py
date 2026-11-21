@@ -6,8 +6,28 @@ import subprocess
 
 marker = "<!-- codeql-report -->"
 sarif_files = sorted(glob.glob("codeql-results/**/*.sarif", recursive=True))
+status_files = sorted(glob.glob("codeql-results/**/status.txt", recursive=True))
 analyze_outcomes = os.environ.get("ANALYZE_RESULT", "")
 expected_langs = ["javascript-typescript", "python"]
+
+
+def lang_from_path(path):
+    for part in path.replace("\\", "/").split("/"):
+        if part.startswith("codeql-sarif-"):
+            return part[len("codeql-sarif-"):]
+    return None
+
+
+lang_outcome = {}
+for status_file in status_files:
+    lang = lang_from_path(status_file)
+    if not lang:
+        continue
+    try:
+        with open(status_file, "r", encoding="utf-8") as f:
+            lang_outcome[lang] = f.read().strip()
+    except Exception:
+        lang_outcome[lang] = "unknown"
 
 base_sha = os.environ.get("PR_BASE_SHA", "").strip()
 head_sha = os.environ.get("PR_HEAD_SHA", "").strip()
@@ -30,12 +50,10 @@ if base_sha and head_sha:
                 line = line.strip().replace("\\", "/")
                 if line:
                     changed_files.add(line)
-                    # also add without leading ./ just in case
                     if line.startswith("./"):
                         changed_files.add(line[2:])
             scope_note = "Automated CodeQL summary for files changed in this PR (filtered from analysis SARIF)."
         else:
-            # fallback: try two-dot diff
             diff2 = subprocess.run(
                 ["git", "diff", "--name-only", base_sha, head_sha],
                 check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
@@ -50,6 +68,7 @@ if base_sha and head_sha:
     except Exception:
         changed_files = None
 
+
 def normalize_uri(uri):
     if not uri:
         return ""
@@ -57,6 +76,7 @@ def normalize_uri(uri):
     while uri.startswith("./"):
         uri = uri[2:]
     return uri
+
 
 def result_in_changed_files(result, changed):
     if changed is None:
@@ -67,7 +87,6 @@ def result_in_changed_files(result, changed):
         uri = normalize_uri(art.get("uri", ""))
         if uri in changed:
             return True
-    # related locations as fallback
     for loc in (result.get("relatedLocations") or []):
         phys = (loc or {}).get("physicalLocation") or {}
         art = phys.get("artifactLocation") or {}
@@ -76,28 +95,51 @@ def result_in_changed_files(result, changed):
             return True
     return False
 
+
+def empty_info(read_error=False):
+    return {
+        "results": 0, "error": 0, "warning": 0, "note": 0,
+        "parse_error": True, "read_error": read_error,
+        "exec_errors": 0, "exec_warnings": 0,
+    }
+
+
 by_lang = {}
+total_all = 0
+analysis_errors = 0
+analysis_warnings = 0
+
 if not sarif_files:
     for lang in expected_langs:
-        by_lang[lang] = {"results": 0, "error": 0, "warning": 0, "note": 0, "parse_error": True}
+        by_lang[lang] = empty_info()
+
 for path in sarif_files:
-    # path like codeql-results/codeql-sarif-python/python.sarif
-    parts = path.replace("\\", "/").split("/")
-    lang = "unknown"
-    for p in parts:
-        if p.startswith("codeql-sarif-"):
-            lang = p.replace("codeql-sarif-", "")
-            break
+    lang = lang_from_path(path) or "unknown"
     try:
         with open(path, "r", encoding="utf-8") as f:
             sarif = json.load(f)
     except Exception:
-        by_lang[lang] = {"results": 0, "error": 0, "warning": 0, "note": 0, "parse_error": True}
+        by_lang[lang] = empty_info(read_error=True)
+        analysis_errors += 1
         continue
-    info = {"results": 0, "error": 0, "warning": 0, "note": 0, "parse_error": False}
+
+    info = {
+        "results": 0, "error": 0, "warning": 0, "note": 0,
+        "parse_error": False, "read_error": False,
+        "exec_errors": 0, "exec_warnings": 0,
+    }
     for run in sarif.get("runs", []) or []:
-        results = run.get("results", []) or []
-        for r in results:
+        total_all += len(run.get("results", []) or [])
+        for inv in run.get("invocations") or []:
+            for n in inv.get("toolExecutionNotifications") or []:
+                level = (n.get("level") or "").lower()
+                if level == "error":
+                    info["exec_errors"] += 1
+                    analysis_errors += 1
+                elif level == "warning":
+                    info["exec_warnings"] += 1
+                    analysis_warnings += 1
+        for r in run.get("results", []) or []:
             if not result_in_changed_files(r, changed_files):
                 continue
             info["results"] += 1
@@ -111,14 +153,22 @@ for path in sarif_files:
             else:
                 info["warning"] += 1
     by_lang[lang] = info
-# Ensure both expected languages are always shown when SARIF files are present
+
 if sarif_files:
     for lang in expected_langs:
         if lang not in by_lang:
-            by_lang[lang] = {"results": 0, "error": 0, "warning": 0, "note": 0, "parse_error": True}
+            by_lang[lang] = empty_info()
 
-def status_icon(count):
-    return "✅" if count == 0 else "⚠️"
+
+def status_icon(count, is_failed=False, warn=0):
+    if is_failed:
+        return "❌"
+    if warn or count:
+        return "⚠️"
+    return "✅"
+
+
+total = sum(v.get("results", 0) for v in by_lang.values() if not v.get("parse_error"))
 
 lines = [
     marker,
@@ -130,26 +180,39 @@ lines = [
     "|:------:|----------|--------:|------:|--------:|-----:|",
 ]
 
-if by_lang:
-    for lang in sorted(by_lang):
-        info = by_lang[lang]
-        if info.get("parse_error"):
-            lines.append(f"| ⚪ | `{lang}` | - | - | - | - |")
-        else:
-            lines.append(
-                f"| {status_icon(info['results'])} | `{lang}` | {info['results']} | {info['error']} | {info['warning']} | {info['note']} |"
-            )
-else:
-    for lang in expected_langs:
-        lines.append(f"| ⚪ | `{lang}` | - | - | - | - |")
+for lang in sorted(by_lang):
+    info = by_lang[lang]
+    lang_failed = (
+        info.get("read_error")
+        or info.get("exec_errors", 0) > 0
+        or lang_outcome.get(lang, "") not in ("", "success")
+    )
+    if info.get("parse_error") and not info.get("read_error"):
+        icon = "❌" if lang_failed else "⚪"
+        lines.append(f"| {icon} | `{lang}` | - | - | - | - |")
+    else:
+        icon = status_icon(info["results"], lang_failed,
+                           info.get("exec_warnings", 0) + info.get("exec_errors", 0))
+        lines.append(
+            f"| {icon} | `{lang}` | {info['results']} | {info['error']} | {info['warning']} | {info['note']} |"
+        )
 
-total = sum(v.get("results", 0) for v in by_lang.values() if not v.get("parse_error"))
 lines += [
     "",
-    f"**Total results:** {total}",
+    f"**Whole-solution issues:** {total_all} · **In changed files:** {total}",
+    f"**Analysis errors:** {analysis_errors} · **Analysis warnings:** {analysis_warnings}",
     "",
     f"**Analyze job:** `{analyze_outcomes}`",
 ]
+
+if any(v.get("read_error") for v in by_lang.values()):
+    lines += ["", "❌ A CodeQL SARIF file could not be parsed; the analysis is marked as failed."]
+
+failed_langs = [lang for lang, outcome in lang_outcome.items() if outcome not in ("", "success")]
+if failed_langs:
+    lines += ["", "❌ CodeQL analyze failed for: " + ", ".join(f"`{l}`" for l in failed_langs) + "."]
+elif analyze_outcomes not in ("", "success") and not lang_outcome:
+    lines += ["", f"❌ CodeQL analyze job reported `{analyze_outcomes}`."]
 
 if changed_files is not None:
     lines += [
