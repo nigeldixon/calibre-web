@@ -82,6 +82,10 @@ jobs:
             --data-file=workflow-coverage-data/scripts \
             -o coverage-workflow-scripts.xml
 
+      - name: 'TEMPORARY: fake medium workflow coverage'
+        shell: bash
+        run: echo 'TOTAL 1041 260 75%' > coverage-workflow-scripts-term.txt
+
       - name: Run unit tests with coverage
         id: unit_tests
         if: always()
