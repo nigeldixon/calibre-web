@@ -279,7 +279,7 @@ jobs:
                 report.heading,
                 '',
                 `❌ Report unavailable: ${reason} See [workflow run](${runUrl}).`,
-              ];
+              ].join('\n');
               if (report.labels) {
                 content.push(
                   '',
@@ -527,7 +527,7 @@ jobs:
                   r.heading,
                   '',
                   `❌ Report unavailable: no completed push run of ${r.key} exists for commit ${pr.head.sha}. See [pull request](${runUrl}).`,
-                ];
+                ].join('\n');
                 if (r.labels) {
                   content.push(
                     '',
