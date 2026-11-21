@@ -38,6 +38,159 @@ def filtered_of(results):
     return json.loads((results / "semgrep.sarif").read_text(encoding="utf-8"))
 
 
+def write_fake_git(bin_dir, body):
+    bin_dir.mkdir(exist_ok=True)
+    git = bin_dir / "git"
+    git.write_text("#!/bin/sh\n" + body, encoding="utf-8")
+    git.chmod(0o755)
+    return bin_dir
+
+
+def test_unreadable_scan_exit_code_fails_closed(tmp_path, run_quality_script):
+    results = prepare(tmp_path, json.dumps(make_sarif()), exit_code="not-a-number")
+
+    proc = run_quality_script("semgrep_filter_sarif.py", tmp_path)
+
+    assert proc.returncode == 1
+    scope = scope_of(results)
+    assert scope["scan_exit"] is None
+    assert scope["scan_ok"] is False
+    assert scope["reason"] == "full_scan"
+
+
+def test_base_ref_fetch_and_two_dot_diff_fallback(tmp_path, run_quality_script, write_json):
+    results = prepare(tmp_path, "")
+    write_json(results / "semgrep.raw.sarif", make_sarif(results=[result("./cps/b.py")]))
+    log = tmp_path / "git.log"
+    bin_dir = write_fake_git(
+        tmp_path / "bin",
+        'printf "%s\\n" "$*" >> "$GIT_LOG"\n'
+        'if [ "$1" = "diff" ]; then\n'
+        '  if [ -z "$4" ]; then exit 1; fi\n'
+        '  printf "%s\\n" "" "./cps/b.py" "cps/a.py"\n'
+        "fi\n"
+        "exit 0\n",
+    )
+
+    proc = run_quality_script(
+        "semgrep_filter_sarif.py",
+        tmp_path,
+        env={
+            "EVENT_NAME": "pull_request",
+            "PR_BASE_SHA": "THREE_DOT",
+            "PR_HEAD_SHA": "b" * 40,
+            "PR_BASE_REF": "refs/heads/develop",
+            "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
+            "GIT_LOG": str(log),
+        },
+    )
+
+    assert proc.returncode == 0
+    scope = scope_of(results)
+    assert scope["reason"] == "pr_changed_files"
+    assert scope["changed_count"] == 3
+    assert scope["findings"]["total"] == 1
+    commands = log.read_text(encoding="utf-8")
+    assert "fetch origin refs/heads/develop --depth=1" in commands
+    assert "diff --name-only THREE_DOT bbbb" in commands.replace("b" * 40, "bbbb")
+
+
+def test_failed_diff_keeps_full_scan_and_marks_it_unscoped(
+    tmp_path, run_quality_script, write_json
+):
+    results = prepare(tmp_path, "")
+    write_json(
+        results / "semgrep.raw.sarif",
+        make_sarif(results=[result("cps/a.py"), result("cps/b.py")]),
+    )
+    bin_dir = write_fake_git(tmp_path / "bin", 'if [ "$1" = "diff" ]; then exit 1; fi\nexit 0\n')
+
+    proc = run_quality_script(
+        "semgrep_filter_sarif.py",
+        tmp_path,
+        env={
+            "EVENT_NAME": "push",
+            "PR_BASE_SHA": "a" * 40,
+            "PR_HEAD_SHA": "b" * 40,
+            "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
+        },
+    )
+
+    assert proc.returncode == 0
+    scope = scope_of(results)
+    assert scope["scoped"] is False
+    assert scope["reason"] == "diff_failed_full_scan"
+    assert scope["total_all"] == 2
+    assert len(filtered_of(results)["runs"][0]["results"]) == 2
+
+
+def test_git_failure_keeps_full_scan_when_diff_cannot_run(
+    tmp_path, run_quality_script, write_json
+):
+    results = prepare(tmp_path, "")
+    write_json(results / "semgrep.raw.sarif", make_sarif(results=[result("cps/a.py")]))
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "git").mkdir()
+
+    proc = run_quality_script(
+        "semgrep_filter_sarif.py",
+        tmp_path,
+        env={
+            "EVENT_NAME": "push",
+            "PR_BASE_SHA": "a" * 40,
+            "PR_HEAD_SHA": "b" * 40,
+            "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
+        },
+    )
+
+    assert proc.returncode == 0
+    scope = scope_of(results)
+    assert scope["scoped"] is False
+    assert scope["reason"] == "diff_failed_full_scan"
+    assert len(filtered_of(results)["runs"][0]["results"]) == 1
+
+
+def test_warning_without_descriptor_and_note_findings_are_counted(
+    tmp_path, run_quality_script, write_json
+):
+    results = prepare(tmp_path, "")
+    write_json(
+        results / "semgrep.raw.sarif",
+        make_sarif(
+            results=[result("cps/a.py", "note"), result("cps/b.py", "none")],
+            notifications=[{"level": "warning", "message": {"text": "slow rule"}}],
+        ),
+    )
+
+    proc = run_quality_script("semgrep_filter_sarif.py", tmp_path)
+
+    assert proc.returncode == 0
+    scope = scope_of(results)
+    assert scope["warnings"] == 1
+    assert scope["warning_detail"] == {"warning": 1}
+    assert scope["findings"]["note"] == 2
+    assert scope["scan_ok"] is True
+
+
+def test_uri_and_changed_set_helpers(load_quality_script, tmp_path):
+    prepare(tmp_path, json.dumps(make_sarif()))
+    script = load_quality_script("semgrep_filter_sarif.py", tmp_path)
+
+    assert script["norm"]("") == ""
+    assert script["norm"](".\\cps\\a.py") == "cps/a.py"
+    assert script["in_changed"](result("cps/a.py"), None) is True
+    assert script["in_changed"]({"level": "warning"}, {"cps/a.py"}) is False
+    assert script["in_changed"](
+        {
+            "relatedLocations": [
+                {"physicalLocation": {"artifactLocation": {"uri": "./cps/b.py"}}}
+            ]
+        },
+        {"cps/b.py"},
+    ) is True
+
+
 def test_missing_raw_sarif_fails_closed(tmp_path, run_quality_script):
     results = tmp_path / "semgrep-results"
     results.mkdir()
