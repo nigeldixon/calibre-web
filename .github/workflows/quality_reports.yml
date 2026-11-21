@@ -399,6 +399,7 @@ jobs:
             core.setOutput('base_ref', pr.base.ref || '');
 
       - name: Download CodeQL SARIF artifacts
+        id: download_codeql
         if: steps.runs.outputs.codeql_artifacts == 'true'
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
@@ -410,6 +411,7 @@ jobs:
         continue-on-error: true
 
       - name: Download Semgrep artifacts
+        id: download_semgrep
         if: steps.runs.outputs.semgrep_artifacts == 'true'
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
@@ -421,6 +423,7 @@ jobs:
         continue-on-error: true
 
       - name: Download coverage artifacts
+        id: download_tests
         if: steps.runs.outputs.tests_artifacts == 'true'
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
@@ -432,7 +435,14 @@ jobs:
         continue-on-error: true
 
       - name: Regenerate CodeQL report
-        if: steps.runs.outputs.codeql_artifacts == 'true'
+        # Only regenerate when the download succeeded and SARIF is present.
+        # Otherwise the script would write an "analysis unavailable" report,
+        # which the publish step would mistake for usable output and never
+        # trigger the re-run fallback.
+        if: >-
+          steps.runs.outputs.codeql_artifacts == 'true' &&
+          steps.download_codeql.outcome == 'success' &&
+          hashFiles('artifacts/codeql/codeql-results/**/*.sarif') != ''
         continue-on-error: true
         shell: bash
         env:
@@ -447,7 +457,10 @@ jobs:
           python "$GITHUB_WORKSPACE/.github/scripts/codeql_pr_comment.py" > "$GITHUB_WORKSPACE/codeql-report.md"
 
       - name: Regenerate Semgrep report
-        if: steps.runs.outputs.semgrep_artifacts == 'true'
+        if: >-
+          steps.runs.outputs.semgrep_artifacts == 'true' &&
+          steps.download_semgrep.outcome == 'success' &&
+          hashFiles('artifacts/semgrep/semgrep.raw.sarif') != ''
         continue-on-error: true
         shell: bash
         env:
@@ -465,7 +478,11 @@ jobs:
           python "$GITHUB_WORKSPACE/.github/scripts/semgrep_pr_comment.py" > "$GITHUB_WORKSPACE/semgrep-report.md"
 
       - name: Regenerate coverage report
-        if: steps.runs.outputs.tests_artifacts == 'true'
+        # A successful download may legitimately have no coverage.xml when the
+        # repo has no tests, so only gate on the download outcome here.
+        if: >-
+          steps.runs.outputs.tests_artifacts == 'true' &&
+          steps.download_tests.outcome == 'success'
         continue-on-error: true
         shell: bash
         env:
