@@ -32,6 +32,12 @@ jobs:
           script: |
             const fs = require('fs');
             const wr = context.payload.workflow_run;
+            if (wr.conclusion === 'cancelled' || wr.conclusion === 'skipped') {
+              core.setOutput('number', '');
+              core.setOutput('trusted', 'false');
+              core.info(`Ignoring ${wr.name} run ${wr.id} with conclusion ${wr.conclusion}.`);
+              return;
+            }
             let pr = null;
 
             if ((wr.pull_requests || []).length) {
@@ -60,6 +66,13 @@ jobs:
               return;
             }
 
+            if (pr.head.sha !== wr.head_sha) {
+              core.setOutput('number', '');
+              core.setOutput('trusted', 'false');
+              core.info(`PR #${pr.number} head ${pr.head.sha} does not match run ${wr.head_sha}; skipping stale report.`);
+              return;
+            }
+
             const fromFork = pr.head.repo && pr.base.repo &&
               pr.head.repo.full_name !== pr.base.repo.full_name;
             if (!fromFork) {
@@ -71,7 +84,7 @@ jobs:
 
             core.setOutput('number', pr.number.toString());
             core.setOutput('base_sha', pr.base.sha || '');
-            core.setOutput('head_sha', pr.head.sha || '');
+            core.setOutput('head_sha', wr.head_sha || '');
             core.setOutput('base_ref', pr.base.ref || '');
 
             const files = await github.paginate(github.rest.pulls.listFiles, {
@@ -104,7 +117,7 @@ jobs:
 
             const modified = [];
             for (const path of requiredFiles) {
-              const atHead = await fileAt(pr.head.sha, path);
+              const atHead = await fileAt(wr.head_sha, path);
               const atBase = await fileAt(trustedBase, path);
               if (atHead !== atBase) modified.push(path);
             }
