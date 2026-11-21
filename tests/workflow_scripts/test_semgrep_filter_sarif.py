@@ -247,6 +247,20 @@ def test_error_notification_fails_gate_but_keeps_results_for_report(tmp_path, ru
     assert len(filtered_of(results)["runs"][0]["results"]) == 1
 
 
+def test_findings_exit_code_allows_sarif_upload(tmp_path, run_quality_script, write_json):
+    results = prepare(tmp_path, "")
+    write_json(results / "semgrep.raw.sarif", make_sarif(results=[result("cps/a.py")]))
+    (results / "scan-exit-code.txt").write_text("1\n", encoding="utf-8")
+
+    proc = run_quality_script("semgrep_filter_sarif.py", tmp_path)
+
+    assert proc.returncode == 0
+    scope = scope_of(results)
+    assert scope["scan_exit"] == 1
+    assert scope["scan_ok"] is True
+    assert scope["findings"]["total"] == 1
+
+
 def test_nonzero_scan_exit_fails_the_gate(tmp_path, run_quality_script, write_json):
     results = prepare(tmp_path, "")
     write_json(results / "semgrep.raw.sarif", make_sarif(results=[result("cps/a.py")]))

@@ -16,6 +16,12 @@ except (OSError, ValueError):
     scan_exit = None
 
 
+def scan_exit_is_ok():
+    # Semgrep uses 1 for "findings were produced", not for a scan failure.
+    # Only 0 and 1 are safe to publish to code scanning.
+    return scan_exit in (0, 1)
+
+
 def base_scope(**overrides):
     scope = {
         'scoped': False,
@@ -23,7 +29,7 @@ def base_scope(**overrides):
         'changed_count': 0,
         'base': '',
         'head': '',
-        'scan_ok': scan_exit == 0,
+        'scan_ok': scan_exit_is_ok(),
         'scan_exit': scan_exit,
         'total_all': 0,
         'findings': {'total': 0, 'error': 0, 'warning': 0, 'note': 0},
@@ -175,14 +181,15 @@ write_scope(base_scope(
     head=head,
     total_all=total_all,
     findings=findings,
-    scan_ok=(scan_exit == 0 and exec_errors == 0),
+    scan_ok=(scan_exit_is_ok() and exec_errors == 0),
     exec_errors=exec_errors,
     warnings=sum(notifications.values()),
     warning_detail=dict(notifications),
 ))
 
-# A non-zero Semgrep exit code or an error-level execution notification means
-# the scan failed. Keep the SARIF for the report but fail the step so the upload
-# gate refuses to publish incomplete data to code scanning.
-if scan_exit != 0 or exec_errors > 0:
+# Exit code 1 means findings were produced and is safe to upload. Any other
+# non-zero exit code or an error-level execution notification means the scan
+# failed. Keep the SARIF for the report but fail the step so the upload gate
+# refuses to publish incomplete data to code scanning.
+if not scan_exit_is_ok() or exec_errors > 0:
     sys.exit(1)

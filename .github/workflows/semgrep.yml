@@ -87,8 +87,9 @@ jobs:
         # Upload the full scan, not the PR-filtered copy: a SARIF upload
         # replaces the results in its category, so uploading PR-scoped results
         # would close alerts for every file outside the PR. The filter step
-        # validates the raw SARIF and fails the gate on empty/invalid output or
-        # a non-zero Semgrep exit code.
+        # validates the raw SARIF and fails the gate on empty/invalid output,
+        # real Semgrep errors, or execution notifications. Exit code 1 only
+        # means findings were produced, so those scans are still uploaded.
         if: always() && steps.filter_sarif.outcome == 'success' && github.event_name != 'pull_request' && hashFiles('semgrep-results/semgrep.raw.sarif') != ''
         uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4
         with:
