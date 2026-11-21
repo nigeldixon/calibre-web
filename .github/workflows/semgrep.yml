@@ -1,0 +1,169 @@
+name: Semgrep
+
+on:
+  push:
+    branches:
+      - '**'
+  pull_request:
+    types:
+      - opened
+      - reopened
+      - synchronize
+  schedule:
+    - cron: '45 5 * * 1'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: Analyze
+    # Internal PRs are covered by push; fork PRs get a read-only scan here.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.event.pull_request.base.repo.full_name
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+      pull-requests: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Find associated pull request
+        id: find_pr
+        if: always()
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        with:
+          script: |
+            const script = require('./.github/scripts/find_associated_pr.js');
+            await script({ github, context, core });
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Semgrep
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install semgrep
+
+      - name: Run Semgrep (raw SARIF)
+        shell: bash
+        run: |
+          mkdir -p semgrep-results
+          set +e
+          semgrep scan \
+            --config p/default \
+            --config p/python \
+            --config p/javascript \
+            --metrics=off \
+            --sarif --output semgrep-results/semgrep.raw.sarif \
+            . 2>&1 | tee semgrep-scan.log
+          status=${PIPESTATUS[0]}
+          printf '%s\n' "$status" > semgrep-results/scan-exit-code.txt
+          exit "$status"
+
+      - name: Filter SARIF to PR-changed files
+        id: filter_sarif
+        if: always()
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ steps.find_pr.outputs.base_sha || github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ steps.find_pr.outputs.head_sha || github.event.pull_request.head.sha }}
+          PR_BASE_REF: ${{ steps.find_pr.outputs.base_ref || github.event.pull_request.base.ref }}
+        run: python .github/scripts/semgrep_filter_sarif.py
+
+      - name: Upload SARIF to code scanning
+        # Upload the full scan, not the PR-filtered copy: a SARIF upload
+        # replaces the results in its category, so uploading PR-scoped results
+        # would close alerts for every file outside the PR. The filter step
+        # validates the raw SARIF and fails the gate on empty/invalid output or
+        # a non-zero Semgrep exit code.
+        if: always() && steps.filter_sarif.outcome == 'success' && github.event_name != 'pull_request' && hashFiles('semgrep-results/semgrep.raw.sarif') != ''
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4
+        with:
+          sarif_file: semgrep-results/semgrep.raw.sarif
+          category: semgrep
+
+      - name: Upload Semgrep artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: semgrep-results
+          path: semgrep-results/
+          if-no-files-found: warn
+          retention-days: 5
+
+  comment:
+    name: PR comment
+    runs-on: ubuntu-latest
+    if: always() && github.event_name == 'push'
+    needs: analyze
+    # Serialize PR body writes across all quality workflows.
+    concurrency:
+      group: quality-pr-body
+      cancel-in-progress: false
+      queue: max
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Checkout repository
+        if: always()
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Find associated pull request
+        id: find_pr
+        if: always()
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        with:
+          script: |
+            const script = require('./.github/scripts/find_associated_pr.js');
+            await script({ github, context, core });
+
+      - name: Download Semgrep artifacts
+        if: steps.find_pr.outputs.number != ''
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: semgrep-results
+          path: semgrep-results
+        continue-on-error: true
+
+      - name: Generate Semgrep PR comment
+        if: steps.find_pr.outputs.number != ''
+        shell: bash
+        env:
+          ANALYZE_RESULT: ${{ needs.analyze.result }}
+          ANALYSIS_URL: ${{ github.server_url }}/${{ github.repository }}/security/code-scanning?query=tool%3ASemgrep
+          ANALYSIS_LABEL: PR-scoped Semgrep alerts
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: python .github/scripts/semgrep_pr_comment.py > semgrep-comment.md
+
+      - name: Update Semgrep report in PR body
+        if: github.event_name == 'push' && steps.find_pr.outputs.number != '' && hashFiles('semgrep-comment.md') != ''
+        continue-on-error: true
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        env:
+          PR_NUMBER: ${{ steps.find_pr.outputs.number }}
+        with:
+          script: |
+            const fs = require('fs');
+            const { updateReportAndRefreshTotals } = require('./.github/scripts/update_pr_body_reports.js');
+            const content = fs.readFileSync('semgrep-comment.md', 'utf8');
+            await updateReportAndRefreshTotals({
+              github, context, core,
+              pull_number: process.env.PR_NUMBER,
+              marker: '<!-- semgrep-report -->',
+              content,
+            });

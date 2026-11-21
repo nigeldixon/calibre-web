@@ -1,0 +1,249 @@
+name: CodeQL
+
+on:
+  push:
+    branches:
+      - '**'
+  pull_request_target:
+    types:
+      - opened
+      - reopened
+  pull_request:
+    types:
+      - opened
+      - reopened
+      - synchronize
+  schedule:
+    - cron: '30 5 * * 1'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  placeholder-comment:
+    name: Placeholder PR comments
+    if: github.event_name == 'pull_request_target'
+    runs-on: ubuntu-latest
+    # Serialize PR body writes with the backfill and push publishers.
+    concurrency:
+      group: quality-pr-body
+      cancel-in-progress: false
+      queue: max
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Create or update pending quality reports in PR body
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        with:
+          script: |
+            const {
+              updateReports, SECTION_START, SECTION_END,
+            } = require('./.github/scripts/update_pr_body_reports.js');
+
+            const placeholders = [
+              {
+                marker: '<!-- codeql-report -->',
+                content: [
+                  '<!-- codeql-report -->',
+                  '## CodeQL analysis',
+                  '',
+                  '⏳ CodeQL analysis is queued/running. Results will appear here when the workflow completes.',
+                ].join('\n'),
+              },
+              {
+                marker: '<!-- semgrep-report -->',
+                content: [
+                  '<!-- semgrep-report -->',
+                  '## Semgrep analysis',
+                  '',
+                  '⏳ Semgrep analysis is queued/running. Results will appear here when the workflow completes.',
+                ].join('\n'),
+              },
+              {
+                marker: '<!-- coverage-report -->',
+                content: [
+                  '<!-- coverage-report -->',
+                  '## Patch coverage',
+                  '',
+                  '⏳ Tests are queued/running. Coverage and test results will appear here when the workflow completes.',
+                ].join('\n'),
+              },
+            ];
+
+            // Backfill runs in another workflow and may win the race. Never
+            // overwrite a panel that already holds real results.
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner, repo: context.repo.repo,
+              pull_number: Number(process.env.PR_NUMBER),
+            });
+            const body = pr.body || '';
+            const start = body.indexOf(SECTION_START);
+            const end = start === -1 ? -1 : body.indexOf(SECTION_END, start);
+            const section = start !== -1 && end !== -1 ? body.slice(start, end) : '';
+            const markers = placeholders.map((r) => r.marker);
+            const todo = placeholders.filter((r) => {
+              const idx = section.indexOf(r.marker);
+              if (idx === -1) return true;
+              let next = section.length;
+              for (const m of markers) {
+                if (m === r.marker) continue;
+                const at = section.indexOf(m, idx + r.marker.length);
+                if (at !== -1 && at < next) next = at;
+              }
+              return section.slice(idx, next).includes('⏳');
+            });
+
+            if (todo.length) {
+              await updateReports({
+                github, context, core,
+                pull_number: Number(process.env.PR_NUMBER),
+                reports: todo,
+              });
+            } else {
+              core.info('Quality reports already present; skipping placeholders.');
+            }
+
+  analyze:
+    if: github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.event.pull_request.base.repo.full_name)
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: javascript-typescript
+            build-mode: none
+          - language: python
+            build-mode: none
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066 # v4
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+
+      - name: Perform CodeQL Analysis
+        id: analyze
+        uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4
+        with:
+          category: "/language:${{ matrix.language }}"
+          output: codeql-results/${{ matrix.language }}
+          upload: ${{ github.event_name == 'pull_request' && 'never' || 'always' }}
+
+      - name: Record analyze outcome
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p codeql-results/${{ matrix.language }}
+          echo '${{ steps.analyze.outcome }}' > codeql-results/${{ matrix.language }}/status.txt
+
+      - name: Validate CodeQL SARIF
+        if: always()
+        shell: bash
+        run: |
+          shopt -s nullglob
+          files=(codeql-results/${{ matrix.language }}/*.sarif)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No CodeQL SARIF was produced for ${{ matrix.language }}"
+            exit 1
+          fi
+          for f in "${files[@]}"; do
+            python -m json.tool "$f" > /dev/null || { echo "Invalid SARIF: $f"; exit 1; }
+          done
+
+      - name: Upload SARIF artifact
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: codeql-sarif-${{ matrix.language }}
+          path: codeql-results/${{ matrix.language }}/
+          if-no-files-found: warn
+          retention-days: 5
+
+  comment:
+    name: PR comment
+    runs-on: ubuntu-latest
+    if: always() && github.event_name == 'push'
+    needs: analyze
+    # Serialize PR body writes across all quality workflows. GitHub has no
+    # conditional PR update, so concurrent publishers can lose each other's
+    # reports even with the re-read check in updateReportAndRefreshTotals.
+    concurrency:
+      group: quality-pr-body
+      cancel-in-progress: false
+      queue: max
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Checkout repository
+        if: always()
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Find associated pull request
+        id: find_pr
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        with:
+          script: |
+            const script = require('./.github/scripts/find_associated_pr.js');
+            await script({ github, context, core });
+
+      - name: Download SARIF artifacts
+        if: steps.find_pr.outputs.number != ''
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: codeql-sarif-*
+          path: codeql-results
+          merge-multiple: false
+        continue-on-error: true
+
+      - name: Generate CodeQL PR comment
+        if: steps.find_pr.outputs.number != ''
+        id: codeql_comment
+        shell: bash
+        env:
+          PR_BASE_SHA: ${{ steps.find_pr.outputs.base_sha }}
+          PR_HEAD_SHA: ${{ steps.find_pr.outputs.head_sha }}
+          PR_BASE_REF: ${{ steps.find_pr.outputs.base_ref }}
+          ANALYZE_RESULT: ${{ needs.analyze.result }}
+          ANALYSIS_URL: ${{ github.server_url }}/${{ github.repository }}/security/code-scanning?query=tool%3Acodeql
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: python .github/scripts/codeql_pr_comment.py > codeql-comment.md
+
+      - name: Update CodeQL report in PR body
+        if: github.event_name == 'push' && steps.find_pr.outputs.number != ''
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        env:
+          PR_NUMBER: ${{ steps.find_pr.outputs.number }}
+        with:
+          script: |
+            const fs = require('fs');
+            const { updateReportAndRefreshTotals } = require('./.github/scripts/update_pr_body_reports.js');
+            const content = fs.readFileSync('codeql-comment.md', 'utf8');
+            await updateReportAndRefreshTotals({
+              github, context, core,
+              pull_number: process.env.PR_NUMBER,
+              marker: '<!-- codeql-report -->',
+              content,
+            });

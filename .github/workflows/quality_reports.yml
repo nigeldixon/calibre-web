@@ -1,0 +1,687 @@
+name: Quality reports
+
+on:
+  workflow_run:
+    workflows:
+      - Tests
+      - Semgrep
+      - CodeQL
+    types:
+      - completed
+  # A PR can be opened after its last push, so the push runs never published
+  # reports and the placeholders would otherwise remain forever.
+  pull_request_target:
+    types:
+      - opened
+      - reopened
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  publish:
+    # Only fork PRs need this: internal PRs are reported directly by push runs.
+    if: github.event_name == 'workflow_run' && github.event.workflow_run.event == 'pull_request'
+    runs-on: ubuntu-latest
+    # Serialize PR body writes across all quality workflows.
+    concurrency:
+      group: quality-pr-body
+      cancel-in-progress: false
+      queue: max
+    steps:
+      - name: Checkout trusted workflow scripts
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Resolve PR, change list, and artifact trust
+        id: pr
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        with:
+          script: |
+            const fs = require('fs');
+            const wr = context.payload.workflow_run;
+            if (wr.conclusion === 'cancelled' || wr.conclusion === 'skipped') {
+              core.setOutput('number', '');
+              core.setOutput('trusted', 'false');
+              core.info(`Ignoring ${wr.name} run ${wr.id} with conclusion ${wr.conclusion}.`);
+              return;
+            }
+            let pr = null;
+
+            if ((wr.pull_requests || []).length) {
+              const number = wr.pull_requests[0].number;
+              pr = (await github.rest.pulls.get({
+                owner: context.repo.owner, repo: context.repo.repo, pull_number: number,
+              })).data;
+            } else if (wr.head_repository?.owner?.login && wr.head_branch) {
+              const head = `${wr.head_repository.owner.login}:${wr.head_branch}`;
+              const { data: pulls } = await github.rest.pulls.list({
+                owner: context.repo.owner, repo: context.repo.repo,
+                head, state: 'open', per_page: 100,
+              });
+              const match = pulls.find((p) => p.head.sha === wr.head_sha) || pulls[0];
+              if (match) {
+                pr = (await github.rest.pulls.get({
+                  owner: context.repo.owner, repo: context.repo.repo, pull_number: match.number,
+                })).data;
+              }
+            }
+
+            if (!pr) {
+              core.setOutput('number', '');
+              core.setOutput('trusted', 'false');
+              core.info(`No open PR found for ${wr.name} run ${wr.id}; skipping.`);
+              return;
+            }
+
+            if (pr.head.sha !== wr.head_sha) {
+              core.setOutput('number', '');
+              core.setOutput('trusted', 'false');
+              core.info(`PR #${pr.number} head ${pr.head.sha} does not match run ${wr.head_sha}; skipping stale report.`);
+              return;
+            }
+
+            const fromFork = pr.head.repo && pr.base.repo &&
+              pr.head.repo.full_name !== pr.base.repo.full_name;
+            if (!fromFork) {
+              core.setOutput('number', '');
+              core.setOutput('trusted', 'false');
+              core.info(`PR #${pr.number} is not from a different repository; push workflow publishes its reports.`);
+              return;
+            }
+
+            // Identify the run by its workflow file path, not by wr.name:
+            // the name comes from the PR-controlled workflow and can be
+            // changed to impersonate a trusted workflow.
+            const workflowConfigs = {
+              '.github/workflows/codeql.yml': {
+                key: 'codeql',
+                required: ['.github/workflows/codeql.yml'],
+              },
+              '.github/workflows/semgrep.yml': {
+                key: 'semgrep',
+                required: ['.github/workflows/semgrep.yml', '.github/scripts/semgrep_filter_sarif.py'],
+              },
+              '.github/workflows/test.yml': {
+                key: 'tests',
+                required: [
+                  '.github/workflows/test.yml',
+                  '.github/scripts/collect_test_results.py',
+                  '.github/scripts/combine_coverage.sh',
+                  '.github/scripts/sync_test_failure_comments.py',
+                  '.github/scripts/test_coverage_comment.py',
+                  '.github/scripts/test_failure_comments.py',
+                ],
+              },
+            };
+            const config = workflowConfigs[wr.path || ''];
+            if (!config) {
+              core.setOutput('number', '');
+              core.setOutput('trusted', 'false');
+              core.info(`No trusted workflow mapping for path ${wr.path || '(none)'}; skipping.`);
+              return;
+            }
+            core.setOutput('report_key', config.key);
+
+            core.setOutput('number', pr.number.toString());
+            core.setOutput('base_sha', pr.base.sha || '');
+            core.setOutput('head_sha', wr.head_sha || '');
+            core.setOutput('base_ref', pr.base.ref || '');
+
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner: context.repo.owner, repo: context.repo.repo,
+              pull_number: pr.number, per_page: 100,
+            });
+            fs.writeFileSync('changed-files.txt', files.map((f) => f.filename).join('\n') + '\n');
+            fs.writeFileSync('changed-files.json', JSON.stringify(files, null, 2));
+
+            const requiredFiles = config.required;
+            // Compare against the PR's own base commit, not the repository's
+            // default branch: a PR may legitimately target another branch, and
+            // comparing to the default branch would report files as "modified"
+            // when the PR never touched them.
+            const baseRef = pr.base.sha;
+
+            async function fileAt(ref, path) {
+              try {
+                const { data } = await github.rest.repos.getContent({
+                  owner: context.repo.owner, repo: context.repo.repo, path, ref,
+                });
+                return data.type === 'file' ? data.content : null;
+              } catch (err) {
+                return null;
+              }
+            }
+
+            const modified = [];
+            for (const path of requiredFiles) {
+              const atHead = await fileAt(wr.head_sha, path);
+              const atBase = await fileAt(baseRef, path);
+              if (atHead !== atBase) modified.push(path);
+            }
+
+            if (modified.length) {
+              core.warning(`PR modifies analysis files: ${modified.join(', ')}; artifacts will not be trusted.`);
+              core.setOutput('trusted', 'false');
+              core.setOutput('modified', modified.join(', '));
+            } else {
+              core.setOutput('trusted', 'true');
+              core.setOutput('modified', '');
+            }
+
+      - name: Download CodeQL SARIF artifacts
+        if: steps.pr.outputs.number != '' && steps.pr.outputs.trusted == 'true' && steps.pr.outputs.report_key == 'codeql'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pattern: codeql-sarif-*
+          path: artifacts/codeql/codeql-results
+          merge-multiple: false
+        continue-on-error: true
+
+      - name: Download Semgrep artifacts
+        if: steps.pr.outputs.number != '' && steps.pr.outputs.trusted == 'true' && steps.pr.outputs.report_key == 'semgrep'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pattern: semgrep-results
+          path: artifacts/semgrep
+          # The regenerate step reads files directly from artifacts/semgrep.
+          merge-multiple: true
+        continue-on-error: true
+
+      - name: Download coverage artifacts
+        if: steps.pr.outputs.number != '' && steps.pr.outputs.trusted == 'true' && steps.pr.outputs.report_key == 'tests'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pattern: coverage-data
+          path: artifacts/tests
+          # The regenerate step reads files directly from artifacts/tests.
+          merge-multiple: true
+        continue-on-error: true
+
+      - name: Regenerate CodeQL report from SARIF
+        if: steps.pr.outputs.number != '' && steps.pr.outputs.trusted == 'true' && steps.pr.outputs.report_key == 'codeql'
+        continue-on-error: true
+        shell: bash
+        env:
+          CHANGED_FILES_FILE: ${{ github.workspace }}/changed-files.txt
+          PR_BASE_SHA: ${{ steps.pr.outputs.base_sha }}
+          PR_HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+          ANALYZE_RESULT: ${{ github.event.workflow_run.conclusion }}
+          ANALYSIS_URL: ${{ github.server_url }}/${{ github.repository }}/security/code-scanning?query=tool%3Acodeql
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          cd artifacts/codeql
+          python "$GITHUB_WORKSPACE/.github/scripts/codeql_pr_comment.py" > "$GITHUB_WORKSPACE/codeql-report.md"
+
+      - name: Regenerate Semgrep report from raw SARIF
+        if: steps.pr.outputs.number != '' && steps.pr.outputs.trusted == 'true' && steps.pr.outputs.report_key == 'semgrep'
+        continue-on-error: true
+        shell: bash
+        env:
+          CHANGED_FILES_FILE: ${{ github.workspace }}/changed-files.txt
+          PR_BASE_SHA: ${{ steps.pr.outputs.base_sha }}
+          PR_HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+          RAW_SARIF_PATH: semgrep.raw.sarif
+          SCAN_EXIT_PATH: scan-exit-code.txt
+          ANALYZE_RESULT: ${{ github.event.workflow_run.conclusion }}
+          ANALYSIS_URL: ${{ github.server_url }}/${{ github.repository }}/security/code-scanning?query=tool%3ASemgrep
+          ANALYSIS_LABEL: PR-scoped Semgrep alerts
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          cd artifacts/semgrep
+          python "$GITHUB_WORKSPACE/.github/scripts/semgrep_pr_comment.py" > "$GITHUB_WORKSPACE/semgrep-report.md"
+
+      - name: Regenerate structured test results
+        id: regen_test_results
+        # Rebuild from the raw test outputs with trusted scripts. The PR's
+        # structured artifacts are never trusted for comment side effects.
+        if: steps.pr.outputs.number != '' && steps.pr.outputs.trusted == 'true' && steps.pr.outputs.report_key == 'tests'
+        shell: bash
+        env:
+          TESTS_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          outcome=success
+          if [ "$TESTS_CONCLUSION" != "success" ]; then outcome=failure; fi
+          export WORKFLOW_SCRIPT_OUTCOME="$outcome"
+          export UNIT_OUTCOME="$outcome"
+          export E2E_OUTCOME="$outcome"
+          export FUNCTIONAL_OUTCOME="$outcome"
+          cd artifacts/tests
+          python "$GITHUB_WORKSPACE/.github/scripts/collect_test_results.py"
+
+      - name: Build test failure comment payload
+        id: build_test_failure_comments
+        if: steps.regen_test_results.outcome == 'success'
+        shell: bash
+        env:
+          TEST_RESULTS_JSON: ${{ github.workspace }}/test-results.json
+          TEST_FAILURE_COMMENTS_JSON: ${{ github.workspace }}/test-failure-comments.json
+        run: python "$GITHUB_WORKSPACE/.github/scripts/test_failure_comments.py"
+
+      - name: Regenerate coverage report from coverage XML
+        if: >-
+          steps.pr.outputs.number != '' && steps.pr.outputs.trusted == 'true' &&
+          steps.pr.outputs.report_key == 'tests' &&
+          steps.regen_test_results.outcome == 'success'
+        continue-on-error: true
+        shell: bash
+        env:
+          CHANGED_FILES_JSON: ${{ github.workspace }}/changed-files.json
+          COVERAGE_XML_PATH: coverage.xml
+          TEST_RESULTS_JSON: ${{ github.workspace }}/test-results.json
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          python -m pip install --quiet defusedxml
+          cd artifacts/tests
+          python "$GITHUB_WORKSPACE/.github/scripts/test_coverage_comment.py" > "$GITHUB_WORKSPACE/coverage-report.md"
+
+      - name: Publish quality report to PR body
+        if: always() && steps.pr.outputs.number != ''
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        env:
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+          TRUSTED: ${{ steps.pr.outputs.trusted }}
+          MODIFIED: ${{ steps.pr.outputs.modified }}
+          REPORT_KEY: ${{ steps.pr.outputs.report_key }}
+        with:
+          script: |
+            const fs = require('fs');
+            const { updateReportAndRefreshTotals } = require('./.github/scripts/update_pr_body_reports.js');
+
+            const wr = context.payload.workflow_run;
+            const reports = {
+              codeql: {
+                file: 'codeql-report.md',
+                marker: '<!-- codeql-report -->',
+                heading: '## CodeQL analysis',
+                labels: true,
+              },
+              semgrep: {
+                file: 'semgrep-report.md',
+                marker: '<!-- semgrep-report -->',
+                heading: '## Semgrep analysis',
+                labels: true,
+              },
+              tests: {
+                file: 'coverage-report.md',
+                marker: '<!-- coverage-report -->',
+                heading: '## Tests',
+                labels: false,
+              },
+            };
+            const report = reports[process.env.REPORT_KEY];
+            if (!report) {
+              core.info(`No report mapping for key ${process.env.REPORT_KEY || '(none)'}; skipping.`);
+              return;
+            }
+
+            const runUrl = wr.html_url || `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${wr.id}`;
+            const trusted = process.env.TRUSTED === 'true';
+            const modified = process.env.MODIFIED || '';
+            let content = '';
+
+            if (fs.existsSync(report.file) && fs.statSync(report.file).size > 0) {
+              content = fs.readFileSync(report.file, 'utf8');
+              core.info(`Using regenerated ${report.file} from workflow run ${wr.id}.`);
+            } else {
+              const reason = trusted
+                ? `${wr.name} workflow did not produce usable artifacts.`
+                : `this PR modified verification-sensitive files (${modified || 'unknown'}), so its artifacts cannot be trusted.`;
+              const parts = [
+                report.marker,
+                report.heading,
+                '',
+                `❌ Report unavailable: ${reason} See [workflow run](${runUrl}).`,
+              ];
+              if (report.labels) {
+                parts.push(
+                  '',
+                  '**Whole-solution issues:** 0 · **In changed files:** 0',
+                  '**Analysis errors:** 1 · **Analysis warnings:** 0',
+                  '',
+                  '**Analyze job:** `failure`'
+                );
+              }
+              content = parts.join('\n');
+              core.warning(`Publishing fallback for ${report.marker}: ${reason}`);
+            }
+
+            await updateReportAndRefreshTotals({
+              github, context, core,
+              pull_number: Number(process.env.PR_NUMBER),
+              marker: report.marker,
+              content,
+            });
+
+      - name: Sync per-test failure comments
+        if: >-
+          steps.pr.outputs.number != '' && steps.pr.outputs.trusted == 'true' &&
+          steps.pr.outputs.report_key == 'tests' &&
+          steps.build_test_failure_comments.outcome == 'success'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+          TEST_FAILURE_COMMENTS_JSON: ${{ github.workspace }}/test-failure-comments.json
+          RESOLVE_MISSING: ${{ github.event.workflow_run.conclusion == 'success' }}
+        run: python "$GITHUB_WORKSPACE/.github/scripts/sync_test_failure_comments.py"
+
+  backfill:
+    name: Backfill internal PR reports
+    # A PR opened after its last push has placeholders but no reports: the
+    # push runs ran before the PR existed, so they could not find it. Fork PRs
+    # are already handled by the workflow_run publisher above.
+    if: >-
+      github.event_name == 'pull_request_target' &&
+      github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name
+    runs-on: ubuntu-latest
+    concurrency:
+      group: quality-pr-body
+      cancel-in-progress: false
+      queue: max
+    permissions:
+      actions: write
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Checkout trusted workflow scripts
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Resolve push runs and changed files
+        id: runs
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        with:
+          script: |
+            const fs = require('fs');
+            const pr = context.payload.pull_request;
+            const { data: current } = await github.rest.pulls.get({
+              owner: context.repo.owner, repo: context.repo.repo,
+              pull_number: pr.number,
+            });
+            const body = current.body || '';
+            const start = body.indexOf('<!-- quality-reports:start -->');
+            const end = start === -1 ? -1 : body.indexOf('<!-- quality-reports:end -->', start);
+            const section = start !== -1 && end !== -1 ? body.slice(start, end) : '';
+            const markers = [
+              '<!-- codeql-report -->', '<!-- semgrep-report -->', '<!-- coverage-report -->',
+            ];
+            const needsBackfill = (marker) => {
+              const idx = section.indexOf(marker);
+              if (idx === -1) return true;
+              let next = section.length;
+              for (const m of markers) {
+                if (m === marker) continue;
+                const at = section.indexOf(m, idx + marker.length);
+                if (at !== -1 && at < next) next = at;
+              }
+              return section.slice(idx, next).includes('⏳');
+            };
+
+            const configs = [
+              { key: 'codeql', name: 'CodeQL', marker: markers[0], prefix: 'codeql-sarif-' },
+              { key: 'semgrep', name: 'Semgrep', marker: markers[1], prefix: 'semgrep-results' },
+              { key: 'tests', name: 'Tests', marker: markers[2], prefix: 'coverage-data' },
+            ];
+            const { data: runsData } = await github.rest.actions.listWorkflowRunsForRepo({
+              owner: context.repo.owner, repo: context.repo.repo,
+              head_sha: pr.head.sha, event: 'push', status: 'completed', per_page: 100,
+            });
+            const runs = runsData.workflow_runs || [];
+
+            for (const cfg of configs) {
+              const upper = cfg.key.toUpperCase();
+              const wanted = needsBackfill(cfg.marker);
+              core.setOutput(`${cfg.key}_needed`, wanted ? 'true' : 'false');
+              if (!wanted) continue;
+              const run = runs.find((r) => r.name === cfg.name);
+              if (!run) {
+                core.setOutput(`${cfg.key}_run`, '');
+                core.setOutput(`${cfg.key}_artifacts`, 'false');
+                core.info(`No completed push run of ${cfg.name} for ${pr.head.sha}.`);
+                continue;
+              }
+              core.setOutput(`${cfg.key}_run`, run.id.toString());
+              core.setOutput(`${cfg.key}_conclusion`, run.conclusion || '');
+              const { data: artifacts } = await github.rest.actions.listWorkflowRunArtifacts({
+                owner: context.repo.owner, repo: context.repo.repo,
+                run_id: run.id, per_page: 100,
+              });
+              const names = (artifacts.artifacts || []).map((a) => a.name);
+              const ok = names.some((n) => n.startsWith(cfg.prefix));
+              core.setOutput(`${cfg.key}_artifacts`, ok ? 'true' : 'false');
+              core.info(`${cfg.name} run ${run.id}: artifacts ${ok ? 'available' : 'missing'}.`);
+            }
+
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner: context.repo.owner, repo: context.repo.repo,
+              pull_number: pr.number, per_page: 100,
+            });
+            fs.writeFileSync('changed-files.txt', files.map((f) => f.filename).join('\n') + '\n');
+            fs.writeFileSync('changed-files.json', JSON.stringify(files, null, 2));
+            core.setOutput('pr_number', pr.number.toString());
+            core.setOutput('base_sha', pr.base.sha || '');
+            core.setOutput('head_sha', pr.head.sha || '');
+            core.setOutput('base_ref', pr.base.ref || '');
+
+      - name: Download CodeQL SARIF artifacts
+        id: download_codeql
+        if: steps.runs.outputs.codeql_artifacts == 'true'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          run-id: ${{ steps.runs.outputs.codeql_run }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pattern: codeql-sarif-*
+          path: artifacts/codeql/codeql-results
+          merge-multiple: false
+        continue-on-error: true
+
+      - name: Download Semgrep artifacts
+        id: download_semgrep
+        if: steps.runs.outputs.semgrep_artifacts == 'true'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          run-id: ${{ steps.runs.outputs.semgrep_run }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pattern: semgrep-results
+          path: artifacts/semgrep
+          merge-multiple: true
+        continue-on-error: true
+
+      - name: Download coverage artifacts
+        id: download_tests
+        if: steps.runs.outputs.tests_artifacts == 'true'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          run-id: ${{ steps.runs.outputs.tests_run }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pattern: coverage-data
+          path: artifacts/tests
+          merge-multiple: true
+        continue-on-error: true
+
+      - name: Regenerate CodeQL report
+        # Only regenerate when the download succeeded and SARIF is present.
+        # Otherwise the script would write an "analysis unavailable" report,
+        # which the publish step would mistake for usable output and never
+        # trigger the re-run fallback.
+        if: >-
+          steps.runs.outputs.codeql_artifacts == 'true' &&
+          steps.download_codeql.outcome == 'success' &&
+          hashFiles('artifacts/codeql/codeql-results/**/*.sarif') != ''
+        continue-on-error: true
+        shell: bash
+        env:
+          CHANGED_FILES_FILE: ${{ github.workspace }}/changed-files.txt
+          PR_BASE_SHA: ${{ steps.runs.outputs.base_sha }}
+          PR_HEAD_SHA: ${{ steps.runs.outputs.head_sha }}
+          ANALYZE_RESULT: ${{ steps.runs.outputs.codeql_conclusion }}
+          ANALYSIS_URL: ${{ github.server_url }}/${{ github.repository }}/security/code-scanning?query=tool%3Acodeql
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ steps.runs.outputs.codeql_run }}
+        run: |
+          cd artifacts/codeql
+          python "$GITHUB_WORKSPACE/.github/scripts/codeql_pr_comment.py" > "$GITHUB_WORKSPACE/codeql-report.md"
+
+      - name: Regenerate Semgrep report
+        if: >-
+          steps.runs.outputs.semgrep_artifacts == 'true' &&
+          steps.download_semgrep.outcome == 'success' &&
+          hashFiles('artifacts/semgrep/semgrep.raw.sarif') != ''
+        continue-on-error: true
+        shell: bash
+        env:
+          CHANGED_FILES_FILE: ${{ github.workspace }}/changed-files.txt
+          PR_BASE_SHA: ${{ steps.runs.outputs.base_sha }}
+          PR_HEAD_SHA: ${{ steps.runs.outputs.head_sha }}
+          RAW_SARIF_PATH: semgrep.raw.sarif
+          SCAN_EXIT_PATH: scan-exit-code.txt
+          ANALYZE_RESULT: ${{ steps.runs.outputs.semgrep_conclusion }}
+          ANALYSIS_URL: ${{ github.server_url }}/${{ github.repository }}/security/code-scanning?query=tool%3ASemgrep
+          ANALYSIS_LABEL: PR-scoped Semgrep alerts
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ steps.runs.outputs.semgrep_run }}
+        run: |
+          cd artifacts/semgrep
+          python "$GITHUB_WORKSPACE/.github/scripts/semgrep_pr_comment.py" > "$GITHUB_WORKSPACE/semgrep-report.md"
+
+      - name: Regenerate structured test results
+        id: backfill_test_results
+        if: >-
+          steps.runs.outputs.tests_artifacts == 'true' &&
+          steps.download_tests.outcome == 'success'
+        shell: bash
+        env:
+          TESTS_CONCLUSION: ${{ steps.runs.outputs.tests_conclusion }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ steps.runs.outputs.tests_run }}
+        run: |
+          outcome=success
+          if [ "$TESTS_CONCLUSION" != "success" ]; then outcome=failure; fi
+          export WORKFLOW_SCRIPT_OUTCOME="$outcome"
+          export UNIT_OUTCOME="$outcome"
+          export E2E_OUTCOME="$outcome"
+          export FUNCTIONAL_OUTCOME="$outcome"
+          cd artifacts/tests
+          python "$GITHUB_WORKSPACE/.github/scripts/collect_test_results.py"
+
+      - name: Build test failure comment payload
+        id: backfill_test_comments
+        if: steps.backfill_test_results.outcome == 'success'
+        shell: bash
+        env:
+          TEST_RESULTS_JSON: ${{ github.workspace }}/test-results.json
+          TEST_FAILURE_COMMENTS_JSON: ${{ github.workspace }}/test-failure-comments.json
+        run: python "$GITHUB_WORKSPACE/.github/scripts/test_failure_comments.py"
+
+      - name: Regenerate coverage report
+        # A successful download may legitimately have no coverage.xml when the
+        # repo has no tests, so only gate on the download outcome here.
+        if: >-
+          steps.runs.outputs.tests_artifacts == 'true' &&
+          steps.download_tests.outcome == 'success' &&
+          steps.backfill_test_results.outcome == 'success'
+        continue-on-error: true
+        shell: bash
+        env:
+          CHANGED_FILES_JSON: ${{ github.workspace }}/changed-files.json
+          COVERAGE_XML_PATH: coverage.xml
+          TEST_RESULTS_JSON: ${{ github.workspace }}/test-results.json
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ steps.runs.outputs.tests_run }}
+        run: |
+          python -m pip install --quiet defusedxml
+          cd artifacts/tests
+          python "$GITHUB_WORKSPACE/.github/scripts/test_coverage_comment.py" > "$GITHUB_WORKSPACE/coverage-report.md"
+
+      - name: Publish backfilled reports or re-run analyses
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        env:
+          PR_NUMBER: ${{ steps.runs.outputs.pr_number }}
+          CODEQL_NEEDED: ${{ steps.runs.outputs.codeql_needed }}
+          SEMGREP_NEEDED: ${{ steps.runs.outputs.semgrep_needed }}
+          TESTS_NEEDED: ${{ steps.runs.outputs.tests_needed }}
+          CODEQL_RUN: ${{ steps.runs.outputs.codeql_run }}
+          SEMGREP_RUN: ${{ steps.runs.outputs.semgrep_run }}
+          TESTS_RUN: ${{ steps.runs.outputs.tests_run }}
+          CODEQL_ARTIFACTS: ${{ steps.runs.outputs.codeql_artifacts }}
+          SEMGREP_ARTIFACTS: ${{ steps.runs.outputs.semgrep_artifacts }}
+          TESTS_ARTIFACTS: ${{ steps.runs.outputs.tests_artifacts }}
+        with:
+          script: |
+            const fs = require('fs');
+            const { updateReportAndRefreshTotals } = require('./.github/scripts/update_pr_body_reports.js');
+            const pr = context.payload.pull_request;
+            const reports = [
+              { key: 'codeql', marker: '<!-- codeql-report -->', file: 'codeql-report.md', heading: '## CodeQL analysis', labels: true },
+              { key: 'semgrep', marker: '<!-- semgrep-report -->', file: 'semgrep-report.md', heading: '## Semgrep analysis', labels: true },
+              { key: 'tests', marker: '<!-- coverage-report -->', file: 'coverage-report.md', heading: '## Tests', labels: false },
+            ];
+
+            for (const r of reports) {
+              const upper = r.key.toUpperCase();
+              if (process.env[`${upper}_NEEDED`] !== 'true') continue;
+              const runId = process.env[`${upper}_RUN`] || '';
+              const runUrl = runId
+                ? `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${runId}`
+                : pr.html_url;
+              let content = '';
+              if (fs.existsSync(r.file) && fs.statSync(r.file).size > 0) {
+                content = fs.readFileSync(r.file, 'utf8');
+                core.info(`Using regenerated ${r.file} for ${r.key}.`);
+              } else if (runId) {
+                // Artifacts expired or the run failed before uploading them.
+                // Re-run once; the normal publisher will write the real report.
+                await github.rest.actions.reRunWorkflow({
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  run_id: Number(runId),
+                });
+                core.warning(`Re-running ${r.key} push run ${runId}: no usable artifacts.`);
+                continue;
+              } else {
+                const parts = [
+                  r.marker,
+                  r.heading,
+                  '',
+                  `❌ Report unavailable: no completed push run of ${r.key} exists for commit ${pr.head.sha}. See [pull request](${runUrl}).`,
+                ];
+                if (r.labels) {
+                  parts.push(
+                    '',
+                    '**Whole-solution issues:** 0 · **In changed files:** 0',
+                    '**Analysis errors:** 1 · **Analysis warnings:** 0',
+                    '',
+                    '**Analyze job:** `failure`'
+                  );
+                }
+                content = parts.join('\n');
+                core.warning(`No push run found for ${r.key} at ${pr.head.sha}.`);
+              }
+              await updateReportAndRefreshTotals({
+                github, context, core,
+                pull_number: Number(process.env.PR_NUMBER),
+                marker: r.marker,
+                content,
+              });
+            }
+
+      - name: Sync per-test failure comments
+        if: >-
+          steps.runs.outputs.tests_needed == 'true' &&
+          steps.backfill_test_comments.outcome == 'success'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ steps.runs.outputs.pr_number }}
+          TEST_FAILURE_COMMENTS_JSON: ${{ github.workspace }}/test-failure-comments.json
+          RESOLVE_MISSING: ${{ steps.runs.outputs.tests_conclusion == 'success' }}
+        run: python "$GITHUB_WORKSPACE/.github/scripts/sync_test_failure_comments.py"
