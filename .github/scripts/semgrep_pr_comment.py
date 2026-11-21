@@ -60,12 +60,26 @@ def count_findings(sarif):
 
 def count_notifications(sarif):
     detail = {}
+    warnings = 0
+    errors = 0
     for run in (sarif or {}).get('runs', []) or []:
         for inv in run.get('invocations') or []:
             for n in inv.get('toolExecutionNotifications') or []:
+                if (n.get('level') or '').lower() == 'error':
+                    errors += 1
+                    continue
                 key = (n.get('descriptor') or {}).get('id') or (n.get('level') or 'warning')
                 detail[key] = detail.get(key, 0) + 1
-    return detail
+                warnings += 1
+    return detail, warnings, errors
+
+
+def valid_sarif(sarif):
+    runs = (sarif or {}).get('runs')
+    return (isinstance(runs, list) and len(runs) > 0 and all(
+        isinstance(run, dict) and isinstance(run.get('tool'), dict) and run['tool']
+        for run in runs
+    ))
 
 
 def read_scan_exit():
@@ -91,13 +105,14 @@ if changed_files_file:
 
     raw_exists = os.path.exists(raw_sarif_path)
     raw = load_json(raw_sarif_path)
-    if raw is None:
+    if raw is None or not valid_sarif(raw):
         sarif = None
         scope = {
             'scoped': False,
             'reason': 'invalid_sarif' if raw_exists else 'no_sarif',
             'changed_count': len(changed) if changed is not None else 0,
             'scan_ok': False, 'scan_exit': read_scan_exit(), 'total_all': 0,
+            'warnings': 0, 'warning_detail': {}, 'exec_errors': 0,
         }
     else:
         total_all = sum(len(run.get('results', []) or []) for run in raw.get('runs', []) or [])
@@ -107,7 +122,7 @@ if changed_files_file:
             filtered['results'] = [r for r in (run.get('results') or []) if result_in_changed(r, changed)]
             runs.append(filtered)
         sarif = {'version': raw.get('version', '2.1.0'), 'runs': runs}
-        notification_detail = count_notifications(raw)
+        notification_detail, warnings, exec_errors = count_notifications(raw)
         scan_exit = read_scan_exit()
         scope = {
             'scoped': changed is not None,
@@ -115,10 +130,11 @@ if changed_files_file:
             'changed_count': len(changed) if changed is not None else 0,
             'base': os.environ.get('PR_BASE_SHA', '').strip(),
             'head': os.environ.get('PR_HEAD_SHA', '').strip(),
-            'scan_ok': scan_exit == 0,
+            'scan_ok': scan_exit == 0 and exec_errors == 0,
             'scan_exit': scan_exit,
+            'exec_errors': exec_errors,
             'total_all': total_all,
-            'warnings': sum(notification_detail.values()),
+            'warnings': warnings,
             'warning_detail': notification_detail,
         }
 else:
@@ -127,25 +143,30 @@ else:
     # report an analysis error rather than a false all-clear.
     sarif_exists = os.path.exists(sarif_path)
     sarif = load_json(sarif_path)
-    if sarif is None:
+    if sarif is None or not valid_sarif(sarif):
+        sarif = None
         scope = {'scoped': False,
                  'reason': 'invalid_sarif' if sarif_exists else 'no_sarif',
                  'scan_ok': False, 'total_all': 0,
-                 'warnings': 0, 'warning_detail': {}}
+                 'warnings': 0, 'warning_detail': {}, 'exec_errors': 0}
     else:
         scope = {'scoped': False, 'reason': 'unknown', 'scan_ok': True, 'total_all': 0,
-                 'warnings': 0, 'warning_detail': {}}
+                 'warnings': 0, 'warning_detail': {}, 'exec_errors': 0}
         loaded_scope = load_json(scope_path)
         if loaded_scope:
             scope = loaded_scope
         elif not os.path.exists(scope_path):
             scope = {'scoped': False, 'reason': 'invalid_sarif', 'scan_ok': False,
-                     'total_all': 0, 'warnings': 0, 'warning_detail': {}}
+                     'total_all': 0, 'warnings': 0, 'warning_detail': {}, 'exec_errors': 0}
 
 totals = count_findings(sarif)
 
 analyze_outcome = os.environ.get('ANALYZE_RESULT', '')
-scan_failed = scope.get('scan_ok') is False or scope.get('reason') in ('no_sarif', 'invalid_sarif')
+scan_failed = (
+    scope.get('scan_ok') is False
+    or scope.get('reason') in ('no_sarif', 'invalid_sarif')
+    or scope.get('exec_errors', 0) > 0
+)
 job_failed = analyze_outcome not in ('', 'success')
 warnings = scope.get('warnings', 0)
 
@@ -205,7 +226,10 @@ lines += [
 ]
 
 if not scope.get('scan_ok', True):
-    lines += ['', f'❌ Semgrep scan failed (exit {scope.get("scan_exit")}); results may be incomplete.']
+    detail = f'exit {scope.get("scan_exit")}'
+    if scope.get('exec_errors', 0):
+        detail += f', {scope["exec_errors"]} error-level notification(s)'
+    lines += ['', f'❌ Semgrep scan failed ({detail}); results may be incomplete.']
 if scope.get('reason') == 'no_sarif':
     lines += ['', '_No Semgrep SARIF was produced; the scan did not complete._']
 if scope.get('reason') == 'invalid_sarif':

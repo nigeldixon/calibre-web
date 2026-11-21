@@ -48,7 +48,7 @@ def write_empty_sarif():
 if not os.path.exists(raw_path):
     # Still write an empty local SARIF so report/artifact steps have a file,
     # but fail so the upload step can refuse to publish it to code scanning.
-    write_scope(base_scope(reason='no_sarif'))
+    write_scope(base_scope(reason='no_sarif', scan_ok=False))
     write_empty_sarif()
     sys.exit(1)
 
@@ -57,7 +57,22 @@ try:
         sarif = json.load(f)
 except Exception as exc:
     # Invalid SARIF is a hard failure: the scan did not produce usable output.
-    write_scope(base_scope(reason='invalid_sarif', error=str(exc)))
+    write_scope(base_scope(reason='invalid_sarif', error=str(exc), scan_ok=False))
+    write_empty_sarif()
+    sys.exit(1)
+
+# Valid JSON is not necessarily valid SARIF. A truncated or malformed scan
+# output must not be published: it would clear code-scanning alerts while
+# showing a false all-clear.
+runs = sarif.get('runs')
+if (not isinstance(runs, list) or not runs or any(
+        not isinstance(run, dict) or not isinstance(run.get('tool'), dict) or not run['tool']
+        for run in runs)):
+    write_scope(base_scope(
+        reason='invalid_sarif',
+        error='SARIF must contain at least one run with a tool object',
+        scan_ok=False,
+    ))
     write_empty_sarif()
     sys.exit(1)
 
@@ -128,9 +143,15 @@ with open(out_path, 'w', encoding='utf-8') as f:
     json.dump(sarif, f)
 
 notifications = Counter()
+exec_errors = 0
 for run in sarif.get('runs', []) or []:
     for inv in run.get('invocations') or []:
         for n in inv.get('toolExecutionNotifications') or []:
+            if (n.get('level') or '').lower() == 'error':
+                # An execution error means the scan is incomplete even when
+                # Semgrep exited 0; the upload gate must refuse this SARIF.
+                exec_errors += 1
+                continue
             key = (n.get('descriptor') or {}).get('id') or (n.get('level') or 'warning')
             notifications[key] += 1
 
@@ -154,12 +175,14 @@ write_scope(base_scope(
     head=head,
     total_all=total_all,
     findings=findings,
+    scan_ok=(scan_exit == 0 and exec_errors == 0),
+    exec_errors=exec_errors,
     warnings=sum(notifications.values()),
     warning_detail=dict(notifications),
 ))
 
-# A non-zero Semgrep exit code means the scan failed. The SARIF may still
-# contain partial results, so keep it for the report but fail the step so the
-# upload gate refuses to publish incomplete data to code scanning.
-if scan_exit != 0:
+# A non-zero Semgrep exit code or an error-level execution notification means
+# the scan failed. Keep the SARIF for the report but fail the step so the upload
+# gate refuses to publish incomplete data to code scanning.
+if scan_exit != 0 or exec_errors > 0:
     sys.exit(1)
