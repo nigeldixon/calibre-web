@@ -63,10 +63,10 @@ elif base_sha and head_sha:
             changed_files = set()
             for line in (diff.stdout or "").splitlines():
                 line = line.strip().replace("\\", "/")
+                while line.startswith("./"):
+                    line = line[2:]
                 if line:
                     changed_files.add(line)
-                    if line.startswith("./"):
-                        changed_files.add(line[2:])
             scope_note = "Automated CodeQL summary for files changed in this PR (filtered from analysis SARIF)."
         else:
             diff2 = subprocess.run(
