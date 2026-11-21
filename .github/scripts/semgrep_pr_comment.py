@@ -147,13 +147,18 @@ def status_icon(n):
 
 
 analysis_url = os.environ.get('ANALYSIS_URL', '').strip()
+analysis_label = os.environ.get('ANALYSIS_LABEL', '').strip() or 'PR-scoped Semgrep alerts'
 run_url = os.environ.get('RUN_URL', '').strip()
-full_analysis_links = []
-if analysis_url:
-    full_analysis_links.append(f'[All Semgrep alerts]({analysis_url})')
+
+full_analysis = []
 if run_url:
-    full_analysis_links.append(f'[Workflow run]({run_url})')
-full_analysis = '**Full analysis:** ' + ' · '.join(full_analysis_links) if full_analysis_links else ''
+    full_analysis.append(
+        f'**Full analysis:** [Workflow run]({run_url}) — complete results are in the '
+        '`semgrep-results` artifact (`semgrep.raw.sarif`).'
+    )
+if analysis_url:
+    full_analysis.append(f'**Code scanning:** [{analysis_label}]({analysis_url})')
+full_analysis = '\n'.join(full_analysis)
 
 lines = [marker, '## Semgrep analysis', '']
 if scope.get('scoped'):
