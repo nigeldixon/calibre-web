@@ -8,6 +8,7 @@ marker = "<!-- coverage-report -->"
 coverage_xml_path = os.environ.get("COVERAGE_XML_PATH", "coverage.xml").strip() or "coverage.xml"
 run_url = os.environ.get("RUN_URL", "").strip()
 changed_json_path = os.environ.get("CHANGED_FILES_JSON", "").strip()
+workflow_coverage_path = os.environ.get("WORKFLOW_COVERAGE_TERM_PATH", "coverage-workflow-scripts-term.txt").strip()
 
 
 def pct_to_color(p):
@@ -105,6 +106,25 @@ def load_changed_files(path):
     return data if isinstance(data, list) else []
 
 
+def coverage_total(path):
+    if not path or not os.path.exists(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            lines = [ln.strip() for ln in f.read().splitlines() if ln.strip()]
+    except Exception:
+        return None
+    for line in reversed(lines):
+        if line.startswith("TOTAL"):
+            return line
+    return lines[-1] if lines else None
+
+
+def workflow_coverage_line():
+    total = coverage_total(workflow_coverage_path)
+    return f"**Workflow script coverage:** `{total}`" if total else None
+
+
 def header():
     out = [marker, "## Patch coverage", ""]
     if run_url:
@@ -113,7 +133,11 @@ def header():
 
 
 if not os.path.exists(coverage_xml_path):
-    print("\n".join(header() + ["No coverage data was generated for this run."]))
+    out = header() + ["No coverage data was generated for this run."]
+    extra = workflow_coverage_line()
+    if extra:
+        out += ["", extra]
+    print("\n".join(out))
     raise SystemExit(0)
 
 lines_out = header()
@@ -167,6 +191,9 @@ if changed_json_path:
     else:
         lines_out += ["", "_Patch coverage could not be computed for this run._"]
 
+    extra = workflow_coverage_line()
+    if extra:
+        lines_out += ["", extra]
     print("\n".join(lines_out))
     raise SystemExit(0)
 
@@ -174,4 +201,7 @@ if changed_json_path:
 # workflow for both push runs and the privileged fork-PR publisher, so there is
 # no hardcoded compare branch and no env-derived git subprocess argument.
 lines_out += ["", "_Patch coverage could not be computed for this run._"]
+extra = workflow_coverage_line()
+if extra:
+    lines_out += ["", extra]
 print("\n".join(lines_out))

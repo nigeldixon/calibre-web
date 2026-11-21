@@ -43,28 +43,41 @@ print("|:------:|-------|----------------------------|")
 for name, outcome, path in suites:
     print(f"| {status_icon(outcome)} | {name} | `{extract_summary(path).replace('|', '\\|')}` |")
 print()
-print("## Test coverage (combined)")
-print()
-print("Combined coverage from in-process unit tests and server-side functional/E2E runs when coverage data is available.")
-print()
-print("```text")
-if os.path.exists("coverage-term.txt"):
+def read_coverage(path):
+    if not os.path.exists(path):
+        return "No coverage data generated."
     try:
-        with open("coverage-term.txt", "r", encoding="utf-8", errors="replace") as f:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
             txt = f.read().rstrip()
-        print(txt if txt else "No coverage data generated.")
+        return txt if txt else "No coverage data generated."
     except Exception:
-        print("No coverage data generated.")
-elif os.path.exists(".coverage"):
-    try:
-        r = subprocess.run(
-            ["python", "-m", "coverage", "report", "-m", "--include=*/cps/*", "--omit=*/tests/*"],
-            capture_output=True,
-            text=True,
-        )
-        print((r.stdout or r.stderr or "No coverage data generated.").rstrip())
-    except Exception:
-        print("No coverage data generated.")
-else:
-    print("No coverage data generated.")
+        return "No coverage data generated."
+
+
+def app_coverage():
+    if os.path.exists("coverage-term.txt"):
+        return read_coverage("coverage-term.txt")
+    if os.path.exists(".coverage"):
+        try:
+            r = subprocess.run(
+                ["python", "-m", "coverage", "report", "-m", "--include=*/cps/*", "--omit=*/tests/*"],
+                capture_output=True,
+                text=True,
+            )
+            return (r.stdout or r.stderr or "No coverage data generated.").rstrip()
+        except Exception:
+            pass
+    return "No coverage data generated."
+
+
+print("## Test coverage")
+print()
+print("**App coverage:**")
+print("```text")
+print(app_coverage())
+print("```")
+print()
+print("**Workflow script coverage:**")
+print("```text")
+print(read_coverage("coverage-workflow-scripts-term.txt"))
 print("```")
