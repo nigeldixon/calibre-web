@@ -310,8 +310,8 @@ def test_missing_coverage_xml_still_reports_workflow_coverage(tmp_path, run_qual
 
     assert proc.returncode == 0
     assert (
-        "<small>Workflow script coverage: "
-        "`100 statements · 20 missed · 80% covered`</small>"
+        "<sub>Workflow script coverage: "
+        "`100 statements · 20 missed · 80% covered`</sub>"
     ) in proc.stdout
 
 
@@ -410,6 +410,6 @@ def test_coverage_xml_without_changed_file_json_does_not_compute_patch(
     assert proc.returncode == 0
     assert "_Patch coverage could not be computed for this run._" in proc.stdout
     assert (
-        "<small>Workflow script coverage: "
-        "`100 statements · 20 missed · 80% covered`</small>"
+        "<sub>Workflow script coverage: "
+        "`100 statements · 20 missed · 80% covered`</sub>"
     ) in proc.stdout
