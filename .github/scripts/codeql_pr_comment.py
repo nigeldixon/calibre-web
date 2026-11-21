@@ -145,6 +145,11 @@ def record_error(detail):
     error_details.append(detail if detail.startswith("- ") else f"- {detail}")
 
 
+# TEMPORARY DEMO ONLY: remove with the other QUALITY_DEMO_FAILURE hooks.
+if os.environ.get("QUALITY_DEMO_FAILURE") == "codeql":
+    record_error("TEMPORARY DEMO: CodeQL analysis error injected.")
+
+
 if not sarif_files:
     record_error("No CodeQL SARIF artifacts were produced for this run.")
     for lang in expected_langs:

@@ -129,6 +129,9 @@ def header():
     out = [marker, "## Patch coverage", ""]
     if run_url:
         out += [f"**Full analysis:** [Workflow run]({run_url})", ""]
+    # TEMPORARY DEMO ONLY: remove with the other QUALITY_DEMO_FAILURE hooks.
+    if os.environ.get("QUALITY_DEMO_FAILURE") == "coverage":
+        out += ["❌ TEMPORARY DEMO: Coverage failure injected.", ""]
     return out
 
 

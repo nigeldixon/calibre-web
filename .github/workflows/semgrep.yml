@@ -148,6 +148,7 @@ jobs:
           ANALYSIS_URL: ${{ github.server_url }}/${{ github.repository }}/security/code-scanning?query=tool%3ASemgrep
           ANALYSIS_LABEL: PR-scoped Semgrep alerts
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          QUALITY_DEMO_FAILURE: semgrep # TEMPORARY DEMO ONLY
         run: python .github/scripts/semgrep_pr_comment.py > semgrep-comment.md
 
       - name: Update Semgrep report in PR body
