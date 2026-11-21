@@ -157,3 +157,9 @@ write_scope(base_scope(
     warnings=sum(notifications.values()),
     warning_detail=dict(notifications),
 ))
+
+# A non-zero Semgrep exit code means the scan failed. The SARIF may still
+# contain partial results, so keep it for the report but fail the step so the
+# upload gate refuses to publish incomplete data to code scanning.
+if scan_exit != 0:
+    sys.exit(1)
