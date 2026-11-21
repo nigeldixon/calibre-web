@@ -132,9 +132,20 @@ def coverage_total(path):
     return lines[-1] if lines else None
 
 
+def coverage_marker(total):
+    match = re.search(r"(\d+(?:\.\d+)?)\s*%", total or "")
+    if not match:
+        return ""
+    return pct_to_color(float(match.group(1)))[1]
+
+
 def workflow_coverage_line():
     total = coverage_total(workflow_coverage_path)
-    return f"**Workflow script coverage:** `{total}`" if total else None
+    if not total:
+        return None
+    marker = coverage_marker(total)
+    prefix = f"{marker} " if marker else ""
+    return f"**Workflow script coverage:** {prefix}`{total}`"
 
 
 def load_test_results():
