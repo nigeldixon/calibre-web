@@ -147,7 +147,7 @@ def workflow_coverage_line():
     marker = coverage_marker(total)
     if marker:
         return f"**Workflow script coverage:** {marker} `{total}`"
-    return f"<sub>Workflow script coverage: `{total}`</sub>"
+    return f"<small>Workflow script coverage: `{total}`</small>"
 
 
 def load_test_results():
