@@ -354,7 +354,7 @@ def test_unreadable_changed_file_list_falls_back_to_all_results(
 
     out = proc.stdout
     assert proc.returncode == 0
-    assert "**Whole-solution issues:** 1 · **In changed files:** 1" in out
+    assert "**Whole-solution issues:** 1 · **In changed files:** unknown" in out
 
 
 def test_missing_git_executable_reports_all_results(
@@ -382,7 +382,7 @@ def test_missing_git_executable_reports_all_results(
     out = proc.stdout
     assert proc.returncode == 0
     assert "_Scope: could not determine PR diff; showing all SARIF results._" in out
-    assert "**In changed files:** 1" in out
+    assert "**In changed files:** unknown" in out
 
 
 def test_result_uri_normalization_and_related_locations(
@@ -448,7 +448,7 @@ def test_result_levels_and_missing_changed_file_scope_are_counted(
     out = proc.stdout
     assert proc.returncode == 0
     assert "| ⚠️ | `python` | 5 | 1 | 2 | 2 |" in out
-    assert "**In changed files:** 5" in out
+    assert "**In changed files:** unknown" in out
 
 
 def test_related_locations_count_towards_changed_file_scope(

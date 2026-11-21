@@ -307,7 +307,8 @@ for lang in sorted(by_lang):
 
 lines += [
     "",
-    f"**Whole-solution issues:** {total_all} · **In changed files:** {total}",
+    f"**Whole-solution issues:** {total_all} · "
+    f"**In changed files:** {total if changed_files is not None else 'unknown'}",
     f"**Analysis errors:** {analysis_errors} · **Analysis warnings:** {analysis_warnings}",
     "",
     f"**Analyze job:** `{analyze_outcomes}`",
