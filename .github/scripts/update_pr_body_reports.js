@@ -202,6 +202,8 @@ module.exports = {
   SUMMARY_MARKER,
   ensureSection,
   upsertReport,
+  sumLabel,
+  totalsContent,
   updateReport,
   updateReports,
   refreshTotals,
