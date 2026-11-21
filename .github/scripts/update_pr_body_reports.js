@@ -49,9 +49,18 @@ function dedupeReportMarkers(section) {
   lines.forEach((line, i) => {
     if (REPORT_MARKERS.includes(line)) lastIndex[line] = i;
   });
-  return lines
-    .filter((line, i) => !REPORT_MARKERS.includes(line) || lastIndex[line] === i)
-    .join('\n');
+  const kept = [];
+  let skipping = false;
+  lines.forEach((line, i) => {
+    if (REPORT_MARKERS.includes(line)) {
+      // Drop the whole earlier panel, not just its marker: its metric lines
+      // would otherwise be attributed to the preceding panel by
+      // reportBlockText() and inflate the aggregate totals.
+      skipping = lastIndex[line] !== i;
+    }
+    if (!skipping) kept.push(line);
+  });
+  return kept.join('\n');
 }
 
 // Rebuild exactly one quality section from the last complete pair of section

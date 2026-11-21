@@ -56,6 +56,21 @@ const cleaned = m.canonicalizeSection(duplicated);
 assert.strictEqual(cleaned.split('<!-- codeql-report -->').length - 1, 1, cleaned);
 assert.ok(cleaned.includes('<!-- codeql-report -->\nnew'), cleaned);
 
+// An earlier duplicate panel's metrics must not leak into the preceding
+// block or survive as stale report text.
+const stalePanels = START + '\n' +
+  '<!-- codeql-report -->\n' + H.codeql + '\n' +
+  '**Analysis errors:** 0 · **Analysis warnings:** 0\n' +
+  '<!-- semgrep-report -->\n' + H.semgrep + '\n' +
+  '**Analysis errors:** 5 · **Analysis warnings:** 0\n' +
+  '<!-- semgrep-report -->\n' + H.semgrep + '\n' +
+  '**Analysis errors:** 2 · **Analysis warnings:** 0\n' + END + '\n';
+const staleCleaned = m.canonicalizeSection(stalePanels);
+assert.ok(!staleCleaned.includes('5 ·'), staleCleaned);
+const staleTotals = m.totalsContent(staleCleaned);
+assert.ok(staleTotals.includes('2 analysis errors'), staleTotals);
+assert.ok(!staleTotals.includes('7 analysis errors'), staleTotals);
+
 // Metric-looking text outside a generated report block cannot affect totals.
 const outside = START + '\n**Analysis errors:** 999\n' +
   '<!-- coverage-report -->\n' + H.tests + '\n' + END + '\n';
