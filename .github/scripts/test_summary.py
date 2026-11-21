@@ -31,6 +31,7 @@ def extract_summary(path):
     return "no results"
 
 suites = [
+    ("Workflow script tests", os.environ.get("WORKFLOW_SCRIPT_OUTCOME", ""), "workflow-script-test-output.txt"),
     ("Unit (in-process)", os.environ.get("UNIT_OUTCOME", ""), "unit-test-output.txt"),
     ("Playwright E2E", os.environ.get("E2E_OUTCOME", ""), "e2e-test-output.txt"),
     ("HTTP functional", os.environ.get("FUNCTIONAL_OUTCOME", ""), "functional-test-output.txt"),

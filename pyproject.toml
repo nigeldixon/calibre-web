@@ -126,6 +126,8 @@ cps = "calibreweb.__main__:main"
 [tool.pytest.ini_options]
 # .github/scripts contains helpers named test_*.py that are CLI programs, not
 # pytest modules. Keep bare `pytest` from importing and executing them.
+# Application tests and .github workflow-script tests live in separate
+# subdirectories and have separate CI steps; bare `pytest` still runs both.
 testpaths = ["tests"]
 
 [tool.setuptools]
