@@ -93,6 +93,32 @@ jobs:
               return;
             }
 
+            // Identify the run by its workflow file path, not by wr.name:
+            // the name comes from the PR-controlled workflow and can be
+            // changed to impersonate a trusted workflow.
+            const workflowConfigs = {
+              '.github/workflows/codeql.yml': {
+                key: 'codeql',
+                required: ['.github/workflows/codeql.yml'],
+              },
+              '.github/workflows/semgrep.yml': {
+                key: 'semgrep',
+                required: ['.github/workflows/semgrep.yml', '.github/scripts/semgrep_filter_sarif.py'],
+              },
+              '.github/workflows/test.yml': {
+                key: 'tests',
+                required: ['.github/workflows/test.yml', '.github/scripts/combine_coverage.sh'],
+              },
+            };
+            const config = workflowConfigs[wr.path || ''];
+            if (!config) {
+              core.setOutput('number', '');
+              core.setOutput('trusted', 'false');
+              core.info(`No trusted workflow mapping for path ${wr.path || '(none)'}; skipping.`);
+              return;
+            }
+            core.setOutput('report_key', config.key);
+
             core.setOutput('number', pr.number.toString());
             core.setOutput('base_sha', pr.base.sha || '');
             core.setOutput('head_sha', wr.head_sha || '');
@@ -109,11 +135,7 @@ jobs:
               owner: context.repo.owner, repo: context.repo.repo,
             });
             const trustedBase = repo.default_branch;
-            const requiredFiles = {
-              'CodeQL': ['.github/workflows/codeql.yml'],
-              'Semgrep': ['.github/workflows/semgrep.yml', '.github/scripts/semgrep_filter_sarif.py'],
-              'Tests': ['.github/workflows/test.yml', '.github/scripts/combine_coverage.sh'],
-            }[wr.name] || [];
+            const requiredFiles = config.required;
 
             async function fileAt(ref, path) {
               try {
@@ -143,7 +165,7 @@ jobs:
             }
 
       - name: Download CodeQL SARIF artifacts
-        if: steps.pr.outputs.number != '' && steps.pr.outputs.trusted == 'true' && github.event.workflow_run.name == 'CodeQL'
+        if: steps.pr.outputs.number != '' && steps.pr.outputs.trusted == 'true' && steps.pr.outputs.report_key == 'codeql'
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           run-id: ${{ github.event.workflow_run.id }}
@@ -154,7 +176,7 @@ jobs:
         continue-on-error: true
 
       - name: Download Semgrep artifacts
-        if: steps.pr.outputs.number != '' && steps.pr.outputs.trusted == 'true' && github.event.workflow_run.name == 'Semgrep'
+        if: steps.pr.outputs.number != '' && steps.pr.outputs.trusted == 'true' && steps.pr.outputs.report_key == 'semgrep'
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           run-id: ${{ github.event.workflow_run.id }}
@@ -166,7 +188,7 @@ jobs:
         continue-on-error: true
 
       - name: Download coverage artifacts
-        if: steps.pr.outputs.number != '' && steps.pr.outputs.trusted == 'true' && github.event.workflow_run.name == 'Tests'
+        if: steps.pr.outputs.number != '' && steps.pr.outputs.trusted == 'true' && steps.pr.outputs.report_key == 'tests'
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           run-id: ${{ github.event.workflow_run.id }}
@@ -178,7 +200,7 @@ jobs:
         continue-on-error: true
 
       - name: Regenerate CodeQL report from SARIF
-        if: steps.pr.outputs.number != '' && steps.pr.outputs.trusted == 'true' && github.event.workflow_run.name == 'CodeQL'
+        if: steps.pr.outputs.number != '' && steps.pr.outputs.trusted == 'true' && steps.pr.outputs.report_key == 'codeql'
         continue-on-error: true
         shell: bash
         env:
@@ -193,7 +215,7 @@ jobs:
           python "$GITHUB_WORKSPACE/.github/scripts/codeql_pr_comment.py" > "$GITHUB_WORKSPACE/codeql-report.md"
 
       - name: Regenerate Semgrep report from raw SARIF
-        if: steps.pr.outputs.number != '' && steps.pr.outputs.trusted == 'true' && github.event.workflow_run.name == 'Semgrep'
+        if: steps.pr.outputs.number != '' && steps.pr.outputs.trusted == 'true' && steps.pr.outputs.report_key == 'semgrep'
         continue-on-error: true
         shell: bash
         env:
@@ -211,7 +233,7 @@ jobs:
           python "$GITHUB_WORKSPACE/.github/scripts/semgrep_pr_comment.py" > "$GITHUB_WORKSPACE/semgrep-report.md"
 
       - name: Regenerate coverage report from coverage XML
-        if: steps.pr.outputs.number != '' && steps.pr.outputs.trusted == 'true' && github.event.workflow_run.name == 'Tests'
+        if: steps.pr.outputs.number != '' && steps.pr.outputs.trusted == 'true' && steps.pr.outputs.report_key == 'tests'
         continue-on-error: true
         shell: bash
         env:
@@ -230,6 +252,7 @@ jobs:
           PR_NUMBER: ${{ steps.pr.outputs.number }}
           TRUSTED: ${{ steps.pr.outputs.trusted }}
           MODIFIED: ${{ steps.pr.outputs.modified }}
+          REPORT_KEY: ${{ steps.pr.outputs.report_key }}
         with:
           script: |
             const fs = require('fs');
@@ -237,28 +260,28 @@ jobs:
 
             const wr = context.payload.workflow_run;
             const reports = {
-              'CodeQL': {
+              codeql: {
                 file: 'codeql-report.md',
                 marker: '<!-- codeql-report -->',
                 heading: '## CodeQL analysis',
                 labels: true,
               },
-              'Semgrep': {
+              semgrep: {
                 file: 'semgrep-report.md',
                 marker: '<!-- semgrep-report -->',
                 heading: '## Semgrep analysis',
                 labels: true,
               },
-              'Tests': {
+              tests: {
                 file: 'coverage-report.md',
                 marker: '<!-- coverage-report -->',
                 heading: '## Patch coverage',
                 labels: false,
               },
             };
-            const report = reports[wr.name];
+            const report = reports[process.env.REPORT_KEY];
             if (!report) {
-              core.info(`No report mapping for workflow ${wr.name}; skipping.`);
+              core.info(`No report mapping for key ${process.env.REPORT_KEY || '(none)'}; skipping.`);
               return;
             }
 
