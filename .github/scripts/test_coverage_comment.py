@@ -206,8 +206,6 @@ def failure_details(suites):
 
 def coverage_section():
     out = ["### Patch coverage", ""]
-    if run_url:
-        out += [f"**Full analysis:** [Workflow run]({run_url})", ""]
 
     if not os.path.exists(coverage_xml_path):
         out += ["No coverage data was generated for this run."]

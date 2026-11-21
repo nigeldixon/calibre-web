@@ -239,6 +239,7 @@ def test_test_panel_renders_suite_table_and_failure_details(
     out = proc.stdout
     assert proc.returncode == 0
     assert "## Tests" in out
+    assert out.count("**Full analysis:**") == 1
     assert "**Full analysis:** [Workflow run](https://example.test/run/9)" in out
     assert "| ❌ | Workflow script tests | `1 failed, 50 passed in 2.10s` | 1 |" in out
     assert "| ✅ | Unit (in-process) | `12 passed in 1.50s` | 0 |" in out
