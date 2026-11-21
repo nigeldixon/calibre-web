@@ -76,7 +76,10 @@ def added_lines_from_patch(patch):
             match = re.search(r"\+(\d+)(?:,(\d+))?", raw)
             new_line = int(match.group(1)) if match else None
             continue
-        if new_line is None or raw.startswith("+++"):
+        # The '+++ b/path' header appears before the first hunk, so
+        # new_line is None already covers it. An added source line can
+        # legitimately start with '++' (e.g. '+++counter;').
+        if new_line is None:
             continue
         if raw.startswith("+"):
             added.add(new_line)
