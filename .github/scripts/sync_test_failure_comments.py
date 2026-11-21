@@ -11,6 +11,9 @@ import requests
 # failure detail (for example a copied error message) must not hijack syncing.
 MARKER_RE = re.compile(r"(?m)^<!-- test-failure:[0-9a-f]{12} -->[ \t]*\r?$")
 STATUS_LINE = "Resolved: this failure is no longer present in the latest run."
+LEGACY_STATUS_LINES = {
+    "Resolved in the latest passing run.",
+}
 DETAILS_MARKER = "<details><summary>Last reported failures</summary>"
 MINIMIZE_MUTATION = """
 mutation($id: ID!) {
@@ -153,7 +156,8 @@ def resolved_body(body, name=None):
     suite_name = name or suite_name_from_body(body) or "Tests"
     details = []
     for line in lines:
-        if line == marker or line.startswith("## ") or line == STATUS_LINE:
+        if (line == marker or line.startswith("## ") or line == STATUS_LINE
+                or line.strip() in LEGACY_STATUS_LINES):
             continue
         if line.startswith("<details><summary>"):
             continue

@@ -196,6 +196,7 @@ def test_resolved_body_keeps_failure_details_collapsed_and_is_idempotent(
         "## ❌ Test failures: Workflow script tests (2)\n\n"
         "- `tests/x.py::test_a` — `FAILED` — boom\n"
         "- `tests/x.py::test_b` — `ERROR` — timeout\n\n"
+        "Resolved in the latest passing run.\n"
         "**Full analysis:** [Workflow run](https://example.test/run/1)\n"
     )
 
@@ -207,6 +208,7 @@ def test_resolved_body_keeps_failure_details_collapsed_and_is_idempotent(
         "<details><summary>Last reported failures</summary>\n"
     )
     assert "`tests/x.py::test_a` — `FAILED` — boom" in resolved
+    assert "Resolved in the latest passing run." not in resolved
     assert "[Workflow run](https://example.test/run/1)" in resolved
     assert resolved.rstrip().endswith("</details>")
     assert script["resolved_body"](resolved) == resolved
