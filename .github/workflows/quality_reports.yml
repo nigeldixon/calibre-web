@@ -466,10 +466,25 @@ jobs:
             };
 
             const configs = [
-              { key: 'codeql', name: 'CodeQL', marker: markers[0], prefix: 'codeql-sarif-' },
-              { key: 'semgrep', name: 'Semgrep', marker: markers[1], prefix: 'semgrep-results' },
-              { key: 'tests', name: 'Tests', marker: markers[2], prefix: 'coverage-data' },
+              {
+                key: 'codeql', name: 'CodeQL', marker: markers[0], prefix: 'codeql-sarif-',
+                path: '.github/workflows/codeql.yml',
+              },
+              {
+                key: 'semgrep', name: 'Semgrep', marker: markers[1], prefix: 'semgrep-results',
+                path: '.github/workflows/semgrep.yml',
+              },
+              {
+                key: 'tests', name: 'Tests', marker: markers[2], prefix: 'coverage-data',
+                path: '.github/workflows/test.yml',
+              },
             ];
+            // Workflow display names come from the pushed branch and can be
+            // changed by the PR. Resolve IDs from the base branch's workflow
+            // paths so a renamed workflow cannot impersonate a trusted one.
+            const workflows = await github.paginate(github.rest.actions.listRepoWorkflows, {
+              owner: context.repo.owner, repo: context.repo.repo, per_page: 100,
+            });
             const { data: runsData } = await github.rest.actions.listWorkflowRunsForRepo({
               owner: context.repo.owner, repo: context.repo.repo,
               head_sha: pr.head.sha, event: 'push', status: 'completed', per_page: 100,
@@ -481,7 +496,13 @@ jobs:
               const wanted = needsBackfill(cfg.marker);
               core.setOutput(`${cfg.key}_needed`, wanted ? 'true' : 'false');
               if (!wanted) continue;
-              const candidates = runs.filter((r) => r.name === cfg.name);
+              const workflow = workflows.find((w) => w.path === cfg.path);
+              const candidates = workflow
+                ? runs.filter((r) => r.workflow_id === workflow.id)
+                : [];
+              if (!workflow) {
+                core.info(`No base-branch workflow registered at ${cfg.path}.`);
+              }
               // The API returns newest runs first. Prefer a successful run so
               // a newer failed re-run cannot hide valid artifacts from it.
               const run = candidates.find((r) => r.conclusion === 'success') || candidates[0];
