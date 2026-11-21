@@ -136,8 +136,12 @@ def coverage_marker(total):
     match = re.search(r"(\d+(?:\.\d+)?)\s*%", total or "")
     if not match:
         return ""
-    _, _, label = pct_to_color(float(match.group(1)))
-    return "" if label == "Good" else "⚠ Low coverage"
+    percent = float(match.group(1))
+    if percent >= 80:
+        return ""
+    if percent >= 70:
+        return "🟠 Low coverage"
+    return "🔴 Low coverage"
 
 
 def workflow_coverage_line():
