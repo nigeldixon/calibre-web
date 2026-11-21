@@ -192,6 +192,18 @@ if sarif_files:
         if lang not in by_lang:
             by_lang[lang] = empty_info()
 
+failed_langs = [lang for lang, outcome in lang_outcome.items() if outcome not in ("", "success")]
+for lang in failed_langs:
+    info = by_lang.get(lang)
+    # A missing, unreadable, or error-notification-bearing SARIF file already
+    # contributed an analysis error; only count otherwise-uncounted failures.
+    if info is None:
+        analysis_errors += 1
+    elif not (info.get("parse_error") or info.get("read_error") or info.get("exec_errors")):
+        analysis_errors += 1
+if not failed_langs and analyze_outcomes not in ("", "success") and not lang_outcome and analysis_errors == 0:
+    analysis_errors += 1
+
 
 def status_icon(count):
     return "✅" if count == 0 else "⚠️"
@@ -254,7 +266,6 @@ if warning_details:
 if any(v.get("read_error") for v in by_lang.values()):
     lines += ["", "❌ A CodeQL SARIF file could not be parsed; the analysis is marked as failed."]
 
-failed_langs = [lang for lang, outcome in lang_outcome.items() if outcome not in ("", "success")]
 if failed_langs:
     lines += ["", "❌ CodeQL analyze failed for: " + ", ".join(f"`{l}`" for l in failed_langs) + "."]
 elif analyze_outcomes not in ("", "success") and not lang_outcome:
