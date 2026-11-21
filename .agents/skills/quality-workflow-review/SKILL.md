@@ -75,11 +75,13 @@ Expected headings:
 - Workflow-script tests stay under `tests/workflow_scripts/`, with their own CI step and coverage line.
 - Coverage regenerates from `coverage.xml` plus GitHub `pulls.listFiles` patches.
 - Backfilled test reports derive per-suite outcomes from test output via `DERIVE_TEST_OUTCOMES`.
-- Standard local test command:
+- Standard local test command from the repository root:
 
 ```sh
-PATH="/tmp/opencode/node-v24.22.3-linux-x64/bin:$PATH" PYTHONPATH=/tmp/opencode/defusedxml-stub .venv/bin/python -m pytest tests/workflow_scripts -q
+python -m pytest tests/workflow_scripts -q
 ```
+
+Use an environment with the workflow-script test dependencies installed. Node.js must be on `PATH` for the JavaScript syntax checks. For the exact coverage invocation used by CI, see `.github/workflows/test.yml`.
 
 ### Failure comments
 
