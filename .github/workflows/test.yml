@@ -248,7 +248,7 @@ jobs:
 
   report:
     name: PR report
-    if: always() && github.event_name == 'push' && needs.tests.outputs.pr_number != ''
+    if: always() && github.event_name == 'push'
     needs: tests
     runs-on: ubuntu-latest
     # Serialize PR body writes across all quality workflows. Keep this group
@@ -267,7 +267,16 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Find associated pull request
+        id: find_pr
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        with:
+          script: |
+            const script = require('./.github/scripts/find_associated_pr.js');
+            await script({ github, context, core });
+
       - name: Download coverage report artifact
+        if: steps.find_pr.outputs.number != ''
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: coverage-report-md
@@ -275,6 +284,7 @@ jobs:
         continue-on-error: true
 
       - name: Download test failure comments payload
+        if: steps.find_pr.outputs.number != ''
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: test-failure-comments
@@ -282,9 +292,11 @@ jobs:
         continue-on-error: true
 
       - name: Update coverage report in PR body
+        if: steps.find_pr.outputs.number != ''
+        continue-on-error: true
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         env:
-          PR_NUMBER: ${{ needs.tests.outputs.pr_number }}
+          PR_NUMBER: ${{ steps.find_pr.outputs.number }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         with:
           script: |
@@ -303,22 +315,28 @@ jobs:
             } else {
               content = fs.readFileSync(path, 'utf8');
             }
-            await updateReportAndRefreshTotals({
-              github, context, core,
-              pull_number: Number(process.env.PR_NUMBER),
-              marker: '<!-- coverage-report -->',
-              content,
-            });
+            try {
+              await updateReportAndRefreshTotals({
+                github, context, core,
+                pull_number: Number(process.env.PR_NUMBER),
+                marker: '<!-- coverage-report -->',
+                content,
+              });
+            } catch (error) {
+              // A PR-body API failure must not prevent failure comments from syncing.
+              core.warning(`Could not update PR body: ${error.message || error}`);
+            }
 
       - name: Install comment sync dependencies
         shell: bash
         run: python -m pip install --quiet 'requests>=2.32.0,<2.35.0'
 
       - name: Sync per-test failure comments
+        if: always() && steps.find_pr.outputs.number != ''
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_NUMBER: ${{ needs.tests.outputs.pr_number }}
+          PR_NUMBER: ${{ steps.find_pr.outputs.number }}
           TEST_FAILURE_COMMENTS_JSON: comments/test-failure-comments.json
           RESOLVE_MISSING: ${{ needs.tests.result == 'success' && 'true' || 'false' }}
         run: |
