@@ -78,6 +78,19 @@ def normalize_uri(uri):
     return uri
 
 
+def notification_detail(n):
+    uri = ''
+    for loc in (n.get('locations') or []):
+        found = normalize_uri((loc.get('physicalLocation') or {}).get('artifactLocation', {}).get('uri', ''))
+        if found:
+            uri = found
+            break
+    label = (n.get('descriptor') or {}).get('id') or (n.get('level') or 'analysis error')
+    text = ' '.join(((n.get('message') or {}).get('text') or '').split())[:160]
+    prefix = f'`{uri}` — ' if uri else ''
+    return f'- {prefix}{label}: {text}'
+
+
 def result_in_changed_files(result, changed):
     if changed is None:
         return True
@@ -108,6 +121,8 @@ by_lang = {}
 total_all = 0
 analysis_errors = 0
 analysis_warnings = 0
+error_details = []
+warning_details = []
 
 if not sarif_files:
     for lang in expected_langs:
@@ -136,9 +151,11 @@ for path in sarif_files:
                 if level == "error":
                     info["exec_errors"] += 1
                     analysis_errors += 1
+                    error_details.append(notification_detail(n))
                 elif level == "warning":
                     info["exec_warnings"] += 1
                     analysis_warnings += 1
+                    warning_details.append(notification_detail(n))
         for r in run.get("results", []) or []:
             if not result_in_changed_files(r, changed_files):
                 continue
@@ -193,6 +210,16 @@ lines += [
     "",
     f"**Analyze job:** `{analyze_outcomes}`",
 ]
+
+if error_details:
+    lines += ["", f'<details><summary>❌ Analysis errors ({analysis_errors})</summary>', ""]
+    lines += error_details
+    lines += ["", "</details>"]
+
+if warning_details:
+    lines += ["", f'<details><summary>⚠️ Analysis warnings ({analysis_warnings})</summary>', ""]
+    lines += warning_details
+    lines += ["", "</details>"]
 
 if any(v.get("read_error") for v in by_lang.values()):
     lines += ["", "❌ A CodeQL SARIF file could not be parsed; the analysis is marked as failed."]

@@ -88,8 +88,15 @@ if scope.get('reason') == 'no_sarif':
 if scope.get('reason') == 'invalid_sarif':
     lines += ['', '_Semgrep SARIF could not be parsed; the scan is marked as failed._']
 if warnings:
-    detail = ', '.join(f'{v} {k}' for k, v in (scope.get('warning_detail') or {}).items())
-    lines += ['', f'_⚠️ Execution warnings: {detail}._']
+    details = [f'- {v} × {k}' for k, v in (scope.get('warning_detail') or {}).items()]
+    lines += [
+        '',
+        f'<details><summary>⚠️ Analysis warnings ({warnings})</summary>',
+        '',
+    ] + details + [
+        '',
+        '</details>',
+    ]
 
 if scope.get('scoped'):
     base = (scope.get('base') or '')[:7]
