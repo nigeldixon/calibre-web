@@ -135,8 +135,9 @@ async function refreshTotals({ github, context, core, owner, repo, pull_number }
   });
 }
 
-// Update a report and the aggregate totals in one API write, so concurrent
-// workflows cannot leave a stale summary behind.
+// Update a report and the aggregate totals in one API write. GitHub has no
+// conditional PR update, so re-read immediately before writing and retry if
+// another workflow changed the body in the meantime.
 async function updateReportAndRefreshTotals({ github, context, core, owner, repo, pull_number, marker, content }) {
   owner = owner || context.repo.owner;
   repo = repo || context.repo.repo;
@@ -151,6 +152,13 @@ async function updateReportAndRefreshTotals({ github, context, core, owner, repo
     const currentBody = pr.body || '';
     let newBody = upsertReport(currentBody, marker, content);
     newBody = upsertReport(newBody, SUMMARY_MARKER, totalsContent(newBody));
+
+    const { data: latest } = await github.rest.pulls.get({ owner, repo, pull_number: pullNumber });
+    if ((latest.body || '') !== currentBody) {
+      core.info(`PR #${pullNumber} body changed during ${marker} update; reapplying.`);
+      continue;
+    }
+
     if (newBody === currentBody) {
       core.info(`PR #${pullNumber} body already up to date for ${marker}.`);
       return { updated: false, reason: 'unchanged' };
