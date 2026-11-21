@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the desired per-test failure comments from a test-results artifact."""
+"""Build grouped test-failure comments from a test-results artifact."""
 import hashlib
 import json
 import os
@@ -8,40 +8,62 @@ import os
 MARKER_PREFIX = "<!-- test-failure:"
 
 
-def marker_for(suite_key, nodeid):
+def marker_for(suite_key):
+    digest = hashlib.sha1(f"suite:{suite_key}".encode("utf-8")).hexdigest()[:12]
+    return f"{MARKER_PREFIX}{digest} -->"
+
+
+def legacy_marker_for(suite_key, nodeid):
+    """Return the marker used by the old one-comment-per-failure format."""
     digest = hashlib.sha1(f"{suite_key}:{nodeid}".encode("utf-8")).hexdigest()[:12]
     return f"{MARKER_PREFIX}{digest} -->"
 
 
-def comment_for(suite, failure, run_url):
-    marker = marker_for(suite["key"], failure["nodeid"])
+def failure_bullet(failure):
     message = str(failure.get("message", "")).replace("\n", " ").strip()
+    outcome = str(failure.get("kind", "FAILED"))
+    suffix = f" — {message}" if message else ""
+    return f"- `{failure['nodeid']}` — `{outcome}`{suffix}"
+
+
+def comment_for(suite, failures, run_url):
+    marker = marker_for(suite["key"])
     lines = [
         marker,
-        f"## ❌ Test failure: {suite['name']}",
+        f"## ❌ Test failures: {suite['name']} ({len(failures)})",
         "",
-        f"`{failure['nodeid']}` failed.",
-        "",
-        f"- **Outcome:** `{failure.get('kind', 'FAILED')}`",
-        f"- **Suite:** `{suite.get('summary', 'no results')}`",
-    ]
-    if message:
-        lines.append(f"- **Message:** {message}")
+    ] + [failure_bullet(failure) for failure in failures]
     if run_url:
-        lines += ["", f"[Full workflow run]({run_url})"]
+        lines += ["", f"**Full analysis:** [Workflow run]({run_url})"]
     return {"marker": marker, "body": "\n".join(lines).strip()}
 
 
 def build_payload(results):
     comments = []
+    suites = []
     for suite in results.get("suites", []) or []:
         if not isinstance(suite, dict):
             continue
-        for failure in suite.get("failures", []) or []:
-            if not isinstance(failure, dict) or not failure.get("nodeid"):
-                continue
-            comments.append(comment_for(suite, failure, results.get("run_url", "")))
-    return {"prefix": MARKER_PREFIX, "comments": comments}
+        failures = [
+            failure
+            for failure in suite.get("failures", []) or []
+            if isinstance(failure, dict) and failure.get("nodeid")
+        ]
+        suites.append(
+            {
+                "key": suite.get("key", ""),
+                "name": suite.get("name", "Tests"),
+                "marker": marker_for(suite.get("key", "")),
+                "legacy_markers": [
+                    legacy_marker_for(suite.get("key", ""), failure["nodeid"])
+                    for failure in failures
+                ],
+                "failure_count": len(failures),
+            }
+        )
+        if failures:
+            comments.append(comment_for(suite, failures, results.get("run_url", "")))
+    return {"prefix": MARKER_PREFIX, "suites": suites, "comments": comments}
 
 
 if __name__ == "__main__":

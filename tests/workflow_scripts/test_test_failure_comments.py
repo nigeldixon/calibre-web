@@ -5,7 +5,7 @@ def load_module(load_quality_script, tmp_path, name):
     return load_quality_script(name, tmp_path)
 
 
-def test_builds_one_stable_comment_per_failure(load_quality_script, tmp_path):
+def test_builds_one_grouped_comment_per_suite(load_quality_script, tmp_path):
     script = load_module(load_quality_script, tmp_path, "test_failure_comments.py")
     results = {
         "run_url": "https://example.test/run/1",
@@ -13,13 +13,18 @@ def test_builds_one_stable_comment_per_failure(load_quality_script, tmp_path):
             {
                 "key": "workflow_script_tests",
                 "name": "Workflow script tests",
-                "summary": "1 failed, 50 passed in 2.10s",
+                "summary": "2 failed, 50 passed in 2.10s",
                 "failures": [
                     {
                         "kind": "FAILED",
                         "nodeid": "tests/workflow_scripts/test_x.py::test_a",
                         "message": "AssertionError: bad",
-                    }
+                    },
+                    {
+                        "kind": "ERROR",
+                        "nodeid": "tests/workflow_scripts/test_x.py::test_b",
+                        "message": "setup failed",
+                    },
                 ],
             },
             {
@@ -35,11 +40,23 @@ def test_builds_one_stable_comment_per_failure(load_quality_script, tmp_path):
 
     assert len(payload["comments"]) == 1
     comment = payload["comments"][0]
-    assert comment["marker"].startswith("<!-- test-failure:")
-    assert "## ❌ Test failure: Workflow script tests" in comment["body"]
-    assert "`tests/workflow_scripts/test_x.py::test_a` failed." in comment["body"]
-    assert "- **Message:** AssertionError: bad" in comment["body"]
-    assert "[Full workflow run](https://example.test/run/1)" in comment["body"]
+    assert comment["marker"] == script["marker_for"]("workflow_script_tests")
+    assert "## ❌ Test failures: Workflow script tests (2)" in comment["body"]
+    assert "`tests/workflow_scripts/test_x.py::test_a` — `FAILED` — AssertionError: bad" in comment["body"]
+    assert "`tests/workflow_scripts/test_x.py::test_b` — `ERROR` — setup failed" in comment["body"]
+    assert "**Full analysis:** [Workflow run](https://example.test/run/1)" in comment["body"]
+
+    assert [suite["key"] for suite in payload["suites"]] == [
+        "workflow_script_tests",
+        "unit_tests",
+    ]
+    failing_suite = payload["suites"][0]
+    assert failing_suite["marker"] == comment["marker"]
+    assert len(failing_suite["legacy_markers"]) == 2
+    assert failing_suite["failure_count"] == 2
+    passing_suite = payload["suites"][1]
+    assert passing_suite["failure_count"] == 0
+    assert passing_suite["legacy_markers"] == []
 
 
 def test_resolved_body_is_idempotent(load_quality_script, tmp_path):
@@ -205,3 +222,6 @@ def test_writes_payload_from_artifact(tmp_path, run_quality_script, write_json):
     assert proc.returncode == 0
     payload = json.loads((tmp_path / "test-failure-comments.json").read_text(encoding="utf-8"))
     assert len(payload["comments"]) == 1
+    assert "## ❌ Test failures: Workflow script tests (1)" in payload["comments"][0]["body"]
+    assert len(payload["suites"]) == 1
+    assert payload["suites"][0]["failure_count"] == 1
