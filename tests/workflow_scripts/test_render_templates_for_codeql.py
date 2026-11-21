@@ -1,15 +1,23 @@
 import shutil
 import subprocess
 from html.parser import HTMLParser
+from pathlib import Path
 
 import pytest
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 JS_TYPES = {"", "text/javascript", "application/javascript", "module"}
 
 
 class ScriptSnippetParser(HTMLParser):
-    """Collect inline scripts and event handlers using a real HTML parser."""
+    """Collect script bodies and event handlers using a real HTML parser.
+
+    Inline content of external scripts is included too: CodeQL parses it even
+    though browsers ignore it, so invalid JS there can break extraction.
+    """
 
     def __init__(self):
         super().__init__(convert_charrefs=False)
@@ -27,7 +35,7 @@ class ScriptSnippetParser(HTMLParser):
             return
         attrs = dict(attrs)
         script_type = str(attrs.get("type") or "").lower()
-        if "src" not in attrs and script_type in JS_TYPES:
+        if script_type in JS_TYPES:
             self._script_parts = []
 
     def handle_startendtag(self, tag, attrs):
@@ -120,6 +128,9 @@ def test_rendered_template_javascript_is_parseable(tmp_path, run_quality_script)
         "<script>\n"
         "  var loading = {{_('Loading...')|safe|tojson}};\n"
         "</script>\n"
+        "<script src=\"viewer.js\" type=\"module\">\n"
+        "  var external = 0;\n"
+        "</script>\n"
         "<script type=\"text/template\">\n<%= html %>\n</script>\n",
     )
 
@@ -134,6 +145,29 @@ def test_rendered_template_javascript_is_parseable(tmp_path, run_quality_script)
     parser.close()
     snippets = parser.snippets
 
-    assert snippets
+    assert len(snippets) == 3
+    assert any("var external" in snippet for snippet in snippets)
     for index, code in enumerate(snippets):
+        check_js_syntax(node, code, tmp_path, index)
+
+
+def test_real_rendered_templates_have_parseable_javascript(tmp_path, run_quality_script):
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is not installed")
+    themes = REPO_ROOT / "cps" / "themes"
+    if not themes.exists():
+        pytest.skip("no theme templates in this checkout")
+
+    shutil.copytree(themes, tmp_path / "cps" / "themes")
+    proc = run_quality_script("render_templates_for_codeql.py", tmp_path)
+    assert proc.returncode == 0, proc.stderr
+
+    parser = ScriptSnippetParser()
+    for path in sorted((tmp_path / "codeql-rendered").rglob("*.html")):
+        parser.feed(path.read_text(encoding="utf-8"))
+    parser.close()
+
+    assert parser.snippets
+    for index, code in enumerate(parser.snippets):
         check_js_syntax(node, code, tmp_path, index)
