@@ -57,15 +57,39 @@ function sectionBounds(body) {
   return { start, end };
 }
 
+// Remove complete section pairs that appear before the section we are keeping.
+// Their contents are untrusted leftovers, not part of the PR description or
+// the generated report, and must not survive canonicalization.
+function stripPriorSections(body, keepStart) {
+  const starts = lineMarkerIndices(body, SECTION_START);
+  const ends = lineMarkerIndices(body, SECTION_END);
+  let cleaned = '';
+  let cursor = 0;
+  for (const start of starts) {
+    if (start >= keepStart) break;
+    const end = ends.find((i) => i > start) ?? -1;
+    if (end === -1 || end >= keepStart) continue;
+    cleaned += body.slice(cursor, start);
+    cursor = end + SECTION_END.length;
+  }
+  return cleaned + body.slice(cursor);
+}
+
 function canonicalizeSection(body) {
   body = body || '';
-  const { start, end } = sectionBounds(body);
-  if (start === -1 || end === -1) {
-    return stripQualityMarkers(body).replace(/\s*$/, '') + SECTION_HEADER + SECTION_START + '\n' + SECTION_END + '\n';
+  const originalBounds = sectionBounds(body);
+  if (originalBounds.start === -1 || originalBounds.end === -1) {
+    // Without section markers, anything from a generated header onward is a
+    // stale report body. Keep the PR's own text before that header only.
+    const headerAt = body.indexOf(SECTION_HEADER);
+    const prefix = headerAt === -1 ? body : body.slice(0, headerAt);
+    return stripQualityMarkers(prefix).replace(/\s*$/, '') + SECTION_HEADER + SECTION_START + '\n' + SECTION_END + '\n';
   }
-  const section = dedupeReportMarkers(body.slice(start + SECTION_START.length, end));
-  const before = stripQualityMarkers(body.slice(0, start)).replace(/\s*$/, '');
-  const after = stripQualityMarkers(body.slice(end + SECTION_END.length)).replace(/^\s*/, '');
+  const cleanedBody = stripPriorSections(body, originalBounds.start);
+  const { start, end } = sectionBounds(cleanedBody);
+  const section = dedupeReportMarkers(cleanedBody.slice(start + SECTION_START.length, end));
+  const before = stripQualityMarkers(cleanedBody.slice(0, start)).replace(/\s*$/, '');
+  const after = stripQualityMarkers(cleanedBody.slice(end + SECTION_END.length)).replace(/^\s*/, '');
   return before + SECTION_HEADER + SECTION_START + section + SECTION_END + (after ? '\n' + after : '\n');
 }
 
@@ -265,6 +289,7 @@ async function updateReportAndRefreshTotals({ github, context, core, owner, repo
 module.exports = {
   SECTION_START,
   SECTION_END,
+  SECTION_HEADER,
   SUMMARY_MARKER,
   lineMarkerIndices,
   ensureSection,
