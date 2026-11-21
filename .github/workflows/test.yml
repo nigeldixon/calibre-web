@@ -65,11 +65,12 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          COVERAGE_FILE=.coverage.workflow-scripts \
+          mkdir -p workflow-coverage-data
+          COVERAGE_FILE=workflow-coverage-data/scripts \
             pytest tests/workflow_scripts -q \
               --cov=.github/scripts \
               --cov-report=xml:coverage-workflow-scripts.xml 2>&1 | tee workflow-script-test-output.txt
-          python -m coverage report --data-file=.coverage.workflow-scripts -m > coverage-workflow-scripts-term.txt 2>&1
+          python -m coverage report --data-file=workflow-coverage-data/scripts -m > coverage-workflow-scripts-term.txt 2>&1
 
       - name: Run unit tests with coverage
         id: unit_tests
