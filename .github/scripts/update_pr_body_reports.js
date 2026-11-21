@@ -107,11 +107,14 @@ function sumLabel(body, label) {
 }
 
 function totalsContent(body) {
+  const start = body.indexOf(SECTION_START);
+  const end = start === -1 ? -1 : body.indexOf(SECTION_END, start);
+  const section = start !== -1 && end !== -1 ? body.slice(start, end) : '';
   return [
     SUMMARY_MARKER,
-    `**Quality total:** ${sumLabel(body, ISSUES_LABEL)} issues found · ` +
-      `${sumLabel(body, ERRORS_LABEL)} analysis errors · ` +
-      `${sumLabel(body, WARNINGS_LABEL)} analysis warnings`,
+    `**Quality total:** ${sumLabel(section, ISSUES_LABEL)} issues found · ` +
+      `${sumLabel(section, ERRORS_LABEL)} analysis errors · ` +
+      `${sumLabel(section, WARNINGS_LABEL)} analysis warnings`,
   ].join('\n');
 }
 
