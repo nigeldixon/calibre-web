@@ -99,6 +99,7 @@ Use an environment with the workflow-script test dependencies installed. Node.js
 - Reopen on recurrence.
 - Create a new comment when the failure changes.
 - Failure-comment sync must run even when the PR-body publish step fails: the publish step uses `continue-on-error: true` and the following install/sync steps use `always()` in both the `publish` and `backfill` jobs of `quality_reports.yml`.
+- The fork publish step also requires `steps.pr.outcome == 'success'`; a failed resolver can leave partial outputs but must not cause a fallback report with an invented trust explanation.
 - Keep the payload guard (`build_test_failure_comments.outcome == 'success'` / `backfill_test_comments.outcome == 'success'`): `sync_test_failure_comments.py` opens the artifact unconditionally, so a bare `always()` on the sync step can fail when no payload was produced.
 - The internal-PR path in `test.yml` uses the same publish-then-sync pattern; check both paths when changing either.
 
