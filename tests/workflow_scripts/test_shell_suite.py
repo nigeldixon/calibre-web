@@ -256,6 +256,8 @@ def combine_coverage_traces(tmp_path):
 
 def test_shell_workflow_scripts_have_line_and_branch_coverage(tmp_path):
     if not shutil.which("bash"):
+        if os.environ.get("CI"):
+            pytest.fail("bash is required in CI for shell coverage assertions")
         pytest.skip("bash is not installed")
     assert SCRIPTS, "no shell workflow scripts found"
 

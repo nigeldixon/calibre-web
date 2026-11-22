@@ -32,6 +32,8 @@ def lcov_totals(path):
 def test_javascript_workflow_scripts_have_coverage_data():
     node = shutil.which("node")
     if not node:
+        if os.environ.get("CI"):
+            pytest.fail("node is required in CI for JavaScript coverage assertions")
         pytest.skip("node is not installed")
 
     lcov_path = Path(

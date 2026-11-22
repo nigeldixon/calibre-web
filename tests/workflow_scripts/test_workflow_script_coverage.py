@@ -57,6 +57,14 @@ def test_python_coverage_config_counts_unimported_scripts(tmp_path):
     assert totals["num_statements"] == 2, "unimported script was omitted from coverage"
 
 
+def test_ci_sets_up_node_for_javascript_coverage():
+    workflow = (REPO_ROOT / ".github" / "workflows" / "test.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "- name: Set up Node" in workflow
+    assert "actions/setup-node@" in workflow
+
+
 def test_python_coverage_report_fails_below_full_coverage():
     workflow = (REPO_ROOT / ".github" / "workflows" / "test.yml").read_text(
         encoding="utf-8"
