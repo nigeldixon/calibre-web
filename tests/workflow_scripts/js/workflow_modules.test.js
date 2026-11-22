@@ -957,6 +957,24 @@ test('updateReportAndRefreshTotals reapplies updates after a concurrent body cha
   assert.ok(write.params.body.includes('real semgrep result'));
 });
 
+test('updateReportAndRefreshTotals stops after repeated concurrent body changes', async () => {
+  const bodies = ['body A', 'body B', 'body B', 'body A', 'body A', 'body B'];
+  let gets = 0;
+  const stub = githubStub({
+    'pulls.get': () => ({ data: { body: bodies[gets++] || '', number: 7 } }),
+  });
+  const marker = REPORT_DEFS.codeql.marker;
+  const content = panel(marker, 'real codeql result');
+
+  const result = await shared.updateReportAndRefreshTotals({
+    github: stub.github, context: contextFor({}), core: makeCore().core,
+    pull_number: 7, marker, content,
+  });
+  assert.deepStrictEqual(result, { updated: false, reason: 'retries_exhausted' });
+  assert.strictEqual(gets, 6);
+  assert.strictEqual(stub.calls.filter((c) => c.name === 'pulls.update').length, 0);
+});
+
 test('updateReportAndRefreshTotals retries conflicts and reports exhausted retries', async () => {
   const context = contextFor({});
   const marker = REPORT_DEFS.tests.marker;

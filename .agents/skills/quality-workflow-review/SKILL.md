@@ -50,7 +50,8 @@ Expected headings:
 
 - Legacy `## Quality reports` must canonicalize cleanly.
 - Section markers are line-anchored; quoted markers inside report text are not panel boundaries.
-- Canonicalization discards injected or stale report content before rebuilding the trusted section.
+- Canonicalization discards injected or stale report content before rebuilding the trusted section. `ensureSection()` always yields one complete marked section, and `sectionBounds()` only selects a start with a following end; `upsertReport()` and `stripPriorSections()` rely on those invariants instead of defensive nullish fallbacks.
+- `updateReportAndRefreshTotals()` uses an explicit retry counter: conflicts throw on the final attempt, while three consecutive concurrent body changes return `retries_exhausted`.
 - `.github/scripts/report_constants.json` is the source of truth for section markers, report markers/headings, and metric labels. `update_pr_body_reports.js` re-exports the derived JS constants and `report_constants.py` loads the same JSON for the Python generators; the parity test in `tests/workflow_scripts/test_report_constants.py` guards agreement.
 - Totals are whole-solution totals and are computed from trusted panel data, not untrusted PR body text.
 - Never present PR-filtered results as complete.

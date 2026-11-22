@@ -106,7 +106,7 @@ function stripQualityMarkers(text) {
 }
 
 function dedupeReportMarkers(section) {
-  const lines = (section || '').split(/\r?\n/);
+  const lines = section.split(/\r?\n/);
   const lastIndex = {};
   lines.forEach((line, i) => {
     if (REPORT_MARKERS.includes(line)) lastIndex[line] = i;
@@ -154,8 +154,10 @@ function stripPriorSections(body, keepStart) {
   let cursor = 0;
   for (const start of starts) {
     if (start >= keepStart) break;
-    const end = ends.find((i) => i > start) ?? -1;
-    if (end === -1 || end >= keepStart) continue;
+    // sectionBounds() only keeps a start that has a following end, so every
+    // earlier start has one too.
+    const end = ends.find((i) => i > start);
+    if (end >= keepStart) continue;
     cleaned += body.slice(cursor, start);
     cursor = end + SECTION_END.length;
   }
@@ -199,9 +201,9 @@ function upsertReport(body, marker, content) {
     content = marker + '\n' + content;
   }
 
-  const startIdx = lineMarkerIndices(body, SECTION_START)[0] ?? -1;
-  const endIdx = startIdx === -1 ? -1 : lineMarkerIndices(body, SECTION_END).find((i) => i > startIdx) ?? -1;
-  if (startIdx === -1 || endIdx === -1) return body;
+  // ensureSection() always returns one complete marked section.
+  const startIdx = lineMarkerIndices(body, SECTION_START)[0];
+  const endIdx = lineMarkerIndices(body, SECTION_END).find((i) => i > startIdx);
 
   const before = body.slice(0, startIdx + SECTION_START.length);
   let section = body.slice(startIdx + SECTION_START.length, endIdx);
@@ -233,7 +235,10 @@ async function updateReport({ github, context, core, owner, repo, pull_number, m
     return { updated: false, reason: 'no_pr' };
   }
 
-  for (let attempt = 0; attempt < 3; attempt++) {
+  // Every iteration returns or throws, so the retry counter bounds conflicts
+  // without leaving an unreachable loop-exit branch.
+  let attempt = 0;
+  for (;;) {
     const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number: pullNumber });
     const currentBody = pr.body || '';
     const newBody = upsertReport(currentBody, marker, content);
@@ -249,12 +254,12 @@ async function updateReport({ github, context, core, owner, repo, pull_number, m
       const status = err && err.status;
       if (attempt < 2 && (status === 409 || status === 422)) {
         core.info(`Retrying PR body update after conflict/error (${status})...`);
+        attempt += 1;
         continue;
       }
       throw err;
     }
   }
-  return { updated: false, reason: 'retries_exhausted' };
 }
 
 async function updateReports({ github, context, core, owner, repo, pull_number, reports }) {
@@ -343,7 +348,10 @@ async function updateReportAndRefreshTotals({ github, context, core, owner, repo
     return { updated: false, reason: 'no_pr' };
   }
 
-  for (let attempt = 0; attempt < 3; attempt++) {
+  // Every iteration returns or throws, so the retry counter bounds conflicts
+  // and concurrent body changes without an unreachable loop-exit branch.
+  let attempt = 0;
+  for (;;) {
     const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number: pullNumber });
     const currentBody = pr.body || '';
     let newBody = upsertReport(currentBody, marker, content);
@@ -352,6 +360,10 @@ async function updateReportAndRefreshTotals({ github, context, core, owner, repo
     const { data: latest } = await github.rest.pulls.get({ owner, repo, pull_number: pullNumber });
     if ((latest.body || '') !== currentBody) {
       core.info(`PR #${pullNumber} body changed during ${marker} update; reapplying.`);
+      if (attempt >= 2) {
+        return { updated: false, reason: 'retries_exhausted' };
+      }
+      attempt += 1;
       continue;
     }
 
@@ -367,12 +379,12 @@ async function updateReportAndRefreshTotals({ github, context, core, owner, repo
       const status = err && err.status;
       if (attempt < 2 && (status === 409 || status === 422)) {
         core.info(`Retrying PR body update after conflict/error (${status})...`);
+        attempt += 1;
         continue;
       }
       throw err;
     }
   }
-  return { updated: false, reason: 'retries_exhausted' };
 }
 
 module.exports = {
