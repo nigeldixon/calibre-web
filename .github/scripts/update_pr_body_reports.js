@@ -322,6 +322,13 @@ function panelHasUnknownMetric(block) {
   });
 }
 
+// Pending placeholders have no metric lines yet, so they would otherwise look
+// like a real all-zero report. Only a whole line starting with the generated
+// hourglass marker counts; a quoted ⏳ in failure text is not a placeholder.
+function panelIsPending(block) {
+  return block.split(/\r?\n/).some((rawLine) => rawLine.trim().startsWith('⏳'));
+}
+
 // Only generated report panels contribute to totals. A metric-looking line
 // elsewhere in the body (or in an unrelated paragraph) is ignored.
 function reportBlockText(section) {
@@ -345,7 +352,9 @@ function totalsContent(body) {
   const section = start !== -1 && end !== -1 ? reportBlockText(body.slice(start, end)) : '';
   const unavailable = REPORT_KEYS.filter((key) => {
     const bounds = panelBounds(section, REPORT_DEFS[key].marker);
-    return bounds.start !== -1 && panelHasUnknownMetric(section.slice(bounds.start, bounds.end));
+    if (bounds.start === -1) return false;
+    const block = section.slice(bounds.start, bounds.end);
+    return panelHasUnknownMetric(block) || panelIsPending(block);
   }).length;
   const prefix = unavailable ? 'at least ' : '';
   const qualifier = unavailable

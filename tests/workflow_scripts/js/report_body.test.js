@@ -132,3 +132,40 @@ const bothMissing = m.totalsContent([
 assert.ok(bothMissing.includes('at least 0 issues found'), bothMissing);
 assert.ok(bothMissing.includes('2 reports unavailable'), bothMissing);
 });
+
+test('pending panels qualify totals instead of looking like zero findings', () => {
+const m = require(path.join(ROOT, '.github', 'scripts', 'update_pr_body_reports.js'));
+const pending = [
+  m.REPORT_DEFS.codeql.marker,
+  m.REPORT_HEADINGS.codeql,
+  '',
+  '⏳ CodeQL analysis is queued/running. Results will appear here when the workflow completes.',
+].join('\n');
+const body = [
+  m.SECTION_START,
+  pending,
+  m.REPORT_DEFS.semgrep.marker,
+  m.REPORT_HEADINGS.semgrep,
+  '**Whole-solution issues:** 60 · **In changed files:** 2',
+  '**Analysis errors:** 0 · **Analysis warnings:** 5',
+  m.SECTION_END,
+].join('\n');
+
+const totals = m.totalsContent(body);
+assert.ok(totals.includes('at least 60 issues found'), totals);
+assert.ok(totals.includes('at least 0 analysis errors'), totals);
+assert.ok(totals.includes('at least 5 analysis warnings'), totals);
+assert.ok(totals.includes('1 report unavailable'), totals);
+assert.ok(!totals.includes('**Quality total:** 60 issues found'), totals);
+
+// An hourglass quoted inside a real report must not qualify the totals.
+const quoted = m.totalsContent([
+  m.SECTION_START,
+  m.REPORT_DEFS.tests.marker,
+  m.REPORT_HEADINGS.tests,
+  '- waiting message says ⏳ but results are complete',
+  m.SECTION_END,
+].join('\n'));
+assert.ok(quoted.includes('**Quality total:** 0 issues found'), quoted);
+assert.ok(!quoted.includes('unavailable'), quoted);
+});
