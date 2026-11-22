@@ -183,7 +183,9 @@ jobs:
           python "$GITHUB_WORKSPACE/.github/scripts/test_coverage_comment.py" > "$GITHUB_WORKSPACE/coverage-report.md"
 
       - name: Publish quality report to PR body
+        # A PR-body API failure must not prevent failure comments from syncing.
         if: always() && steps.pr.outputs.number != ''
+        continue-on-error: true
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         env:
           PR_NUMBER: ${{ steps.pr.outputs.number }}
@@ -196,12 +198,13 @@ jobs:
             await script({ github, context, core });
 
       - name: Install comment sync dependencies
+        if: always()
         shell: bash
         run: python -m pip install --quiet 'requests>=2.32.0,<2.35.0'
 
       - name: Sync per-test failure comments
         if: >-
-          steps.pr.outputs.number != '' && steps.pr.outputs.trusted == 'true' &&
+          always() && steps.pr.outputs.number != '' && steps.pr.outputs.trusted == 'true' &&
           steps.pr.outputs.report_key == 'tests' &&
           steps.build_test_failure_comments.outcome == 'success'
         shell: bash
@@ -374,6 +377,8 @@ jobs:
           python "$GITHUB_WORKSPACE/.github/scripts/test_coverage_comment.py" > "$GITHUB_WORKSPACE/coverage-report.md"
 
       - name: Publish backfilled reports or re-run analyses
+        # A PR-body API failure must not prevent failure comments from syncing.
+        continue-on-error: true
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         env:
           PR_NUMBER: ${{ steps.runs.outputs.pr_number }}
@@ -392,12 +397,13 @@ jobs:
             await script({ github, context, core });
 
       - name: Install comment sync dependencies
+        if: always()
         shell: bash
         run: python -m pip install --quiet 'requests>=2.32.0,<2.35.0'
 
       - name: Sync per-test failure comments
         if: >-
-          steps.runs.outputs.tests_needed == 'true' &&
+          always() && steps.runs.outputs.tests_needed == 'true' &&
           steps.backfill_test_comments.outcome == 'success'
         shell: bash
         env:
