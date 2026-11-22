@@ -1010,8 +1010,12 @@ test('refreshTotals skips missing PRs and writes aggregate totals', async () => 
   const write = stub.calls.find((c) => c.name === 'pulls.update');
   assert.strictEqual(write.params.owner, 'acme');
   assert.strictEqual(write.params.repo, 'web');
+  assert.ok(write.params.body.includes(shared.SUMMARY_MARKER), write.params.body);
+  assert.strictEqual(write.params.body.split('**Quality total:**').length - 1, 1, write.params.body);
   assert.ok(write.params.body.includes('2 analysis errors'), write.params.body);
   assert.ok(write.params.body.includes('1 analysis warnings'), write.params.body);
+  assert.ok(write.params.body.includes(REPORT_DEFS.codeql.marker), write.params.body);
+  assert.ok(write.params.body.includes('**Analysis errors:** 2'), write.params.body);
 });
 
 test('updateReportAndRefreshTotals handles missing PRs and unchanged bodies', async () => {
