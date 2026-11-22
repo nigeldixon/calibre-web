@@ -5,7 +5,10 @@ import os
 import re
 from defusedxml import ElementTree as SafeET
 
-marker = "<!-- coverage-report -->"
+from report_constants import load_constants
+
+C = load_constants()
+marker = C["markers"]["tests"]
 
 
 class CoverageDataError(Exception):
@@ -308,7 +311,7 @@ def coverage_section():
 
 def main():
     suites = load_test_results()
-    lines = [marker, "### 🧪 Tests", ""]
+    lines = [marker, C["headings"]["tests"], ""]
     if run_url:
         lines += [f"**Full analysis:** [Workflow run]({run_url})", ""]
     lines += ["Automated test summary for files changed in this PR.", ""]

@@ -2,9 +2,11 @@
 import json
 import os
 
+from report_constants import load_constants
 from sarif_validation import valid_run_shape
 
-marker = '<!-- semgrep-report -->'
+C = load_constants()
+marker = C['markers']['semgrep']
 sarif_path = 'semgrep-results/semgrep.sarif'
 scope_path = 'semgrep-results/scope.json'
 raw_sarif_path = os.environ.get('RAW_SARIF_PATH', 'semgrep-results/semgrep.raw.sarif').strip()
@@ -202,7 +204,7 @@ if analysis_url:
     full_analysis.append(f'**Code scanning:** [{analysis_label}]({analysis_url})')
 full_analysis = '\n'.join(full_analysis)
 
-lines = [marker, '### 🛡️ Semgrep analysis', '']
+lines = [marker, C['headings']['semgrep'], '']
 if scope.get('scoped'):
     lines.append('Automated Semgrep summary for files changed in this PR (filtered SARIF).')
 elif scope.get('reason') == 'diff_failed_full_scan':
@@ -228,10 +230,11 @@ else:
 
 lines += [
     '',
-    f"**Whole-solution issues:** {scope.get('total_all', 0)} · **In changed files:** {totals['results']}",
-    f'**Analysis errors:** {errors} · **Analysis warnings:** {warnings}',
+    f"{C['labels']['issues']}{scope.get('total_all', 0)} · "
+    f"{C['labels']['changed']}{totals['results']}",
+    f"{C['labels']['errors']}{errors} · {C['labels']['warnings']}{warnings}",
     '',
-    f'**Analyze job:** `{analyze_outcome}`',
+    f"{C['labels']['analyze']}`{analyze_outcome}`",
 ]
 
 if not scope.get('scan_ok', True):

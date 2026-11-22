@@ -4,9 +4,11 @@ import os
 import subprocess
 import sys
 
+from report_constants import load_constants
 from sarif_validation import load_sarif, valid_run_shape
 
-marker = "<!-- codeql-report -->"
+C = load_constants()
+marker = C["markers"]["codeql"]
 sarif_files = sorted(glob.glob("codeql-results/**/*.sarif", recursive=True))
 status_files = sorted(glob.glob("codeql-results/**/status.txt", recursive=True))
 analyze_outcomes = os.environ.get("ANALYZE_RESULT", "")
@@ -282,7 +284,7 @@ total = sum(v.get("results", 0) for v in by_lang.values() if not v.get("parse_er
 
 lines = [
     marker,
-    "### 🔍 CodeQL analysis",
+    C["headings"]["codeql"],
     "",
     scope_note,
     "Jinja templates are rendered into parseable copies before JavaScript extraction; raw template expressions are not analyzed directly.",
@@ -308,11 +310,11 @@ for lang in sorted(by_lang):
 
 lines += [
     "",
-    f"**Whole-solution issues:** {total_all} · "
-    f"**In changed files:** {total if changed_files is not None else 'unknown'}",
-    f"**Analysis errors:** {analysis_errors} · **Analysis warnings:** {analysis_warnings}",
+    f"{C['labels']['issues']}{total_all} · "
+    f"{C['labels']['changed']}{total if changed_files is not None else 'unknown'}",
+    f"{C['labels']['errors']}{analysis_errors} · {C['labels']['warnings']}{analysis_warnings}",
     "",
-    f"**Analyze job:** `{analyze_outcomes}`",
+    f"{C['labels']['analyze']}`{analyze_outcomes}`",
 ]
 
 if error_details:
