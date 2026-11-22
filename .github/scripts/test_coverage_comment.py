@@ -20,6 +20,7 @@ run_url = os.environ.get("RUN_URL", "").strip()
 changed_json_path = os.environ.get("CHANGED_FILES_JSON", "").strip()
 workflow_coverage_path = os.environ.get("WORKFLOW_COVERAGE_TERM_PATH", "coverage-workflow-scripts-term.txt").strip()
 js_coverage_path = os.environ.get("WORKFLOW_JS_COVERAGE_LCOV_PATH", "coverage-workflow-js-lcov.info").strip()
+shell_coverage_path = os.environ.get("WORKFLOW_SHELL_COVERAGE_LCOV_PATH", "coverage-workflow-shell-lcov.info").strip()
 test_results_path = os.environ.get("TEST_RESULTS_JSON", "test-results.json").strip()
 
 DEFAULT_SUITES = [
@@ -201,7 +202,7 @@ def python_coverage_detail():
     }
 
 
-def js_coverage_total(path):
+def lcov_coverage_total(path, suffix):
     if not path or not os.path.exists(path):
         return None
     try:
@@ -214,7 +215,7 @@ def js_coverage_total(path):
     for record in records:
         lines = record.splitlines()
         source = next((ln[3:] for ln in lines if ln.startswith("SF:")), "")
-        if ".github/scripts/" not in source or not source.endswith(".js"):
+        if ".github/scripts/" not in source or not source.endswith(suffix):
             continue
 
         def value(prefix):
@@ -231,6 +232,14 @@ def js_coverage_total(path):
     return totals if totals["lines"] else None
 
 
+def js_coverage_total(path):
+    return lcov_coverage_total(path, ".js")
+
+
+def shell_coverage_total(path):
+    return lcov_coverage_total(path, ".sh")
+
+
 def js_coverage_detail():
     totals = js_coverage_total(js_coverage_path)
     if not totals:
@@ -245,10 +254,20 @@ def js_coverage_detail():
     return {"detail": detail, "marker": coverage_marker(f"{worst}%")}
 
 
+def shell_coverage_detail():
+    totals = shell_coverage_total(shell_coverage_path)
+    if not totals:
+        return None
+    lines_pct = 100.0 * totals["hit_lines"] / totals["lines"]
+    detail = f"{totals['hit_lines']}/{totals['lines']} lines ({lines_pct:.0f}%)"
+    return {"detail": detail, "marker": coverage_marker(f"{lines_pct}%")}
+
+
 def coverage_summary_line():
     entries = [
         ("Python", python_coverage_detail()),
         ("JavaScript", js_coverage_detail()),
+        ("Shell", shell_coverage_detail()),
     ]
     present = [(label, entry) for label, entry in entries if entry]
     if not present:
@@ -260,7 +279,7 @@ def coverage_summary_line():
         key=lambda marker: 0 if marker.startswith("❌") else 1,
     )
     summary = "Workflow script coverage"
-    body = " · ".join(details) + " · shell scripts not measured"
+    body = " · ".join(details)
     if markers:
         return f"**{summary} — {' '.join(markers)}:** {body}"
     return f"<small>{summary}: {body}</small>"

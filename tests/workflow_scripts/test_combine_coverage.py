@@ -61,6 +61,25 @@ def test_report_failure_does_not_leave_stderr_as_coverage(tmp_path):
     assert not (tmp_path / "coverage-term.tmp").exists()
 
 
+def test_xml_failure_removes_stale_coverage_xml(tmp_path):
+    (tmp_path / ".coverage.server1").write_text("dummy", encoding="utf-8")
+    (tmp_path / "coverage.xml").write_text("stale", encoding="utf-8")
+    env = fake_python(
+        tmp_path / "bin",
+        "case \"$*\" in\n"
+        "  *combine*) : > .coverage; exit 0;;\n"
+        "  *xml*) printf 'ERROR: bad xml\\n' >&2; exit 1;;\n"
+        "esac\n"
+        "exit 0\n",
+    )
+
+    proc = run_combine(tmp_path, env)
+
+    assert proc.returncode != 0
+    assert not (tmp_path / "coverage.xml").exists()
+    assert not (tmp_path / "coverage-term.txt").exists()
+
+
 def test_successful_combine_deduplicates_and_writes_report(tmp_path):
     (tmp_path / ".coverage.server1").write_text("dummy", encoding="utf-8")
     (tmp_path / "coverage.xml").write_text("stale", encoding="utf-8")

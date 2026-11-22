@@ -74,8 +74,9 @@ Expected headings:
 ### Tests and coverage
 
 - Workflow-script tests stay under `tests/workflow_scripts/`, with their own CI step and coverage line.
-- Python and JavaScript workflow-script coverage appear on one adjacent line in the same `covered/total (percent)` format: `Workflow script coverage: Python \`...\` · JavaScript \`...\` · shell scripts not measured`. `coverage_stats()` surfaces coverage.py's `Branch`/`BrPart` columns, enabled in `tests/workflow_scripts/coverage_support/coveragerc`; `python_coverage_detail()` and `js_coverage_detail()` format the two languages, and `coverage_summary_line()` combines them.
+- Python, JavaScript, and shell workflow-script coverage appear on one adjacent line in the same `covered/total (percent)` format: `Workflow script coverage: Python \`...\` · JavaScript \`...\` · Shell \`...\``. `coverage_stats()` surfaces coverage.py's `Branch`/`BrPart` columns, enabled in `tests/workflow_scripts/coverage_support/coveragerc`; `python_coverage_detail()`, `js_coverage_detail()`, and `shell_coverage_detail()` format the three languages, and `coverage_summary_line()` combines them.
 - JS coverage is measured with Node's built-in test runner (`--experimental-test-coverage`, lcov reporter) by `tests/workflow_scripts/test_javascript_suite.py`, which runs the `node:test` files under `tests/workflow_scripts/js/`. The lcov file is uploaded in the `coverage-data` artifact and counted by `js_coverage_total()`; it includes only `.github/scripts/*.js`, not the test files.
+- Shell coverage is line-only bash `xtrace` coverage produced by `tests/workflow_scripts/test_shell_suite.py`; it traces the exercised scenarios for `.github/scripts/*.sh`, writes `coverage-workflow-shell-lcov.info`, and is summarized by `shell_coverage_detail()`. Branch percentages are not reported because bash tracing does not expose branch outcomes. New shell scripts must be added to that suite or its full-coverage assertion will fail.
 - JS modules need behavior tests, not only `require()`/export checks; `tests/workflow_scripts/js/workflow_modules.test.js` exercises their API calls and written payloads.
 - Coverage regenerates from `coverage.xml` plus GitHub `pulls.listFiles` patches.
 - Backfilled test reports derive per-suite outcomes from test output via `DERIVE_TEST_OUTCOMES`.
@@ -85,7 +86,7 @@ Expected headings:
 python -m pytest tests/workflow_scripts -q
 ```
 
-Use an environment with the workflow-script test dependencies installed. Node.js must be on `PATH` for the JavaScript-backed tests; without it those assertions skip silently. CI installs Node 20 with `actions/setup-node` in `.github/workflows/test.yml` — match that version locally. For the exact coverage invocation used by CI, see `.github/workflows/test.yml`.
+Use an environment with the workflow-script test dependencies installed. Node.js must be on `PATH` for the JavaScript-backed tests; without it those assertions skip silently. Bash must also be on `PATH` for the shell coverage suite. CI installs Node 20 with `actions/setup-node` in `.github/workflows/test.yml` — match that version locally. For the exact coverage invocation used by CI, see `.github/workflows/test.yml`.
 
 ### Failure comments
 
