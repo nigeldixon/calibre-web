@@ -172,6 +172,48 @@ def test_render_templates_for_codeql_rejects_malformed_template(
     assert "Unexpected end of template" in proc.stderr
 
 
+def test_render_templates_for_codeql_rejects_unclosed_block_tag(
+    tmp_path, run_quality_script
+):
+    write_template(
+        tmp_path / "cps/themes/alpha/templates/broken.html",
+        "{% if flag\nvar value = 1;\n",
+    )
+
+    proc = run_quality_script("render_templates_for_codeql.py", tmp_path)
+
+    assert proc.returncode != 0
+    assert "Unexpected end of template" in proc.stderr
+
+
+def test_render_templates_for_codeql_rejects_stray_else(
+    tmp_path, run_quality_script
+):
+    write_template(
+        tmp_path / "cps/themes/alpha/templates/broken.html",
+        "{% else %}\nvar value = 1;\n",
+    )
+
+    proc = run_quality_script("render_templates_for_codeql.py", tmp_path)
+
+    assert proc.returncode != 0
+    assert "Unexpected tag 'else'" in proc.stderr
+
+
+def test_render_templates_for_codeql_rejects_mismatched_end_tag(
+    tmp_path, run_quality_script
+):
+    write_template(
+        tmp_path / "cps/themes/alpha/templates/broken.html",
+        "{% if flag %}\nvar value = 1;\n{% endfor %}\n",
+    )
+
+    proc = run_quality_script("render_templates_for_codeql.py", tmp_path)
+
+    assert proc.returncode != 0
+    assert "Unexpected end tag 'endfor'" in proc.stderr
+
+
 def test_render_templates_for_codeql_clears_stale_output_and_accepts_empty_tree(
     tmp_path, run_quality_script
 ):
