@@ -55,7 +55,7 @@ Expected headings:
 - Totals are whole-solution totals and are computed from trusted panel data, not untrusted PR body text.
 - Never present PR-filtered results as complete.
 - A suite with `no results` uses `⚪`, not `✅`.
-- Low-coverage icons: `⚠️ Low coverage` for 70–79%, `❌ Low coverage` below 70%, silent small text at 80%+.
+- Low-coverage icons: `⚠️ Low coverage` for 70–79%, `❌ Low coverage` below 70%, silent small text at 80%+. The combined workflow-coverage line applies them to either Python or JavaScript coverage.
 
 ### SARIF and analysis jobs
 
@@ -73,8 +73,8 @@ Expected headings:
 ### Tests and coverage
 
 - Workflow-script tests stay under `tests/workflow_scripts/`, with their own CI step and coverage line.
-- The coverage line reports statement and branch counts; branch mode is enabled in `tests/workflow_scripts/coverage_support/coveragerc` and `coverage_total()` must surface its `Branch`/`BrPart` columns.
-- JS coverage is measured with Node's built-in test runner (`--experimental-test-coverage`, lcov reporter) by `tests/workflow_scripts/test_javascript_suite.py`, which runs the `node:test` files under `tests/workflow_scripts/js/`. The lcov file is uploaded in the `coverage-data` artifact and summarized by `js_coverage_line()`; it counts only `.github/scripts/*.js`, not the test files.
+- Python and JavaScript workflow-script coverage appear on one adjacent line in the same `covered/total (percent)` format: `Workflow script coverage: Python \`...\` · JavaScript \`...\` · shell scripts not measured`. `coverage_stats()` surfaces coverage.py's `Branch`/`BrPart` columns, enabled in `tests/workflow_scripts/coverage_support/coveragerc`; `python_coverage_detail()` and `js_coverage_detail()` format the two languages, and `coverage_summary_line()` combines them.
+- JS coverage is measured with Node's built-in test runner (`--experimental-test-coverage`, lcov reporter) by `tests/workflow_scripts/test_javascript_suite.py`, which runs the `node:test` files under `tests/workflow_scripts/js/`. The lcov file is uploaded in the `coverage-data` artifact and counted by `js_coverage_total()`; it includes only `.github/scripts/*.js`, not the test files.
 - JS modules need behavior tests, not only `require()`/export checks; `tests/workflow_scripts/js/workflow_modules.test.js` exercises their API calls and written payloads.
 - Coverage regenerates from `coverage.xml` plus GitHub `pulls.listFiles` patches.
 - Backfilled test reports derive per-suite outcomes from test output via `DERIVE_TEST_OUTCOMES`.

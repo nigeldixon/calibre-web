@@ -148,6 +148,28 @@ def coverage_total(path):
     return lines[-1] if lines else None
 
 
+def coverage_stats(path):
+    """Parse a coverage TOTAL line into counts used by the shared detail format."""
+    total = coverage_total(path)
+    if not total:
+        return None
+    match = re.search(
+        r"(\d+) statements · (\d+) missed"
+        r"(?: · (\d+) branches · (\d+) partial)?"
+        r" · (\d+(?:\.\d+)?)% covered",
+        total,
+    )
+    if not match:
+        return None
+    return {
+        "statements": int(match.group(1)),
+        "missed": int(match.group(2)),
+        "branches": int(match.group(3) or 0),
+        "partial": int(match.group(4) or 0),
+        "percent": float(match.group(5)),
+    }
+
+
 def coverage_marker(total):
     match = re.search(r"(\d+(?:\.\d+)?)\s*%", total or "")
     if not match:
@@ -160,15 +182,23 @@ def coverage_marker(total):
     return "❌ Low coverage"
 
 
-def workflow_coverage_line():
-    total = coverage_total(workflow_coverage_path)
-    if not total:
+def python_coverage_detail():
+    stats = coverage_stats(workflow_coverage_path)
+    if not stats:
         return None
-    marker = coverage_marker(total)
-    scope = "Python; shell scripts not measured"
-    if marker:
-        return f"**Workflow script coverage ({scope}):** {marker} `{total}`"
-    return f"<small>Workflow script coverage ({scope}): `{total}`</small>"
+    statements = stats["statements"]
+    covered = statements - stats["missed"]
+    lines_pct = 100.0 * covered / statements if statements else 0.0
+    parts = [f"{covered}/{statements} statements ({lines_pct:.0f}%)"]
+    if stats["branches"]:
+        branches = stats["branches"]
+        branch_covered = branches - stats["partial"]
+        branches_pct = 100.0 * branch_covered / branches
+        parts.append(f"{branch_covered}/{branches} branches ({branches_pct:.0f}%)")
+    return {
+        "detail": " · ".join(parts),
+        "marker": coverage_marker(f"{stats['percent']}%"),
+    }
 
 
 def js_coverage_total(path):
@@ -201,7 +231,7 @@ def js_coverage_total(path):
     return totals if totals["lines"] else None
 
 
-def js_coverage_line():
+def js_coverage_detail():
     totals = js_coverage_total(js_coverage_path)
     if not totals:
         return None
@@ -211,15 +241,34 @@ def js_coverage_line():
         f"{totals['hit_lines']}/{totals['lines']} lines ({lines_pct:.0f}%) · "
         f"{totals['hit_branches']}/{totals['branches']} branches ({branches_pct:.0f}%)"
     )
-    return f"<small>JavaScript workflow script coverage: `{detail}`</small>"
+    worst = min(lines_pct, branches_pct) if totals["branches"] else lines_pct
+    return {"detail": detail, "marker": coverage_marker(f"{worst}%")}
+
+
+def coverage_summary_line():
+    entries = [
+        ("Python", python_coverage_detail()),
+        ("JavaScript", js_coverage_detail()),
+    ]
+    present = [(label, entry) for label, entry in entries if entry]
+    if not present:
+        return None
+
+    details = [f"{label} `{entry['detail']}`" for label, entry in present]
+    markers = sorted(
+        {entry["marker"] for _, entry in present if entry["marker"]},
+        key=lambda marker: 0 if marker.startswith("❌") else 1,
+    )
+    summary = "Workflow script coverage"
+    body = " · ".join(details) + " · shell scripts not measured"
+    if markers:
+        return f"**{summary} — {' '.join(markers)}:** {body}"
+    return f"<small>{summary}: {body}</small>"
 
 
 def coverage_extras():
-    out = []
-    for line in (workflow_coverage_line(), js_coverage_line()):
-        if line:
-            out += ["", line]
-    return out
+    line = coverage_summary_line()
+    return ["", line] if line else []
 
 
 def load_test_results():
