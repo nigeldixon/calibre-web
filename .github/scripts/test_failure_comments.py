@@ -6,6 +6,11 @@ import os
 
 
 MARKER_PREFIX = "<!-- test-failure:"
+UNPARSED_FAILURE = {
+    "nodeid": "suite outcome",
+    "kind": "FAILURE",
+    "message": "Suite failed without reported test failures",
+}
 
 
 def marker_for(suite_key):
@@ -71,24 +76,33 @@ def build_payload(results):
             for failure in suite.get("failures", []) or []
             if isinstance(failure, dict) and failure.get("nodeid")
         ]
+        outcome = str(suite.get("outcome", "")).strip().lower()
+        unparsed_failure = outcome in ("failure", "cancelled") and not failures
+        marker = (
+            failure_marker_for(suite.get("key", ""), failures)
+            if failures
+            else failure_marker_for(suite.get("key", ""), [UNPARSED_FAILURE])
+            if unparsed_failure
+            else marker_for(suite.get("key", ""))
+        )
         suites.append(
             {
                 "key": suite.get("key", ""),
                 "name": suite.get("name", "Tests"),
-                "marker": (
-                    failure_marker_for(suite.get("key", ""), failures)
-                    if failures
-                    else marker_for(suite.get("key", ""))
-                ),
+                "outcome": outcome,
+                "marker": marker,
                 "legacy_markers": [
                     legacy_marker_for(suite.get("key", ""), failure["nodeid"])
                     for failure in failures
                 ],
-                "failure_count": len(failures),
+                "unparsed_failure": unparsed_failure,
+                "failure_count": len(failures) or (1 if unparsed_failure else 0),
             }
         )
         if failures:
             comments.append(comment_for(suite, failures, results.get("run_url", "")))
+        elif unparsed_failure:
+            comments.append(comment_for(suite, [UNPARSED_FAILURE], results.get("run_url", "")))
     return {"prefix": MARKER_PREFIX, "suites": suites, "comments": comments}
 
 

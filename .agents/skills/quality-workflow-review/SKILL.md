@@ -94,6 +94,7 @@ Use an environment with the workflow-script test dependencies installed. Node.js
 
 - Group comments per suite/failure signature.
 - Minimize resolved failures with a clear reason.
+- A suite that fails without parseable `FAILED`/`ERROR` lines gets an explicit active comment and must not resolve existing failure comments; resolution requires positive suite-success evidence.
 - Reopen on recurrence.
 - Create a new comment when the failure changes.
 - Failure-comment sync must run even when the PR-body publish step fails: the publish step uses `continue-on-error: true` and the following install/sync steps use `always()` in both the `publish` and `backfill` jobs of `quality_reports.yml`.

@@ -132,6 +132,48 @@ def test_builds_one_grouped_comment_per_suite(load_quality_script, tmp_path):
     assert passing_suite["legacy_markers"] == []
 
 
+def test_build_payload_marks_unparsed_suite_failure_active(load_quality_script, tmp_path):
+    script = load_module(load_quality_script, tmp_path, "test_failure_comments.py")
+    results = {
+        "run_url": "https://example.test/run/2",
+        "suites": [
+            {
+                "key": "unit_tests",
+                "name": "Unit (in-process)",
+                "outcome": "failure",
+                "summary": "no results",
+                "failures": [],
+            },
+            {
+                "key": "e2e_tests",
+                "name": "Playwright E2E",
+                "outcome": "success",
+                "summary": "12 passed in 1.50s",
+                "failures": [],
+            },
+        ],
+    }
+
+    payload = script["build_payload"](results)
+    failed = payload["suites"][0]
+    assert failed["outcome"] == "failure"
+    assert failed["unparsed_failure"] is True
+    assert failed["failure_count"] == 1
+    assert failed["marker"] == script["failure_marker_for"](
+        "unit_tests", [script["UNPARSED_FAILURE"]]
+    )
+    assert len(payload["comments"]) == 1
+    comment = payload["comments"][0]
+    assert comment["marker"] == failed["marker"]
+    assert "Suite failed without reported test failures" in comment["body"]
+    assert "**Full analysis:** [Workflow run](https://example.test/run/2)" in comment["body"]
+
+    passing = payload["suites"][1]
+    assert passing["outcome"] == "success"
+    assert passing["unparsed_failure"] is False
+    assert passing["failure_count"] == 0
+
+
 def test_build_payload_skips_invalid_entries_and_empty_run_url(
     load_quality_script, tmp_path
 ):
@@ -656,6 +698,64 @@ def test_sync_leaves_unresolved_suite_when_run_still_fails(
 
     assert actions == []
     assert client.updated == []
+
+
+def test_sync_creates_active_comment_for_unparsed_suite_failure(
+    load_quality_script, tmp_path
+):
+    script = load_module(load_quality_script, tmp_path, "sync_test_failure_comments.py")
+    old_marker = "<!-- test-failure:aaaaaaaaaaaa -->"
+    active_marker = "<!-- test-failure:bbbbbbbbbbbb -->"
+    old_body = comment_body(old_marker, "Unit (in-process)", ["old"])
+    active_body = comment_body(active_marker, "Unit (in-process)", ["suite outcome"])
+    client = FakeClient(comments=[{"id": 1, "node_id": "n1", "body": old_body}])
+    payload = {
+        "suites": [
+            {
+                "key": "unit_tests",
+                "name": "Unit (in-process)",
+                "outcome": "failure",
+                "marker": active_marker,
+                "legacy_markers": [],
+                "unparsed_failure": True,
+                "failure_count": 1,
+            }
+        ],
+        "comments": [{"marker": active_marker, "body": active_body}],
+    }
+
+    actions = script["sync"](payload, client, 5, resolve_missing=False)
+
+    assert actions == [("created", active_marker)]
+    assert client.updated == []
+    assert client.minimized == []
+
+
+def test_sync_does_not_resolve_legacy_failed_suite_without_failures(
+    load_quality_script, tmp_path
+):
+    script = load_module(load_quality_script, tmp_path, "sync_test_failure_comments.py")
+    marker = "<!-- test-failure:aaaaaaaaaaaa -->"
+    body = comment_body(marker, "Unit (in-process)", ["old"])
+    client = FakeClient(comments=[{"id": 1, "node_id": "n1", "body": body}])
+    payload = {
+        "suites": [
+            {
+                "key": "unit_tests",
+                "name": "Unit (in-process)",
+                "outcome": "failure",
+                "marker": "<!-- test-failure:bbbbbbbbbbbb -->",
+                "failure_count": 0,
+            }
+        ],
+        "comments": [],
+    }
+
+    actions = script["sync"](payload, client, 5, resolve_missing=False)
+
+    assert actions == []
+    assert client.updated == []
+    assert client.minimized == []
 
 
 def test_sync_keeps_already_resolved_comment_body_when_minimizing(

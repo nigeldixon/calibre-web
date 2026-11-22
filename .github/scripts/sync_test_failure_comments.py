@@ -136,6 +136,12 @@ def marker_of(body):
     return match.group(0) if match else None
 
 
+def suite_passed(suite):
+    """Only a successful suite is evidence that older failures were fixed."""
+    outcome = str(suite.get("outcome", "")).strip().lower()
+    return suite.get("failure_count") == 0 and outcome in ("", "success")
+
+
 def suite_name_from_body(body):
     for line in (body or "").splitlines():
         for prefix in (
@@ -192,7 +198,8 @@ def payload_index(payload):
             continue
         suites[marker] = suite
         name = suite.get("name") or ""
-        if name:
+        reported_failures = suite.get("failure_count", 0) > 0 and not suite.get("unparsed_failure")
+        if name and (suite_passed(suite) or reported_failures):
             name_to_markers.setdefault(name, set()).add(marker)
         for legacy in suite.get("legacy_markers", []) or []:
             legacy_to_primary[legacy] = marker
@@ -232,7 +239,7 @@ def sync(payload, client, pr_number, resolve_missing=True):
     passed = {
         marker
         for marker, suite in suites.items()
-        if suite.get("failure_count") == 0
+        if suite_passed(suite)
     }
 
     existing = list(client.list_comments(pr_number) or [])
