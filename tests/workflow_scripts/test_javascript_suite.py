@@ -73,10 +73,12 @@ def test_javascript_workflow_scripts_have_coverage_data():
         relative = script.relative_to(REPO_ROOT).as_posix()
         values = coverage.get(relative)
         assert values is not None, f"missing JavaScript coverage for {relative}"
-        assert values.get("LH") == values.get("LF"), (
-            f"uncovered lines in {relative}: {values.get('LH')}/{values.get('LF')}"
+        assert "LF" in values and "LH" in values, f"missing line coverage for {relative}"
+        assert values["LF"] > 0, f"no instrumented lines for {relative}"
+        assert values["LH"] == values["LF"], (
+            f"uncovered lines in {relative}: {values['LH']}/{values['LF']}"
         )
-        assert values.get("BRH", 0) == values.get("BRF", 0), (
-            f"uncovered branches in {relative}: "
-            f"{values.get('BRH', 0)}/{values.get('BRF', 0)}"
+        assert "BRF" in values and "BRH" in values, f"missing branch coverage for {relative}"
+        assert values["BRH"] == values["BRF"], (
+            f"uncovered branches in {relative}: {values['BRH']}/{values['BRF']}"
         )
