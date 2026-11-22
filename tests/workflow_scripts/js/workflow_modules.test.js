@@ -1114,4 +1114,3 @@ test('updateReportAndRefreshTotals retries conflicts and reports exhausted retri
   }), /conflict/);
   assert.strictEqual(exhaustedAttempts, 3);
 });
-
