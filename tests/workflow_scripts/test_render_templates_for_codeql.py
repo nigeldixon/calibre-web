@@ -73,6 +73,7 @@ def test_render_templates_for_codeql_masks_template_syntax(tmp_path, run_quality
         'var label = "<%= label %>";\n'
         "<% if (ready) { %>\n"
         "</button>\n"
+        "{% endif %}\n"
     )
     write_template(source, text)
     multiline = tmp_path / "cps/themes/alpha/templates/multiline.html"
@@ -101,6 +102,74 @@ def test_render_templates_for_codeql_masks_template_syntax(tmp_path, run_quality
     assert "{{" not in multiline_output
     assert multiline_output.count("\n") == multiline_text.count("\n")
     assert not (tmp_path / "codeql-rendered/templates/alpha/templates/notes.txt").exists()
+
+
+def test_render_templates_for_codeql_uses_jinja_lexer_for_delimiters_and_raw(
+    tmp_path, run_quality_script
+):
+    source = tmp_path / "cps/themes/alpha/templates/edges.html"
+    text = (
+        "<script>\n"
+        "var a = {{ '}}' }};\n"
+        "var b = 1; {# comment\ncontinued #}\n"
+        "{% raw %}\n<%= literal %>\n{% endraw %}\n"
+        "{% if '%;' == flag %}\nvar c = 2;\n{% endif %}\n"
+        "</script>\n"
+    )
+    write_template(source, text)
+
+    proc = run_quality_script("render_templates_for_codeql.py", tmp_path)
+
+    assert proc.returncode == 0, proc.stderr
+    output = (
+        tmp_path / "codeql-rendered/templates/alpha/templates/edges.html"
+    ).read_text(encoding="utf-8")
+    assert output.count("\n") == text.count("\n")
+    assert "var a = 0;" in output
+    assert "var c = 2;" in output
+    for token in ("{{", "{%", "{#", "<%"):
+        assert token not in output
+
+
+def test_render_templates_for_codeql_preserves_lines_with_whitespace_control(
+    tmp_path, run_quality_script
+):
+    source = tmp_path / "cps/themes/alpha/templates/trim.html"
+    text = (
+        "<script>\n"
+        "var a = 1;\n"
+        "{%- if flag -%}\n"
+        "var b = 2;\n"
+        "{%- endif %}\n"
+        "</script>\n"
+    )
+    write_template(source, text)
+
+    proc = run_quality_script("render_templates_for_codeql.py", tmp_path)
+
+    assert proc.returncode == 0, proc.stderr
+    output = (
+        tmp_path / "codeql-rendered/templates/alpha/templates/trim.html"
+    ).read_text(encoding="utf-8")
+    assert output.count("\n") == text.count("\n")
+    assert "var a = 1;" in output
+    assert "var b = 2;" in output
+    for token in ("{{", "{%", "{#", "<%"):
+        assert token not in output
+
+
+def test_render_templates_for_codeql_rejects_malformed_template(
+    tmp_path, run_quality_script
+):
+    write_template(
+        tmp_path / "cps/themes/alpha/templates/broken.html",
+        "{% if flag %}\nvar value = 1;\n",
+    )
+
+    proc = run_quality_script("render_templates_for_codeql.py", tmp_path)
+
+    assert proc.returncode != 0
+    assert "Unexpected end of template" in proc.stderr
 
 
 def test_render_templates_for_codeql_clears_stale_output_and_accepts_empty_tree(
