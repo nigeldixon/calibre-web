@@ -11,12 +11,13 @@ def load_helpers(load_quality_script, tmp_path):
     )
 
 
-def write_shell_lcov(tmp_path, hit=10, total=10):
+def write_shell_lcov(tmp_path, hit=10, total=10, branches=2, hit_branches=2):
     path = tmp_path / "shell-lcov.info"
     path.write_text(
         "TN:\n"
         "SF:.github/scripts/combine_coverage.sh\n"
         f"LF:{total}\nLH:{hit}\n"
+        f"BRF:{branches}\nBRH:{hit_branches}\n"
         "end_of_record\n",
         encoding="utf-8",
     )
@@ -240,7 +241,7 @@ def test_js_coverage_detail_uses_only_workflow_scripts(load_quality_script, tmp_
         "**Workflow script coverage — ⚠️ Low coverage:** "
         "Python `1389/1389 statements (100%) · 640/640 branches (100%)` · "
         "JavaScript `9/10 lines (90%) · 6/8 branches (75%)` · "
-        "Shell `10/10 lines (100%)`"
+        "Shell `10/10 lines (100%) · 2/2 branches (100%)`"
     )
 
     assert script["js_coverage_total"](str(tmp_path)) is None
@@ -267,6 +268,7 @@ def test_shell_coverage_detail_uses_only_workflow_scripts(load_quality_script, t
         "TN:\n"
         "SF:.github/scripts/combine_coverage.sh\n"
         "LF:10\nLH:7\n"
+        "BRF:4\nBRH:3\n"
         "end_of_record\n"
         "SF:tests/workflow_scripts/test_shell_suite.py\n"
         "LF:100\nLH:100\n"
@@ -275,7 +277,7 @@ def test_shell_coverage_detail_uses_only_workflow_scripts(load_quality_script, t
     )
     script = load_helpers(load_quality_script, tmp_path)
     assert script["shell_coverage_total"](str(lcov)) == {
-        "lines": 10, "hit_lines": 7, "branches": 0, "hit_branches": 0,
+        "lines": 10, "hit_lines": 7, "branches": 4, "hit_branches": 3,
     }
 
     loaded = load_quality_script(
@@ -283,7 +285,7 @@ def test_shell_coverage_detail_uses_only_workflow_scripts(load_quality_script, t
         env={"WORKFLOW_SHELL_COVERAGE_LCOV_PATH": str(lcov)},
     )
     shell = loaded["shell_coverage_detail"]()
-    assert shell["detail"] == "7/10 lines (70%)"
+    assert shell["detail"] == "7/10 lines (70%) · 3/4 branches (75%)"
     assert shell["marker"] == "⚠️ Low coverage"
 
     combined = load_quality_script(
@@ -291,7 +293,8 @@ def test_shell_coverage_detail_uses_only_workflow_scripts(load_quality_script, t
         env={"WORKFLOW_SHELL_COVERAGE_LCOV_PATH": str(lcov)},
     )["coverage_summary_line"]()
     assert combined == (
-        "**Workflow script coverage — ⚠️ Low coverage:** Shell `7/10 lines (70%)`"
+        "**Workflow script coverage — ⚠️ Low coverage:** "
+        "Shell `7/10 lines (70%) · 3/4 branches (75%)`"
     )
 
     assert script["shell_coverage_total"](str(tmp_path)) is None
@@ -360,7 +363,7 @@ def test_patch_coverage_report_uses_normalized_paths(tmp_path, run_quality_scrip
     assert "**Full analysis:** [Workflow run](https://example.test/run/1)" in out
     assert (
         "**Workflow script coverage — ❌ Low coverage:** "
-        "Python `241/673 statements (36%)` · Shell `10/10 lines (100%)`"
+        "Python `241/673 statements (36%)` · Shell `10/10 lines (100%) · 2/2 branches (100%)`"
     ) in out
     assert "**Diff lines:** 3 &nbsp;|&nbsp; **Missing:** 2 &nbsp;|&nbsp; **Covered:** 1" in out
     assert "<details><summary>Patch coverage details</summary>" in out
@@ -479,7 +482,7 @@ def test_missing_coverage_xml_still_reports_workflow_coverage(
     assert proc.returncode == 0
     assert (
         "<small>Workflow script coverage: "
-        "Python `80/100 statements (80%)` · Shell `10/10 lines (100%)`</small>"
+        "Python `80/100 statements (80%)` · Shell `10/10 lines (100%) · 2/2 branches (100%)`</small>"
     ) in proc.stdout
 
     empty = load_quality_script(
@@ -519,7 +522,7 @@ def test_medium_and_low_coverage_use_severity_icons(tmp_path, run_quality_script
         assert proc.returncode == 0
         assert (
             f"**Workflow script coverage — {marker}:** "
-            "Python `70/100 statements (70%)` · Shell `10/10 lines (100%)`"
+            "Python `70/100 statements (70%)` · Shell `10/10 lines (100%) · 2/2 branches (100%)`"
         ) in proc.stdout
 
 
@@ -663,5 +666,5 @@ def test_coverage_xml_without_changed_file_json_does_not_compute_patch(
     assert "_Patch coverage could not be computed for this run._" in proc.stdout
     assert (
         "<small>Workflow script coverage: "
-        "Python `80/100 statements (80%)` · Shell `10/10 lines (100%)`</small>"
+        "Python `80/100 statements (80%)` · Shell `10/10 lines (100%) · 2/2 branches (100%)`</small>"
     ) in proc.stdout

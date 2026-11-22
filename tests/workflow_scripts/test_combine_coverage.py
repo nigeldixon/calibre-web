@@ -61,6 +61,20 @@ def test_report_failure_does_not_leave_stderr_as_coverage(tmp_path):
     assert not (tmp_path / "coverage-term.tmp").exists()
 
 
+def test_broken_coverage_symlink_is_skipped(tmp_path):
+    (tmp_path / ".coverage.broken").symlink_to("/does/not/exist")
+    log = tmp_path / "calls.log"
+    env = fake_python(
+        tmp_path / "bin",
+        f"printf '%s\\n' \"$*\" >> '{log}'\n",
+    )
+
+    proc = run_combine(tmp_path, env)
+
+    assert proc.returncode == 0
+    assert not log.exists()
+
+
 def test_xml_failure_removes_stale_coverage_xml(tmp_path):
     (tmp_path / ".coverage.server1").write_text("dummy", encoding="utf-8")
     (tmp_path / "coverage.xml").write_text("stale", encoding="utf-8")
