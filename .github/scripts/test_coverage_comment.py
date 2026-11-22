@@ -281,6 +281,8 @@ def coverage_summary_line():
         return None
 
     details = [f"{label} `{entry['detail']}`" for label, entry in present]
+    # The sort puts ❌ before ⚠️. Show only the most severe marker so mixed
+    # severity bands cannot render contradictory labels in the panel heading.
     markers = sorted(
         {entry["marker"] for _, entry in present if entry["marker"]},
         key=lambda marker: 0 if marker.startswith("❌") else 1,
@@ -288,7 +290,7 @@ def coverage_summary_line():
     summary = "Workflow script coverage"
     body = " · ".join(details)
     if markers:
-        return f"**{summary} — {' '.join(markers)}:** {body}"
+        return f"**{summary} — {markers[0]}:** {body}"
     return f"<small>{summary}: {body}</small>"
 
 

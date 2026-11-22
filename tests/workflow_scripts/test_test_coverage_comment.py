@@ -300,6 +300,36 @@ def test_shell_coverage_detail_uses_only_workflow_scripts(load_quality_script, t
     assert script["shell_coverage_total"](str(tmp_path)) is None
 
 
+def test_coverage_summary_line_uses_only_the_most_severe_marker(
+    load_quality_script, tmp_path
+):
+    term = tmp_path / "coverage-term.txt"
+    term.write_text("TOTAL 100 25 20 5 75%\n", encoding="utf-8")
+    js = tmp_path / "js-lcov.info"
+    js.write_text(
+        "TN:\n"
+        "SF:.github/scripts/example.js\n"
+        "LF:10\nLH:5\nBRF:8\nBRH:4\n"
+        "end_of_record\n",
+        encoding="utf-8",
+    )
+    combined = load_quality_script(
+        "test_coverage_comment.py",
+        tmp_path,
+        env={
+            "WORKFLOW_COVERAGE_TERM_PATH": str(term),
+            "WORKFLOW_JS_COVERAGE_LCOV_PATH": str(js),
+            "WORKFLOW_SHELL_COVERAGE_LCOV_PATH": str(write_shell_lcov(tmp_path)),
+        },
+    )["coverage_summary_line"]()
+    assert combined == (
+        "**Workflow script coverage — ❌ Low coverage:** "
+        "Python `75/100 statements (75%) · 15/20 branches (75%)` · "
+        "JavaScript `5/10 lines (50%) · 4/8 branches (50%)` · "
+        "Shell `10/10 lines (100%) · 2/2 inferred branches (100%)`"
+    )
+
+
 def test_patch_coverage_report_uses_normalized_paths(tmp_path, run_quality_script, write_json):
     coverage_xml = tmp_path / "coverage.xml"
     coverage_xml.write_text(
