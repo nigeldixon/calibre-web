@@ -85,12 +85,20 @@ elif base_sha and head_sha:
         changed_files = None
 
 
+RENDERED_TEMPLATE_PREFIX = "codeql-rendered/templates/"
+
+
 def normalize_uri(uri):
     if not uri:
         return ""
     uri = uri.replace("\\", "/")
     while uri.startswith("./"):
         uri = uri[2:]
+    # JavaScript findings in Jinja templates point at the parseable copies
+    # generated before extraction. Map them back to the tracked source paths so
+    # they can match the PR diff and be reported on the original template.
+    if uri.startswith(RENDERED_TEMPLATE_PREFIX):
+        uri = "cps/themes/" + uri[len(RENDERED_TEMPLATE_PREFIX):]
     return uri
 
 

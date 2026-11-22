@@ -485,6 +485,40 @@ def test_result_uri_normalization_and_related_locations(
     assert "**In changed files:** 2" in proc.stdout
 
 
+def test_rendered_template_locations_map_to_changed_source_files(
+    tmp_path, run_quality_script, write_json
+):
+    source = "cps/themes/standard/templates/readpdf.html"
+    rendered = "codeql-rendered/templates/standard/templates/readpdf.html"
+    changed = tmp_path / "changed-files.txt"
+    changed.write_text(source + "\n", encoding="utf-8")
+
+    python_dir = tmp_path / "codeql-results" / "codeql-sarif-python"
+    python_dir.mkdir(parents=True)
+    write_json(python_dir / "results.sarif", sarif(results=[]))
+    js_dir = tmp_path / "codeql-results" / "codeql-sarif-javascript-typescript"
+    js_dir.mkdir(parents=True)
+    write_json(
+        js_dir / "results.sarif",
+        sarif(
+            results=[finding(rendered, "warning")],
+            notifications=[notification("error", "E1", "extract failed", rendered)],
+        ),
+    )
+
+    proc = run_quality_script(
+        "codeql_pr_comment.py",
+        tmp_path,
+        env={"CHANGED_FILES_FILE": str(changed)},
+    )
+
+    assert proc.returncode == 0
+    assert "**Whole-solution issues:** 1" in proc.stdout
+    assert "**In changed files:** 1" in proc.stdout
+    assert f"`{source}` — E1: extract failed" in proc.stdout
+    assert "codeql-rendered/" not in proc.stdout
+
+
 def test_result_levels_and_missing_changed_file_scope_are_counted(
     tmp_path, run_quality_script, write_json
 ):
