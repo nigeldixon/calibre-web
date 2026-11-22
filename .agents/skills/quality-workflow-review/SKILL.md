@@ -65,6 +65,7 @@ Expected headings:
 - Invalid, empty, or scan-failed SARIF must hard-fail and must not clear code-scanning alerts.
 - CodeQL PR analyses use `upload: 'never'`.
 - CodeQL uploads only on non-PR runs, after validation, and only when the analyze step succeeded.
+- Internal push publishers must publish failed analysis panels, not leave the previous commit's report in place. The CodeQL generator uses `continue-on-error: true` because it exits 1 after printing a complete failure panel; the publisher uses `always()` plus an `unavailablePanel()` fallback. Removing only an `outcome == 'success'` check is insufficient because an ordinary `if:` retains implicit `success()`.
 - CodeQL SARIF validation rejects `executionSuccessful: false`.
 - Raw Jinja templates are excluded from JavaScript extraction; parseable rendered copies come from `codeql-rendered/`.
 - CodeQL init uses `config-file:`, not `config:`.

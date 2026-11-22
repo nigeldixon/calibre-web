@@ -169,6 +169,10 @@ jobs:
       - name: Generate CodeQL PR comment
         if: steps.find_pr.outputs.number != ''
         id: codeql_comment
+        # The generator exits 1 after printing a complete failure panel when
+        # SARIF is missing or invalid. Keep that panel publishable instead of
+        # leaving the previous commit's report in the PR body.
+        continue-on-error: true
         shell: bash
         env:
           PR_BASE_SHA: ${{ steps.find_pr.outputs.base_sha }}
@@ -180,24 +184,33 @@ jobs:
         run: python .github/scripts/codeql_pr_comment.py > codeql-comment.md
 
       - name: Update CodeQL report in PR body
-        if: >-
-          github.event_name == 'push' && steps.find_pr.outputs.number != '' &&
-          steps.codeql_comment.outcome == 'success'
+        if: always() && github.event_name == 'push' && steps.find_pr.outputs.number != ''
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         env:
           PR_NUMBER: ${{ steps.find_pr.outputs.number }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         with:
           script: |
             const fs = require('fs');
-            const { updateReportAndRefreshTotals } = require('./.github/scripts/update_pr_body_reports.js');
-            const content = fs.readFileSync('codeql-comment.md', 'utf8');
-            if (!content.trim() || !content.includes('<!-- codeql-report -->')) {
-              core.warning('CodeQL report is empty or partial; leaving the PR report unchanged.');
-              return;
+            const {
+              updateReportAndRefreshTotals, REPORT_DEFS, unavailablePanel,
+            } = require('./.github/scripts/update_pr_body_reports.js');
+            const report = REPORT_DEFS.codeql;
+            let content = fs.existsSync(report.file)
+              ? fs.readFileSync(report.file, 'utf8')
+              : '';
+            if (!content.trim() || !content.includes(report.marker)) {
+              content = unavailablePanel({
+                marker: report.marker,
+                heading: report.heading,
+                labels: report.labels,
+                message: `CodeQL report generation failed or produced no usable output. See [workflow run](${process.env.RUN_URL}).`,
+              });
+              core.warning(`Publishing fallback for ${report.marker}: no usable CodeQL report was generated.`);
             }
             await updateReportAndRefreshTotals({
               github, context, core,
               pull_number: process.env.PR_NUMBER,
-              marker: '<!-- codeql-report -->',
+              marker: report.marker,
               content,
             });
