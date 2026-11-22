@@ -1,38 +1,23 @@
 const {
-  updateReports, SECTION_START, REPORT_HEADINGS, sectionBounds,
-  lineMarkerIndices, reportBlockText,
+  updateReports, SECTION_START, REPORT_DEFS, REPORT_KEYS,
+  sectionBounds, reportBlockText, panelBounds,
 } = require('./update_pr_body_reports.js');
 
+const PENDING_MESSAGES = {
+  codeql: '⏳ CodeQL analysis is queued/running. Results will appear here when the workflow completes.',
+  semgrep: '⏳ Semgrep analysis is queued/running. Results will appear here when the workflow completes.',
+  tests: '⏳ Tests are queued/running. Coverage and test results will appear here when the workflow completes.',
+};
+
 module.exports = async ({ github, context, core }) => {
-  const placeholders = [
-    {
-      marker: '<!-- codeql-report -->',
-      content: [
-        '<!-- codeql-report -->',
-        REPORT_HEADINGS.codeql,
-        '',
-        '⏳ CodeQL analysis is queued/running. Results will appear here when the workflow completes.',
-      ].join('\n'),
-    },
-    {
-      marker: '<!-- semgrep-report -->',
-      content: [
-        '<!-- semgrep-report -->',
-        REPORT_HEADINGS.semgrep,
-        '',
-        '⏳ Semgrep analysis is queued/running. Results will appear here when the workflow completes.',
-      ].join('\n'),
-    },
-    {
-      marker: '<!-- coverage-report -->',
-      content: [
-        '<!-- coverage-report -->',
-        REPORT_HEADINGS.tests,
-        '',
-        '⏳ Tests are queued/running. Coverage and test results will appear here when the workflow completes.',
-      ].join('\n'),
-    },
-  ];
+  const placeholders = REPORT_KEYS.map((key) => {
+    const report = REPORT_DEFS[key];
+    return {
+      marker: report.marker,
+      content: [report.marker, report.heading, '', PENDING_MESSAGES[key]].join('\n'),
+    };
+  });
+  const markers = placeholders.map((r) => r.marker);
 
   // Backfill runs in another workflow and may win the race. Never
   // overwrite a panel that already holds real results.
@@ -45,17 +30,10 @@ module.exports = async ({ github, context, core }) => {
   const section = start !== -1 && end !== -1
     ? reportBlockText(body.slice(start + SECTION_START.length, end))
     : '';
-  const markers = placeholders.map((r) => r.marker);
   const todo = placeholders.filter((r) => {
-    const idx = lineMarkerIndices(section, r.marker)[0] ?? -1;
-    if (idx === -1) return true;
-    let next = section.length;
-    for (const m of markers) {
-      if (m === r.marker) continue;
-      const at = lineMarkerIndices(section, m).find((i) => i > idx) ?? -1;
-      if (at !== -1 && at < next) next = at;
-    }
-    return section.slice(idx, next).includes('⏳');
+    const bounds = panelBounds(section, r.marker, markers);
+    if (bounds.start === -1) return true;
+    return section.slice(bounds.start, bounds.end).includes('⏳');
   });
 
   if (todo.length) {

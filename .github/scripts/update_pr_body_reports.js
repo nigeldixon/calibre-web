@@ -1,18 +1,48 @@
-const SECTION_START = '<!-- quality-reports:start -->';
-const SECTION_END = '<!-- quality-reports:end -->';
-const SECTION_HEADER = '\n\n---\n## 📊 Quality reports\n';
-const LEGACY_SECTION_HEADER = '\n\n---\n## Quality reports\n';
-const SUMMARY_MARKER = '<!-- quality-totals -->';
-const REPORT_HEADINGS = {
-  codeql: '### 🔍 CodeQL analysis',
-  semgrep: '### 🛡️ Semgrep analysis',
-  tests: '### 🧪 Tests',
+const C = require('./report_constants.json');
+
+const SECTION_START = C.sectionStart;
+const SECTION_END = C.sectionEnd;
+const SECTION_HEADER = C.sectionHeader;
+const LEGACY_SECTION_HEADER = C.legacySectionHeader;
+const SUMMARY_MARKER = C.summaryMarker;
+const REPORT_HEADINGS = C.headings;
+const ISSUES_LABEL = C.labels.issues;
+const CHANGED_LABEL = C.labels.changed;
+const ERRORS_LABEL = C.labels.errors;
+const WARNINGS_LABEL = C.labels.warnings;
+const ANALYZE_LABEL = C.labels.analyze;
+const REPORT_DEFS = {
+  codeql: {
+    key: 'codeql', marker: C.markers.codeql, heading: C.headings.codeql,
+    file: 'codeql-report.md', label: 'CodeQL', labels: true,
+    artifactPrefix: 'codeql-sarif-', workflowPath: '.github/workflows/codeql.yml',
+    requiredFiles: ['.github/workflows/codeql.yml'],
+  },
+  semgrep: {
+    key: 'semgrep', marker: C.markers.semgrep, heading: C.headings.semgrep,
+    file: 'semgrep-report.md', label: 'Semgrep', labels: true,
+    artifactPrefix: 'semgrep-results', workflowPath: '.github/workflows/semgrep.yml',
+    requiredFiles: [
+      '.github/workflows/semgrep.yml',
+      '.github/scripts/semgrep_filter_sarif.py',
+    ],
+  },
+  tests: {
+    key: 'tests', marker: C.markers.tests, heading: C.headings.tests,
+    file: 'coverage-report.md', label: 'Tests', labels: false,
+    artifactPrefix: 'coverage-data', workflowPath: '.github/workflows/test.yml',
+    requiredFiles: [
+      '.github/workflows/test.yml',
+      '.github/scripts/collect_test_results.py',
+      '.github/scripts/combine_coverage.sh',
+      '.github/scripts/sync_test_failure_comments.py',
+      '.github/scripts/test_coverage_comment.py',
+      '.github/scripts/test_failure_comments.py',
+    ],
+  },
 };
-const REPORT_MARKERS = [SUMMARY_MARKER, '<!-- codeql-report -->', '<!-- semgrep-report -->', '<!-- coverage-report -->'];
-const ISSUES_LABEL = '**Whole-solution issues:** ';
-const CHANGED_LABEL = '**In changed files:** ';
-const ERRORS_LABEL = '**Analysis errors:** ';
-const WARNINGS_LABEL = '**Analysis warnings:** ';
+const REPORT_KEYS = C.reportKeys;
+const REPORT_MARKERS = [SUMMARY_MARKER, ...REPORT_KEYS.map((key) => C.markers[key])];
 // Generated metric lines start with one of these labels and may contain
 // several of them (for example errors and warnings share a line).
 const METRIC_LABELS = [ISSUES_LABEL, CHANGED_LABEL, ERRORS_LABEL, WARNINGS_LABEL];
@@ -30,6 +60,38 @@ function lineMarkerIndices(body, marker) {
     pos += marker.length;
   }
   return indices;
+}
+
+// Return the bounds of a single report panel. Only whole-line markers count,
+// so a marker quoted inside a report cannot truncate another panel. Callers
+// may pass a narrower marker set when only some panels can be present.
+function panelBounds(section, marker, markers) {
+  const start = lineMarkerIndices(section, marker)[0] ?? -1;
+  if (start === -1) return { start: -1, end: -1 };
+  let end = section.length;
+  for (const m of (markers || REPORT_MARKERS)) {
+    if (m === marker) continue;
+    const at = lineMarkerIndices(section, m).find((i) => i > start + marker.length) ?? -1;
+    if (at !== -1 && at < end) end = at;
+  }
+  return { start, end };
+}
+
+// Build the explicit fallback panel used when a workflow produced no usable
+// report. Analysis panels also carry the metric labels that refreshTotals()
+// parses, so an unavailable report contributes "unknown", never a zero.
+function unavailablePanel({ marker, heading, labels, message }) {
+  const parts = [marker, heading, '', `❌ Report unavailable: ${message}`];
+  if (labels) {
+    parts.push(
+      '',
+      `${ISSUES_LABEL}unknown · ${CHANGED_LABEL}unknown`,
+      `${ERRORS_LABEL}unknown · ${WARNINGS_LABEL}unknown`,
+      '',
+      `${ANALYZE_LABEL}\`failure\``,
+    );
+  }
+  return parts.join('\n');
 }
 
 function stripQualityMarkers(text) {
@@ -145,14 +207,8 @@ function upsertReport(body, marker, content) {
   let section = body.slice(startIdx + SECTION_START.length, endIdx);
   const after = body.slice(endIdx);
 
-  const markerIdx = lineMarkerIndices(section, marker)[0] ?? -1;
+  const { start: markerIdx, end } = panelBounds(section, marker);
   if (markerIdx !== -1) {
-    let end = section.length;
-    for (const m of REPORT_MARKERS) {
-      if (m === marker) continue;
-      const idx = lineMarkerIndices(section, m).find((i) => i > markerIdx + marker.length) ?? -1;
-      if (idx !== -1 && idx < end) end = idx;
-    }
     // Normalize the whitespace before this report to exactly one blank line.
     // Otherwise every update adds another newline and the PR body grows.
     const prefix = section.slice(0, markerIdx).replace(/\s*$/, '\n\n');
@@ -324,9 +380,20 @@ module.exports = {
   SECTION_END,
   SECTION_HEADER,
   LEGACY_SECTION_HEADER,
+  REPORT_DEFS,
+  REPORT_KEYS,
+  REPORT_MARKERS,
   REPORT_HEADINGS,
   SUMMARY_MARKER,
+  ISSUES_LABEL,
+  CHANGED_LABEL,
+  ERRORS_LABEL,
+  WARNINGS_LABEL,
+  ANALYZE_LABEL,
+  METRIC_LABELS,
   lineMarkerIndices,
+  panelBounds,
+  unavailablePanel,
   ensureSection,
   sectionBounds,
   canonicalizeSection,

@@ -1,4 +1,5 @@
 const fs = require('fs');
+const { REPORT_DEFS, REPORT_KEYS } = require('./update_pr_body_reports.js');
 
 module.exports = async ({ github, context, core }) => {
   const wr = context.payload.workflow_run;
@@ -55,27 +56,11 @@ module.exports = async ({ github, context, core }) => {
   // Identify the run by its workflow file path, not by wr.name:
   // the name comes from the PR-controlled workflow and can be
   // changed to impersonate a trusted workflow.
-  const workflowConfigs = {
-    '.github/workflows/codeql.yml': {
-      key: 'codeql',
-      required: ['.github/workflows/codeql.yml'],
-    },
-    '.github/workflows/semgrep.yml': {
-      key: 'semgrep',
-      required: ['.github/workflows/semgrep.yml', '.github/scripts/semgrep_filter_sarif.py'],
-    },
-    '.github/workflows/test.yml': {
-      key: 'tests',
-      required: [
-        '.github/workflows/test.yml',
-        '.github/scripts/collect_test_results.py',
-        '.github/scripts/combine_coverage.sh',
-        '.github/scripts/sync_test_failure_comments.py',
-        '.github/scripts/test_coverage_comment.py',
-        '.github/scripts/test_failure_comments.py',
-      ],
-    },
-  };
+  const workflowConfigs = {};
+  for (const key of REPORT_KEYS) {
+    const report = REPORT_DEFS[key];
+    workflowConfigs[report.workflowPath] = { key, required: report.requiredFiles };
+  }
   const config = workflowConfigs[wr.path || ''];
   if (!config) {
     core.setOutput('number', '');

@@ -1,6 +1,7 @@
 const fs = require('fs');
 const {
-  SECTION_START, sectionBounds, lineMarkerIndices, reportBlockText,
+  SECTION_START, REPORT_DEFS, REPORT_KEYS,
+  sectionBounds, reportBlockText, panelBounds,
 } = require('./update_pr_body_reports.js');
 
 module.exports = async ({ github, context, core }) => {
@@ -14,35 +15,20 @@ module.exports = async ({ github, context, core }) => {
   const section = start !== -1 && end !== -1
     ? reportBlockText(body.slice(start + SECTION_START.length, end))
     : '';
-  const markers = [
-    '<!-- codeql-report -->', '<!-- semgrep-report -->', '<!-- coverage-report -->',
-  ];
+  const markers = REPORT_KEYS.map((key) => REPORT_DEFS[key].marker);
   const needsBackfill = (marker) => {
-    const idx = lineMarkerIndices(section, marker)[0] ?? -1;
-    if (idx === -1) return true;
-    let next = section.length;
-    for (const m of markers) {
-      if (m === marker) continue;
-      const at = lineMarkerIndices(section, m).find((i) => i > idx) ?? -1;
-      if (at !== -1 && at < next) next = at;
-    }
-    return section.slice(idx, next).includes('⏳');
+    const bounds = panelBounds(section, marker, markers);
+    if (bounds.start === -1) return true;
+    return section.slice(bounds.start, bounds.end).includes('⏳');
   };
 
-  const configs = [
-    {
-      key: 'codeql', name: 'CodeQL', marker: markers[0], prefix: 'codeql-sarif-',
-      path: '.github/workflows/codeql.yml',
-    },
-    {
-      key: 'semgrep', name: 'Semgrep', marker: markers[1], prefix: 'semgrep-results',
-      path: '.github/workflows/semgrep.yml',
-    },
-    {
-      key: 'tests', name: 'Tests', marker: markers[2], prefix: 'coverage-data',
-      path: '.github/workflows/test.yml',
-    },
-  ];
+  const configs = REPORT_KEYS.map((key) => {
+    const report = REPORT_DEFS[key];
+    return {
+      key, name: report.label, marker: report.marker,
+      prefix: report.artifactPrefix, path: report.workflowPath,
+    };
+  });
   // Workflow display names come from the pushed branch and can be
   // changed by the PR. Resolve IDs from the base branch's workflow
   // paths so a renamed workflow cannot impersonate a trusted one.

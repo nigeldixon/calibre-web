@@ -1,16 +1,11 @@
 const {
-  updateReportAndRefreshTotals, SECTION_START, SUMMARY_MARKER,
-  REPORT_HEADINGS, sectionBounds, lineMarkerIndices, reportBlockText,
+  updateReportAndRefreshTotals, SECTION_START, REPORT_DEFS, REPORT_KEYS,
+  REPORT_MARKERS, sectionBounds, reportBlockText, panelBounds, unavailablePanel,
 } = require('./update_pr_body_reports.js');
 
 module.exports = async ({ github, context, core }) => {
   const { owner, repo } = context.repo;
-  const reports = [
-    { marker: '<!-- codeql-report -->', heading: REPORT_HEADINGS.codeql, labels: true },
-    { marker: '<!-- semgrep-report -->', heading: REPORT_HEADINGS.semgrep, labels: true },
-    { marker: '<!-- coverage-report -->', heading: REPORT_HEADINGS.tests, labels: false },
-  ];
-  const allMarkers = [SUMMARY_MARKER, ...reports.map((r) => r.marker)];
+  const reports = REPORT_KEYS.map((key) => REPORT_DEFS[key]);
   const pulls = await github.paginate(github.rest.pulls.list, {
     owner, repo, state: 'open', per_page: 100, sort: 'updated',
   });
@@ -34,36 +29,21 @@ module.exports = async ({ github, context, core }) => {
     }
 
     for (const report of reports) {
-      const idx = lineMarkerIndices(section, report.marker)[0] ?? -1;
-      if (idx === -1) continue;
-      let next = section.length;
-      for (const marker of allMarkers) {
-        if (marker === report.marker) continue;
-        const at = lineMarkerIndices(section, marker).find((i) => i > idx) ?? -1;
-        if (at !== -1 && at < next) next = at;
-      }
-      if (!section.slice(idx, next).includes('⏳')) continue;
+      const bounds = panelBounds(section, report.marker, REPORT_MARKERS);
+      if (bounds.start === -1) continue;
+      if (!section.slice(bounds.start, bounds.end).includes('⏳')) continue;
 
-      const parts = [
-        report.marker,
-        report.heading,
-        '',
-        `❌ Report unavailable: no analysis completed for commit ${pr.head.sha}. Re-run the workflow or push a new commit.`,
-      ];
-      if (report.labels) {
-        parts.push(
-          '',
-          '**Whole-solution issues:** unknown · **In changed files:** unknown',
-          '**Analysis errors:** unknown · **Analysis warnings:** unknown',
-          '',
-          '**Analyze job:** `failure`',
-        );
-      }
+      const content = unavailablePanel({
+        marker: report.marker,
+        heading: report.heading,
+        labels: report.labels,
+        message: `no analysis completed for commit ${pr.head.sha}. Re-run the workflow or push a new commit.`,
+      });
       await updateReportAndRefreshTotals({
         github, context, core,
         pull_number: pr.number,
         marker: report.marker,
-        content: parts.join('\n'),
+        content,
       });
       core.warning(`Replaced stale placeholder in PR #${pr.number}: ${report.marker}`);
     }
