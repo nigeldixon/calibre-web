@@ -368,7 +368,7 @@ def coverage_section():
     out = ["#### Patch coverage", ""]
 
     if not os.path.exists(coverage_xml_path):
-        out += ["No coverage data was generated for this run."]
+        out += ["No application coverage data was generated for this run."]
         out += coverage_extras()
         return out
 

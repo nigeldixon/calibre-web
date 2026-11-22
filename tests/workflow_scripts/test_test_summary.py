@@ -63,7 +63,7 @@ def test_read_coverage_handles_unreadable_file(load_quality_script, tmp_path):
     unreadable = tmp_path / "coverage-term.txt"
     unreadable.mkdir()
 
-    assert script["read_coverage"](str(unreadable)) == "No coverage data generated."
+    assert script["read_coverage"](str(unreadable)) == "No application coverage data generated."
 
 
 def test_app_coverage_falls_back_to_coverage_command(tmp_path, run_quality_script):
@@ -90,7 +90,7 @@ def test_app_coverage_command_failure_is_not_reported_as_data(tmp_path, run_qual
     proc = run_quality_script("test_summary.py", tmp_path, env={"PATH": ""})
 
     assert proc.returncode == 0
-    assert proc.stdout.count("No coverage data generated.") == 2
+    assert proc.stdout.count("No application coverage data generated.") == 2
 
 
 def test_app_coverage_command_stderr_is_not_reported_as_data(tmp_path, run_quality_script):
@@ -111,7 +111,7 @@ def test_app_coverage_command_stderr_is_not_reported_as_data(tmp_path, run_quali
 
     assert proc.returncode == 0
     assert "ERROR: corrupt coverage data" not in proc.stdout
-    assert proc.stdout.count("No coverage data generated.") == 2
+    assert proc.stdout.count("No application coverage data generated.") == 2
 
 
 def test_app_coverage_empty_stdout_falls_back(tmp_path, run_quality_script):
@@ -129,7 +129,7 @@ def test_app_coverage_empty_stdout_falls_back(tmp_path, run_quality_script):
     )
 
     assert proc.returncode == 0
-    assert proc.stdout.count("No coverage data generated.") == 2
+    assert proc.stdout.count("No application coverage data generated.") == 2
 
 
 def test_summary_without_outputs_does_not_claim_results(tmp_path, run_quality_script):
@@ -139,7 +139,7 @@ def test_summary_without_outputs_does_not_claim_results(tmp_path, run_quality_sc
     assert proc.returncode == 0
     assert out.count("| ⚪ |") == 4
     assert out.count("`no results`") == 4
-    assert out.count("No coverage data generated.") == 2
+    assert out.count("No application coverage data generated.") == 2
 
 
 def test_summary_with_success_outcome_but_no_results_is_neutral(tmp_path, run_quality_script):

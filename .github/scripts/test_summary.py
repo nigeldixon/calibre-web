@@ -48,13 +48,13 @@ for name, outcome, path in suites:
 print()
 def read_coverage(path):
     if not os.path.exists(path):
-        return "No coverage data generated."
+        return "No application coverage data generated."
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
             txt = f.read().rstrip()
-        return txt if txt else "No coverage data generated."
+        return txt if txt else "No application coverage data generated."
     except Exception:
-        return "No coverage data generated."
+        return "No application coverage data generated."
 
 
 def app_coverage():
@@ -69,11 +69,11 @@ def app_coverage():
             )
             # stderr on a failed command is not coverage data.
             if r.returncode != 0:
-                return "No coverage data generated."
-            return (r.stdout or "No coverage data generated.").rstrip()
+                return "No application coverage data generated."
+            return (r.stdout or "No application coverage data generated.").rstrip()
         except Exception:
             pass
-    return "No coverage data generated."
+    return "No application coverage data generated."
 
 
 print("## Test coverage")

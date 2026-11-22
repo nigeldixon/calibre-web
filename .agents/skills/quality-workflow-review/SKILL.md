@@ -79,6 +79,7 @@ Expected headings:
 - Shell line and branch coverage are inferred from bash `xtrace` control flow by `tests/workflow_scripts/test_shell_suite.py`; it exercises `.github/scripts/*.sh`, writes `coverage-workflow-shell-lcov.info`, and is summarized by `shell_coverage_detail()`. Branches cover `if`, loops, and `&&`/`||` decisions; outcomes are inferred from the traced line sequence because bash has no native branch counters. New shell scripts must be added to that suite or its full-coverage assertion will fail.
 - JS modules need behavior tests, not only `require()`/export checks; `tests/workflow_scripts/js/workflow_modules.test.js` exercises their API calls and written payloads.
 - Coverage regenerates from `coverage.xml` plus GitHub `pulls.listFiles` patches.
+- No-data fallbacks must say “No application coverage data …”; generic “No coverage data …” wording is ambiguous next to the workflow-coverage line.
 - Backfilled test reports derive per-suite outcomes from test output via `DERIVE_TEST_OUTCOMES`.
 - Standard local test command from the repository root:
 

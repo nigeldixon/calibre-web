@@ -441,7 +441,7 @@ def test_missing_coverage_xml_is_not_an_error(tmp_path, run_quality_script):
 
     assert proc.returncode == 0
     assert "#### Patch coverage" in proc.stdout
-    assert "No coverage data was generated for this run." in proc.stdout
+    assert "No application coverage data was generated for this run." in proc.stdout
 
 
 def test_malformed_coverage_xml_fails_closed(tmp_path, run_quality_script):
