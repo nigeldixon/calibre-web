@@ -1,6 +1,7 @@
 const {
   updateReportAndRefreshTotals, SECTION_START, REPORT_DEFS, REPORT_KEYS,
-  REPORT_MARKERS, sectionBounds, reportBlockText, panelBounds, unavailablePanel,
+  REPORT_MARKERS, sectionBounds, reportBlockText, panelBounds, panelIsPending,
+  unavailablePanel,
 } = require('./update_pr_body_reports.js');
 
 module.exports = async ({ github, context, core }) => {
@@ -32,7 +33,7 @@ module.exports = async ({ github, context, core }) => {
     for (const report of reports) {
       const bounds = panelBounds(section, report.marker, REPORT_MARKERS);
       if (bounds.start === -1) continue;
-      if (!section.slice(bounds.start, bounds.end).includes('⏳')) continue;
+      if (!panelIsPending(section.slice(bounds.start, bounds.end))) continue;
 
       const content = unavailablePanel({
         marker: report.marker,

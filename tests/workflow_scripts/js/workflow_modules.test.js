@@ -821,6 +821,46 @@ test('create_pending_quality_reports adds placeholders only for missing panels',
   assert.ok(fillStub.currentBody().includes('⏳'));
 });
 
+test('inline hourglass in a generated report is not a pending placeholder', async () => {
+  const complete = bodyWithPanels({
+    codeql: `${REPORT_DEFS.codeql.heading}\n- \`tests/test_emoji.py::test_⏳\` — assert pending`,
+    semgrep: 'real semgrep result',
+    tests: 'real test result',
+  });
+
+  const sweepStub = bodyGithub(complete, {
+    'pulls.list': () => [pullRequest()],
+  });
+  await moduleFor('sweep_stale_placeholders')({
+    github: sweepStub.github, context: contextFor({}), core: makeCore().core,
+  });
+  assert.strictEqual(sweepStub.calls.filter((c) => c.name === 'pulls.update').length, 0);
+
+  const { core, info } = makeCore();
+  const pendingStub = bodyGithub(complete);
+  await withEnv({ PR_NUMBER: '7' }, async () => {
+    await moduleFor('create_pending_quality_reports')({
+      github: pendingStub.github, context: contextFor({}), core,
+    });
+  });
+  assert.strictEqual(pendingStub.calls.filter((c) => c.name === 'pulls.update').length, 0);
+  assert.ok(info.some((m) => m.includes('already present')));
+
+  const { core: resolveCore, outputs } = makeCore();
+  const resolveStub = githubStub({
+    'pulls.get': () => ({ data: pullRequest({ body: complete }) }),
+    'pulls.listFiles': () => [],
+  });
+  await inTempDir(async () => {
+    await moduleFor('resolve_push_runs')({
+      github: resolveStub.github,
+      context: contextFor({ pull_request: pullRequest({ body: complete }) }),
+      core: resolveCore,
+    });
+  });
+  for (const key of REPORT_KEYS) assert.strictEqual(outputs[`${key}_needed`], 'false');
+});
+
 // update_pr_body_reports edge cases
 
 test('report markers accept CRLF and end-of-body markers', () => {

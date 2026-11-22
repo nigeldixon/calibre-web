@@ -1,7 +1,7 @@
 const fs = require('fs');
 const {
   SECTION_START, REPORT_DEFS, REPORT_KEYS,
-  sectionBounds, reportBlockText, panelBounds,
+  sectionBounds, reportBlockText, panelBounds, panelIsPending,
 } = require('./update_pr_body_reports.js');
 
 module.exports = async ({ github, context, core }) => {
@@ -19,7 +19,7 @@ module.exports = async ({ github, context, core }) => {
   const needsBackfill = (marker) => {
     const bounds = panelBounds(section, marker, markers);
     if (bounds.start === -1) return true;
-    return section.slice(bounds.start, bounds.end).includes('⏳');
+    return panelIsPending(section.slice(bounds.start, bounds.end));
   };
 
   const configs = REPORT_KEYS.map((key) => {

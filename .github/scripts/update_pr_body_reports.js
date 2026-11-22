@@ -454,6 +454,7 @@ module.exports = {
   METRIC_LABELS,
   lineMarkerIndices,
   panelBounds,
+  panelIsPending,
   unavailablePanel,
   ensureSection,
   sectionBounds,

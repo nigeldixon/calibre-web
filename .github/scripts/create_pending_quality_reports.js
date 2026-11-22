@@ -1,6 +1,6 @@
 const {
   updateReports, SECTION_START, REPORT_DEFS, REPORT_KEYS,
-  sectionBounds, reportBlockText, panelBounds,
+  sectionBounds, reportBlockText, panelBounds, panelIsPending,
 } = require('./update_pr_body_reports.js');
 
 const PENDING_MESSAGES = {
@@ -33,7 +33,7 @@ module.exports = async ({ github, context, core }) => {
   const todo = placeholders.filter((r) => {
     const bounds = panelBounds(section, r.marker, markers);
     if (bounds.start === -1) return true;
-    return section.slice(bounds.start, bounds.end).includes('⏳');
+    return panelIsPending(section.slice(bounds.start, bounds.end));
   });
 
   if (todo.length) {
