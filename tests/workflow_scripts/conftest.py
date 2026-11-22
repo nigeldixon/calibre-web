@@ -36,6 +36,7 @@ def load_quality_script(monkeypatch):
     """Execute a helper up to its first SystemExit and return its globals."""
 
     def _load(name, cwd, env=None):
+        monkeypatch.syspath_prepend(str(SCRIPTS_DIR))
         monkeypatch.chdir(cwd)
         for key, value in (env or {}).items():
             monkeypatch.setenv(key, str(value))

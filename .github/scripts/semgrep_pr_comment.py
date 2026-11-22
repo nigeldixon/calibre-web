@@ -2,6 +2,8 @@
 import json
 import os
 
+from sarif_validation import valid_run_shape
+
 marker = '<!-- semgrep-report -->'
 sarif_path = 'semgrep-results/semgrep.sarif'
 scope_path = 'semgrep-results/scope.json'
@@ -27,88 +29,6 @@ def norm_uri(uri):
     while uri.startswith('./'):
         uri = uri[2:]
     return uri
-
-
-def valid_artifact_location(art):
-    if art is None:
-        return True
-    if not isinstance(art, dict):
-        return False
-    uri = art.get('uri', '')
-    return uri is None or isinstance(uri, str)
-
-
-def valid_location(loc):
-    if not isinstance(loc, dict):
-        return False
-    phys = loc.get('physicalLocation')
-    if phys is not None and not isinstance(phys, dict):
-        return False
-    return valid_artifact_location((phys or {}).get('artifactLocation'))
-
-
-def valid_message(message):
-    if message is None:
-        return True
-    if not isinstance(message, dict):
-        return False
-    text = message.get('text')
-    return text is None or isinstance(text, str)
-
-
-def valid_result_shape(result):
-    if not isinstance(result, dict):
-        return False
-    level = result.get('level')
-    if level is not None and not isinstance(level, str):
-        return False
-    if not valid_message(result.get('message')):
-        return False
-    for key in ('locations', 'relatedLocations'):
-        locs = result.get(key)
-        if locs is not None and (not isinstance(locs, list) or not all(
-                valid_location(loc) for loc in locs)):
-            return False
-    return True
-
-
-def valid_notification_shape(notification):
-    if not isinstance(notification, dict):
-        return False
-    level = notification.get('level')
-    if level is not None and not isinstance(level, str):
-        return False
-    if not valid_message(notification.get('message')):
-        return False
-    descriptor = notification.get('descriptor')
-    if descriptor is not None:
-        if not isinstance(descriptor, dict):
-            return False
-        descriptor_id = descriptor.get('id')
-        if descriptor_id is not None and not isinstance(descriptor_id, str):
-            return False
-    return True
-
-
-def valid_run_shape(run):
-    if (not isinstance(run, dict)
-            or not isinstance(run.get('tool'), dict)
-            or not run['tool']
-            or not isinstance(run.get('results', []), list)):
-        return False
-    if not all(valid_result_shape(r) for r in run.get('results', []) or []):
-        return False
-    invocations = run.get('invocations', []) or []
-    if not isinstance(invocations, list):
-        return False
-    for invocation in invocations:
-        if not isinstance(invocation, dict):
-            return False
-        notifications = invocation.get('toolExecutionNotifications', []) or []
-        if (not isinstance(notifications, list)
-                or not all(valid_notification_shape(n) for n in notifications)):
-            return False
-    return True
 
 
 def result_in_changed(result, changed):

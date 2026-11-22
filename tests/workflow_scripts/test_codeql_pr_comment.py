@@ -251,7 +251,7 @@ def test_unreadable_sarif_is_reported_as_failed(tmp_path, run_quality_script, wr
 
 
 def test_sarif_shape_validators_reject_bad_nested_types(load_quality_script, tmp_path):
-    script = load_quality_script("codeql_pr_comment.py", tmp_path)
+    script = load_quality_script("sarif_validation.py", tmp_path)
 
     assert script["valid_artifact_location"]({"uri": "cps/a.py"}) is True
     assert script["valid_artifact_location"]({"uri": 7}) is False

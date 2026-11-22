@@ -2,8 +2,9 @@
 """Validate CodeQL SARIF before it is uploaded to code scanning."""
 
 import glob
-import json
 import sys
+
+from sarif_validation import load_sarif, scan_failure, valid_document
 
 
 def validate(language, results_dir="codeql-results"):
@@ -13,44 +14,12 @@ def validate(language, results_dir="codeql-results"):
         raise ValueError(f"No CodeQL SARIF was produced for {language}")
 
     for path in files:
-        try:
-            with open(path, "r", encoding="utf-8") as handle:
-                sarif = json.load(handle)
-        except Exception as exc:
-            raise ValueError(f"Invalid SARIF {path}: {exc}") from exc
-
-        runs = sarif.get("runs") if isinstance(sarif, dict) else None
-        if not isinstance(runs, list) or not runs:
-            raise ValueError(f"Invalid SARIF {path}: no runs")
-        for run in runs:
-            if (not isinstance(run, dict)
-                    or not isinstance(run.get("tool"), dict)
-                    or not run["tool"]):
-                raise ValueError(f"Invalid SARIF {path}: missing tool")
-            results = run.get("results", [])
-            if not isinstance(results, list):
-                raise ValueError(f"Invalid SARIF {path}: results is not a list")
-            invocations = run.get("invocations", []) or []
-            if not isinstance(invocations, list):
-                raise ValueError(f"Invalid SARIF {path}: invocations is not a list")
-            for invocation in invocations:
-                if not isinstance(invocation, dict):
-                    raise ValueError(f"Invalid SARIF {path}: invalid invocation")
-                if invocation.get("executionSuccessful") is False:
-                    raise ValueError(
-                        f"CodeQL scan failed for {language}: executionSuccessful=false"
-                    )
-                notifications = invocation.get("toolExecutionNotifications", []) or []
-                if not isinstance(notifications, list):
-                    raise ValueError(f"Invalid SARIF {path}: notifications is not a list")
-                for notification in notifications:
-                    if not isinstance(notification, dict):
-                        raise ValueError(f"Invalid SARIF {path}: invalid notification")
-                    if str(notification.get("level", "")).lower() == "error":
-                        raise ValueError(
-                            f"CodeQL scan failed for {language}: "
-                            f"{notification.get('message', {}).get('text', 'error notification')}"
-                        )
+        sarif = load_sarif(path)
+        if not valid_document(sarif):
+            raise ValueError(f"Invalid SARIF {path}: invalid SARIF structure")
+        failure = scan_failure(sarif)
+        if failure:
+            raise ValueError(f"CodeQL scan failed for {language}: {failure}")
     return len(files)
 
 

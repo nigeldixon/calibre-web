@@ -47,8 +47,7 @@ def write_fake_git(bin_dir, body):
 
 
 def test_sarif_shape_validators_reject_bad_nested_types(load_quality_script, tmp_path):
-    (tmp_path / "semgrep-results").mkdir()
-    script = load_quality_script("semgrep_filter_sarif.py", tmp_path)
+    script = load_quality_script("sarif_validation.py", tmp_path)
 
     assert script["valid_artifact_location"]({"uri": "a.py"}) is True
     assert script["valid_artifact_location"]({"uri": 7}) is False
