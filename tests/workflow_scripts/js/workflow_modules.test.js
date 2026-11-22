@@ -279,6 +279,118 @@ test('resolve_workflow_run_pr skips stale head SHAs and discovers PRs by head re
   assert.strictEqual(outB.report_key, 'semgrep');
 });
 
+test('resolve_workflow_run_pr skips runs without a discoverable PR', async () => {
+  const { core, outputs, info } = makeCore();
+  const stub = githubStub({ 'pulls.list': () => ({ data: [] }) });
+  const context = contextFor({
+    workflow_run: {
+      conclusion: 'success', id: 5, head_sha: 'head-sha',
+      head_repository: { owner: { login: 'fork' } }, head_branch: 'work',
+    },
+  });
+  await inTempDir(async () => {
+    await moduleFor('resolve_workflow_run_pr')({ github: stub.github, context, core });
+  });
+  assert.strictEqual(outputs.number, '');
+  assert.strictEqual(outputs.trusted, 'false');
+  assert.ok(info.some((m) => m.includes('No open PR found')));
+});
+
+test('resolve_workflow_run_pr falls back to the first discovered PR when SHAs differ', async () => {
+  const { core, outputs } = makeCore();
+  const listed = pullRequest({ head: { sha: 'listed-sha', repo: { full_name: 'fork/web' } } });
+  const stub = githubStub({
+    'pulls.list': () => ({ data: [listed] }),
+    'pulls.get': () => ({ data: pullRequest() }),
+    'pulls.listFiles': () => [],
+  });
+  stub.github.rest.repos = {
+    getContent: async () => ({ data: { type: 'file', content: 'same' } }),
+  };
+  const context = contextFor({
+    workflow_run: {
+      conclusion: 'success', id: 6, head_sha: 'head-sha',
+      head_repository: { owner: { login: 'fork' } }, head_branch: 'work',
+      path: REPORT_DEFS.codeql.workflowPath,
+    },
+  });
+  await inTempDir(async () => {
+    await moduleFor('resolve_workflow_run_pr')({ github: stub.github, context, core });
+  });
+  assert.strictEqual(outputs.number, '7');
+  assert.strictEqual(outputs.trusted, 'true');
+});
+
+test('resolve_workflow_run_pr skips fork runs with no trusted workflow path', async () => {
+  const { core, outputs, info } = makeCore();
+  const stub = githubStub({ 'pulls.get': () => ({ data: pullRequest() }) });
+  const context = contextFor({
+    workflow_run: {
+      conclusion: 'success', id: 7, head_sha: 'head-sha',
+      pull_requests: [{ number: 7 }],
+    },
+  });
+  await inTempDir(async () => {
+    await moduleFor('resolve_workflow_run_pr')({ github: stub.github, context, core });
+  });
+  assert.strictEqual(outputs.number, '');
+  assert.strictEqual(outputs.trusted, 'false');
+  assert.ok(info.some((m) => m.includes('path (none)')));
+});
+
+test('resolve_workflow_run_pr tolerates missing PR metadata and non-file content', async () => {
+  const { core: missingCore, outputs: missingOutputs } = makeCore();
+  const missingPR = pullRequest({
+    head: { sha: '', repo: { full_name: 'fork/web' } },
+    base: { repo: { full_name: 'acme/web' } },
+  });
+  const missingStub = githubStub({
+    'pulls.get': () => ({ data: missingPR }),
+    'pulls.listFiles': () => [],
+  });
+  missingStub.github.rest.repos = {
+    getContent: async () => ({ data: { type: 'file', content: 'same' } }),
+  };
+  const missingContext = contextFor({
+    workflow_run: {
+      conclusion: 'success', id: 8, head_sha: '',
+      pull_requests: [{ number: 7 }],
+      path: REPORT_DEFS.codeql.workflowPath,
+    },
+  });
+  await inTempDir(async () => {
+    await moduleFor('resolve_workflow_run_pr')({
+      github: missingStub.github, context: missingContext, core: missingCore,
+    });
+  });
+  assert.strictEqual(missingOutputs.number, '7');
+  assert.strictEqual(missingOutputs.base_sha, '');
+  assert.strictEqual(missingOutputs.head_sha, '');
+  assert.strictEqual(missingOutputs.base_ref, '');
+  assert.strictEqual(missingOutputs.trusted, 'true');
+
+  const { core, outputs } = makeCore();
+  const stub = githubStub({
+    'pulls.get': () => ({ data: pullRequest() }),
+    'pulls.listFiles': () => [],
+  });
+  stub.github.rest.repos = {
+    getContent: async () => ({ data: { type: 'dir' } }),
+  };
+  const context = contextFor({
+    workflow_run: {
+      conclusion: 'success', id: 9, head_sha: 'head-sha',
+      pull_requests: [{ number: 7 }],
+      path: REPORT_DEFS.codeql.workflowPath,
+    },
+  });
+  await inTempDir(async () => {
+    await moduleFor('resolve_workflow_run_pr')({ github: stub.github, context, core });
+  });
+  assert.strictEqual(outputs.trusted, 'true');
+  assert.strictEqual(outputs.modified, '');
+});
+
 // publish_quality_report
 
 test('publish_quality_report skips unknown report keys', async () => {
@@ -339,6 +451,38 @@ test('publish_quality_report publishes a regenerated report when present', async
   assert.ok(write);
   assert.ok(write.params.body.includes('real codeql result'));
   assert.ok(!write.params.body.includes('Report unavailable'));
+});
+
+test('publish_quality_report uses fallback text for missing keys and modified paths', async () => {
+  const { core: noKeyCore, info } = makeCore();
+  const noKeyStub = bodyGithub('');
+  await withEnv({ REPORT_KEY: undefined, PR_NUMBER: '7' }, async () => {
+    await moduleFor('publish_quality_report')({
+      github: noKeyStub.github,
+      context: contextFor({ workflow_run: { id: 1 } }),
+      core: noKeyCore,
+    });
+  });
+  assert.strictEqual(noKeyStub.calls.filter((c) => c.name === 'pulls.update').length, 0);
+  assert.ok(info.some((m) => m.includes('No report mapping for key (none)')));
+
+  const { core } = makeCore();
+  const stub = bodyGithub('');
+  await inTempDir(async () => {
+    await withEnv({
+      REPORT_KEY: 'codeql', PR_NUMBER: '7', TRUSTED: 'false', MODIFIED: undefined,
+      GITHUB_SERVER_URL: 'https://github.com', GITHUB_REPOSITORY: 'acme/web',
+    }, async () => {
+      await moduleFor('publish_quality_report')({
+        github: stub.github,
+        context: contextFor({ workflow_run: { id: 42 } }),
+        core,
+      });
+    });
+  });
+  const body = stub.calls.find((c) => c.name === 'pulls.update').params.body;
+  assert.ok(body.includes('(unknown)'), body);
+  assert.ok(body.includes('❌ Report unavailable'), body);
 });
 
 // resolve_push_runs
@@ -410,6 +554,61 @@ test('resolve_push_runs reports missing workflows without choosing a run', async
   assert.strictEqual(outputs.codeql_run, '');
   assert.strictEqual(outputs.codeql_artifacts, 'false');
   assert.ok(info.some((m) => m.includes('No base-branch workflow registered')));
+});
+
+test('resolve_push_runs handles missing runs, artifacts, and PR SHAs', async () => {
+  const { core, outputs, info } = makeCore();
+  const pr = pullRequest({
+    head: { sha: '' },
+    base: { ref: '', sha: '' },
+  });
+  const stub = githubStub({
+    'pulls.get': () => ({ data: pr }),
+    'actions.listRepoWorkflows': () => [
+      { id: 11, path: REPORT_DEFS.codeql.workflowPath },
+    ],
+    'actions.listWorkflowRunsForRepo': () => ({ data: {} }),
+    'actions.listWorkflowRunArtifacts': () => ({ data: {} }),
+  });
+  await inTempDir(async () => {
+    await moduleFor('resolve_push_runs')({
+      github: stub.github,
+      context: contextFor({ pull_request: pr }),
+      core,
+    });
+  });
+  assert.strictEqual(outputs.codeql_run, '');
+  assert.strictEqual(outputs.codeql_artifacts, 'false');
+  assert.strictEqual(outputs.base_sha, '');
+  assert.strictEqual(outputs.head_sha, '');
+  assert.strictEqual(outputs.base_ref, '');
+  assert.ok(info.some((m) => m.includes('No completed push run')));
+  assert.strictEqual(stub.calls.filter((c) => c.name === 'actions.listWorkflowRunArtifacts').length, 0);
+});
+
+test('resolve_push_runs reports runs without a conclusion or artifacts', async () => {
+  const { core, outputs, info } = makeCore();
+  const stub = githubStub({
+    'pulls.get': () => ({ data: pullRequest() }),
+    'actions.listRepoWorkflows': () => [
+      { id: 11, path: REPORT_DEFS.codeql.workflowPath },
+    ],
+    'actions.listWorkflowRunsForRepo': () => ({
+      data: { workflow_runs: [{ id: 21, workflow_id: 11 }] },
+    }),
+    'actions.listWorkflowRunArtifacts': () => ({ data: {} }),
+  });
+  await inTempDir(async () => {
+    await moduleFor('resolve_push_runs')({
+      github: stub.github,
+      context: contextFor({ pull_request: pullRequest() }),
+      core,
+    });
+  });
+  assert.strictEqual(outputs.codeql_run, '21');
+  assert.strictEqual(outputs.codeql_conclusion, '');
+  assert.strictEqual(outputs.codeql_artifacts, 'false');
+  assert.ok(info.some((m) => m.includes('artifacts missing')));
 });
 
 // publish_backfilled_reports
@@ -509,6 +708,29 @@ test('sweep_stale_placeholders replaces stale panels and skips running PRs', asy
   assert.strictEqual(outputs.number, undefined);
 });
 
+test('sweep_stale_placeholders skips empty bodies and complete panels', async () => {
+  const emptyStub = bodyGithub(null, {
+    'pulls.list': () => [pullRequest()],
+    'actions.listWorkflowRunsForRepo': () => ({ data: {} }),
+  });
+  await moduleFor('sweep_stale_placeholders')({
+    github: emptyStub.github, context: contextFor({}), core: makeCore().core,
+  });
+  assert.strictEqual(emptyStub.calls.filter((c) => c.name === 'pulls.update').length, 0);
+
+  const complete = bodyWithPanels({
+    codeql: 'real codeql result', semgrep: 'real semgrep result', tests: 'real test result',
+  });
+  const completeStub = bodyGithub(complete, {
+    'pulls.list': () => [pullRequest()],
+    'actions.listWorkflowRunsForRepo': () => ({ data: {} }),
+  });
+  await moduleFor('sweep_stale_placeholders')({
+    github: completeStub.github, context: contextFor({}), core: makeCore().core,
+  });
+  assert.strictEqual(completeStub.calls.filter((c) => c.name === 'pulls.update').length, 0);
+});
+
 // create_pending_quality_reports
 
 test('create_pending_quality_reports adds placeholders only for missing panels', async () => {
@@ -537,5 +759,241 @@ test('create_pending_quality_reports adds placeholders only for missing panels',
     assert.ok(writes.some((c) => c.params.body.includes(REPORT_DEFS[key].marker)));
   }
   assert.ok(fillStub.currentBody().includes('⏳'));
+});
+
+// update_pr_body_reports edge cases
+
+test('report markers accept CRLF and end-of-body markers', () => {
+  const marker = shared.SECTION_START;
+  assert.deepStrictEqual(shared.lineMarkerIndices(marker, marker), [0]);
+  assert.deepStrictEqual(shared.lineMarkerIndices(`${marker}\r\nnext`, marker), [0]);
+});
+
+test('canonicalization handles both header styles and overlapping section markers', () => {
+  const bothHeaders = 'Intro' + shared.LEGACY_SECTION_HEADER + 'legacy stale\n' +
+    'Middle' + shared.SECTION_HEADER + 'current stale\n';
+  const canonical = shared.canonicalizeSection(bothHeaders);
+  assert.ok(!canonical.includes('legacy stale'), canonical);
+  assert.ok(!canonical.includes('current stale'), canonical);
+  assert.ok(!canonical.includes('Middle'), canonical);
+
+  const marker = REPORT_DEFS.tests.marker;
+  const nested = shared.SECTION_START + '\norphan\n' + shared.SECTION_START + '\n' +
+    marker + '\nreal tests\n' + shared.SECTION_END + '\n';
+  const cleaned = shared.canonicalizeSection(nested);
+  assert.strictEqual(cleaned.split(shared.SECTION_START).length - 1, 1, cleaned);
+  assert.ok(cleaned.includes(`${marker}\nreal tests`), cleaned);
+  // The unmatched earlier marker has no complete pair to discard, so it is
+  // preserved as plain PR text before the canonical section.
+  assert.ok(cleaned.includes('orphan'), cleaned);
+});
+
+test('upsertReport tolerates missing content and totalsContent tolerates unmarked bodies', () => {
+  const marker = REPORT_DEFS.codeql.marker;
+  const body = shared.upsertReport('Intro\n', marker, undefined);
+  assert.ok(body.includes(marker), body);
+
+  const totals = shared.totalsContent('**Analysis errors:** 999 inline');
+  assert.ok(totals.includes('0 issues found · 0 analysis errors · 0 analysis warnings'), totals);
+
+  const unmatched = shared.totalsContent(
+    shared.SECTION_START + '\n**Analysis errors:** 5\n'
+  );
+  assert.ok(unmatched.includes('0 analysis errors'), unmatched);
+});
+
+test('updateReport handles absent PR numbers, unchanged bodies, and API conflicts', async () => {
+  const { github } = githubStub();
+  const context = contextFor({});
+  const marker = REPORT_DEFS.codeql.marker;
+  const content = panel(marker, 'real codeql result');
+
+  const skipped = await shared.updateReport({
+    github, context, core: makeCore().core, pull_number: 0, marker, content,
+  });
+  assert.deepStrictEqual(skipped, { updated: false, reason: 'no_pr' });
+
+  const unchangedStub = bodyGithub(shared.upsertReport('', marker, content));
+  const unchanged = await shared.updateReport({
+    github: unchangedStub.github, context, core: makeCore().core,
+    pull_number: 7, marker, content,
+  });
+  assert.deepStrictEqual(unchanged, { updated: false, reason: 'unchanged' });
+  assert.strictEqual(unchangedStub.calls.filter((c) => c.name === 'pulls.update').length, 0);
+
+  let attempts = 0;
+  const retryStub = bodyGithub('', {
+    'pulls.update': () => {
+      attempts += 1;
+      if (attempts === 1) {
+        const err = new Error('conflict');
+        err.status = 409;
+        throw err;
+      }
+      return {};
+    },
+  });
+  const retried = await shared.updateReport({
+    github: retryStub.github, context, core: makeCore().core,
+    pull_number: 7, marker, content,
+  });
+  assert.deepStrictEqual(retried, { updated: true });
+  assert.strictEqual(attempts, 2);
+
+  let exhaustedAttempts = 0;
+  const exhaustedStub = bodyGithub('', {
+    'pulls.update': () => {
+      exhaustedAttempts += 1;
+      const err = new Error('conflict');
+      err.status = 422;
+      throw err;
+    },
+  });
+  await assert.rejects(shared.updateReport({
+    github: exhaustedStub.github, context, core: makeCore().core,
+    pull_number: 7, marker, content,
+  }), /conflict/);
+  assert.strictEqual(exhaustedAttempts, 3);
+
+  const fatalStub = bodyGithub('', {
+    'pulls.update': () => {
+      const err = new Error('forbidden');
+      err.status = 500;
+      throw err;
+    },
+  });
+  await assert.rejects(shared.updateReport({
+    github: fatalStub.github, context, core: makeCore().core,
+    pull_number: 7, marker, content,
+  }), /forbidden/);
+  assert.strictEqual(fatalStub.calls.filter((c) => c.name === 'pulls.update').length, 1);
+});
+
+test('updateReports tolerates a missing report list', async () => {
+  const { github, calls } = githubStub();
+  const result = await shared.updateReports({
+    github, context: contextFor({}), core: makeCore().core, pull_number: 7,
+  });
+  assert.deepStrictEqual(result, { updated: false });
+  assert.strictEqual(calls.length, 0);
+});
+
+test('refreshTotals skips missing PRs and writes aggregate totals', async () => {
+  const { github: emptyGithub, calls: emptyCalls } = githubStub();
+  const skipped = await shared.refreshTotals({
+    github: emptyGithub, context: contextFor({}), core: makeCore().core, pull_number: 0,
+  });
+  assert.deepStrictEqual(skipped, { updated: false, reason: 'no_pr' });
+  assert.strictEqual(emptyCalls.length, 0);
+
+  const body = bodyWithPanels({
+    codeql: panel(REPORT_DEFS.codeql.marker, '**Analysis errors:** 2 · **Analysis warnings:** 1'),
+  });
+  const stub = bodyGithub(body);
+  const result = await shared.refreshTotals({
+    github: stub.github, context: contextFor({}), core: makeCore().core,
+    owner: 'acme', repo: 'web', pull_number: 7,
+  });
+  assert.deepStrictEqual(result, { updated: true });
+
+  const nullBodyStub = bodyGithub(null);
+  const nullBodyResult = await shared.refreshTotals({
+    github: nullBodyStub.github, context: contextFor({}), core: makeCore().core,
+    pull_number: 7,
+  });
+  assert.deepStrictEqual(nullBodyResult, { updated: true });
+  assert.ok(nullBodyStub.currentBody().includes(shared.SUMMARY_MARKER));
+
+  const write = stub.calls.find((c) => c.name === 'pulls.update');
+  assert.strictEqual(write.params.owner, 'acme');
+  assert.strictEqual(write.params.repo, 'web');
+  assert.ok(write.params.body.includes('2 analysis errors'), write.params.body);
+  assert.ok(write.params.body.includes('1 analysis warnings'), write.params.body);
+});
+
+test('updateReportAndRefreshTotals handles missing PRs and unchanged bodies', async () => {
+  const { github } = githubStub();
+  const context = contextFor({});
+  const marker = REPORT_DEFS.codeql.marker;
+  const content = panel(marker, 'real codeql result');
+
+  const skipped = await shared.updateReportAndRefreshTotals({
+    github, context, core: makeCore().core,
+    pull_number: 0, marker, content,
+  });
+  assert.deepStrictEqual(skipped, { updated: false, reason: 'no_pr' });
+
+  let body = shared.upsertReport('', marker, content);
+  body = shared.upsertReport(body, shared.SUMMARY_MARKER, shared.totalsContent(body));
+  const stub = bodyGithub(body);
+  const unchanged = await shared.updateReportAndRefreshTotals({
+    github: stub.github, context, core: makeCore().core,
+    pull_number: 7, marker, content,
+  });
+  assert.deepStrictEqual(unchanged, { updated: false, reason: 'unchanged' });
+  assert.strictEqual(stub.calls.filter((c) => c.name === 'pulls.update').length, 0);
+});
+
+test('updateReportAndRefreshTotals reapplies updates after a concurrent body change', async () => {
+  const { core, info } = makeCore();
+  let gets = 0;
+  const initial = '';
+  const changed = 'Another workflow edited the body.';
+  const stub = githubStub({
+    'pulls.get': () => ({ data: { body: gets++ === 0 ? initial : changed, number: 7 } }),
+  });
+  const marker = REPORT_DEFS.semgrep.marker;
+  const content = panel(marker, 'real semgrep result');
+
+  const result = await shared.updateReportAndRefreshTotals({
+    github: stub.github, context: contextFor({}), core,
+    pull_number: 7, marker, content,
+  });
+  assert.deepStrictEqual(result, { updated: true });
+  assert.strictEqual(gets, 4);
+  assert.ok(info.some((m) => m.includes('body changed during') && m.includes(marker)));
+  const write = stub.calls.find((c) => c.name === 'pulls.update');
+  assert.ok(write.params.body.includes(changed));
+  assert.ok(write.params.body.includes('real semgrep result'));
+});
+
+test('updateReportAndRefreshTotals retries conflicts and reports exhausted retries', async () => {
+  const context = contextFor({});
+  const marker = REPORT_DEFS.tests.marker;
+  const content = panel(marker, 'real test result');
+
+  let attempts = 0;
+  const retryStub = bodyGithub('', {
+    'pulls.update': () => {
+      attempts += 1;
+      if (attempts === 1) {
+        const err = new Error('conflict');
+        err.status = 409;
+        throw err;
+      }
+      return {};
+    },
+  });
+  const retried = await shared.updateReportAndRefreshTotals({
+    github: retryStub.github, context, core: makeCore().core,
+    pull_number: 7, marker, content,
+  });
+  assert.deepStrictEqual(retried, { updated: true });
+  assert.strictEqual(attempts, 2);
+
+  let exhaustedAttempts = 0;
+  const exhaustedStub = bodyGithub('', {
+    'pulls.update': () => {
+      exhaustedAttempts += 1;
+      const err = new Error('conflict');
+      err.status = 422;
+      throw err;
+    },
+  });
+  await assert.rejects(shared.updateReportAndRefreshTotals({
+    github: exhaustedStub.github, context, core: makeCore().core,
+    pull_number: 7, marker, content,
+  }), /conflict/);
+  assert.strictEqual(exhaustedAttempts, 3);
 });
 

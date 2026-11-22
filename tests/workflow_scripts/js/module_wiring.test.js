@@ -128,3 +128,35 @@ test('find_associated_pr matches a push to its open PR by head SHA', async () =>
     base_sha: 'base-sha', head_sha: 'head-sha',
   });
 });
+
+test('find_associated_pr uses defaults when PR metadata is incomplete', async () => {
+  const defaults = { number: '7', base: 'develop', base_ref: '', base_sha: '', head_sha: '' };
+
+  const fromPayload = outputCollector();
+  await findAssociatedPr({
+    github: {}, core: fromPayload.core,
+    context: {
+      repo: { owner: 'acme', repo: 'web' },
+      eventName: 'pull_request_target',
+      payload: { pull_request: { number: 7, base: {}, head: {} } },
+    },
+  });
+  assert.deepStrictEqual(fromPayload.outputs, defaults);
+
+  const fromPush = outputCollector();
+  const github = {
+    rest: {
+      pulls: {
+        list: async () => ({ data: [{ number: 7, head: { sha: '' }, base: {} }] }),
+      },
+    },
+  };
+  await findAssociatedPr({
+    github, core: fromPush.core,
+    context: {
+      repo: { owner: 'acme', repo: 'web' },
+      eventName: 'push', ref: 'refs/heads/topic', sha: '', payload: {},
+    },
+  });
+  assert.deepStrictEqual(fromPush.outputs, defaults);
+});
