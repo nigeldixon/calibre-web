@@ -98,6 +98,24 @@ def test_valid_notification_shape(tmp_path, load_quality_script):
     assert valid({"locations": ["bad"]}) is False
 
 
+def test_descriptor_id_policy_is_chosen_by_the_caller(tmp_path, load_quality_script):
+    api = validation(tmp_path, load_quality_script)
+    notification = {"level": "warning", "descriptor": {"id": 7}}
+    run = {
+        "tool": {"driver": {}},
+        "results": [],
+        "invocations": [{"toolExecutionNotifications": [notification]}],
+    }
+    document = {"runs": [run]}
+
+    assert api["valid_notification_shape"](notification) is False
+    assert api["valid_notification_shape"](notification, strict_descriptor_id=False) is True
+    assert api["valid_run_shape"](run) is False
+    assert api["valid_run_shape"](run, strict_descriptor_id=False) is True
+    assert api["valid_document"](document) is False
+    assert api["valid_document"](document, strict_descriptor_id=False) is True
+
+
 def test_valid_run_shape(tmp_path, load_quality_script):
     valid = validation(tmp_path, load_quality_script)["valid_run_shape"]
 

@@ -677,6 +677,33 @@ def test_notification_with_null_artifact_location_still_reports_error(
     assert "<details><summary>❌ Analysis errors (1)</summary>" in proc.stdout
 
 
+def test_non_string_notification_descriptor_id_is_reported_not_rejected(
+    tmp_path, run_quality_script, write_json
+):
+    for language in ("javascript-typescript", "python"):
+        directory = tmp_path / "codeql-results" / f"codeql-sarif-{language}"
+        directory.mkdir(parents=True)
+        notifications = None
+        if language == "python":
+            notifications = [
+                {
+                    "level": "warning",
+                    "descriptor": {"id": 7},
+                    "message": {"text": "non-fatal notice"},
+                }
+            ]
+        write_json(directory / "results.sarif", sarif(results=[], notifications=notifications))
+
+    proc = run_quality_script("codeql_pr_comment.py", tmp_path)
+
+    assert proc.returncode == 0
+    assert "**Analysis errors:** 0 · **Analysis warnings:** 1" in proc.stdout
+    assert "<details><summary>⚠️ Analysis warnings (1)</summary>" in proc.stdout
+    assert "- 7: non-fatal notice" in proc.stdout
+    assert "SARIF contains invalid run data" not in proc.stdout
+    assert "could not be parsed" not in proc.stdout
+
+
 def test_no_sarif_artifacts_reports_one_analysis_error(tmp_path, run_quality_script):
     proc = run_quality_script("codeql_pr_comment.py", tmp_path, env={"ANALYZE_RESULT": "success"})
 

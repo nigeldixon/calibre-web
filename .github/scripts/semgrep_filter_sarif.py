@@ -73,7 +73,7 @@ except ValueError as exc:
 # showing a false all-clear.
 runs = sarif.get('runs') if isinstance(sarif, dict) else None
 if (not isinstance(runs, list) or not runs
-        or not all(valid_run_shape(run) for run in runs)):
+        or not all(valid_run_shape(run, strict_descriptor_id=True) for run in runs)):
     write_scope(base_scope(
         reason='invalid_sarif',
         error='SARIF must contain at least one run with a tool object',

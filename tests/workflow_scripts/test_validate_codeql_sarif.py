@@ -93,6 +93,21 @@ def test_validate_codeql_sarif_rejects_failed_scan(tmp_path, run_quality_script)
     assert "executionSuccessful=false" in proc.stderr
 
 
+def test_validate_codeql_sarif_accepts_non_string_notification_descriptor_id(
+    tmp_path, run_quality_script
+):
+    document = valid_sarif()
+    document["runs"][0]["invocations"][0]["toolExecutionNotifications"] = [
+        {"level": "warning", "descriptor": {"id": 7}, "message": {"text": "non-fatal"}}
+    ]
+    write_sarif(tmp_path, document)
+
+    proc = run_quality_script("validate_codeql_sarif.py", tmp_path, args=["python"])
+
+    assert proc.returncode == 0, proc.stderr
+    assert "Validated 1 CodeQL SARIF file(s) for python" in proc.stdout
+
+
 def test_validate_codeql_sarif_rejects_error_notification(tmp_path, run_quality_script):
     document = valid_sarif()
     document["runs"][0]["invocations"][0]["toolExecutionNotifications"] = [

@@ -68,10 +68,10 @@ Expected headings:
 - CodeQL SARIF validation rejects `executionSuccessful: false`.
 - Raw Jinja templates are excluded from JavaScript extraction; parseable rendered copies come from `codeql-rendered/`.
 - CodeQL init uses `config-file:`, not `config:`.
-- CodeQL notification/report handling must tolerate null `artifactLocation` and non-string descriptor IDs.
+- CodeQL notification/report handling must tolerate null `artifactLocation` and non-string descriptor IDs; CodeQL callers pass `strict_descriptor_id=False` to the shared validator.
 - Semgrep uploads full raw SARIF, never the PR-filtered copy.
 - Semgrep exit code `1` means findings were produced; record it for reporting but normalize the step to success.
-- Semgrep notification validation must reject non-string descriptor IDs.
+- Semgrep notification validation must reject non-string descriptor IDs; Semgrep callers pass `strict_descriptor_id=True` explicitly.
 
 ### Tests and coverage
 

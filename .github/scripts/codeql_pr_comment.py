@@ -196,7 +196,7 @@ for path in sarif_files:
         invalid_sarif.append(path)
         continue
 
-    if not all(valid_run_shape(run) for run in runs):
+    if not all(valid_run_shape(run, strict_descriptor_id=False) for run in runs):
         add_lang_info(lang, empty_info(read_error=True))
         record_error(f"`{path}`: SARIF contains invalid run data.")
         invalid_sarif.append(path)

@@ -15,7 +15,7 @@ def validate(language, results_dir="codeql-results"):
 
     for path in files:
         sarif = load_sarif(path)
-        if not valid_document(sarif):
+        if not valid_document(sarif, strict_descriptor_id=False):
             raise ValueError(f"Invalid SARIF {path}: invalid SARIF structure")
         failure = scan_failure(sarif)
         if failure:

@@ -60,7 +60,13 @@ def valid_result_shape(result):
     return True
 
 
-def valid_notification_shape(notification):
+def valid_notification_shape(notification, strict_descriptor_id=True):
+    """Check a notification, optionally requiring string descriptor IDs.
+
+    Semgrep's own reporting treats non-string IDs as malformed, while CodeQL
+    emits notification IDs that are not always strings. Callers choose the
+    policy instead of sharing one stricter rule.
+    """
     if not isinstance(notification, dict):
         return False
     level = notification.get("level")
@@ -73,14 +79,15 @@ def valid_notification_shape(notification):
         if not isinstance(descriptor, dict):
             return False
         descriptor_id = descriptor.get("id")
-        if descriptor_id is not None and not isinstance(descriptor_id, str):
+        if (strict_descriptor_id and descriptor_id is not None
+                and not isinstance(descriptor_id, str)):
             return False
     locs = notification.get("locations")
     return locs is None or (isinstance(locs, list) and all(
         valid_location(loc) for loc in locs))
 
 
-def valid_run_shape(run):
+def valid_run_shape(run, strict_descriptor_id=True):
     if (not isinstance(run, dict)
             or not isinstance(run.get("tool"), dict)
             or not run["tool"]
@@ -96,16 +103,19 @@ def valid_run_shape(run):
             return False
         notifications = invocation.get("toolExecutionNotifications", []) or []
         if (not isinstance(notifications, list)
-                or not all(valid_notification_shape(n) for n in notifications)):
+                or not all(valid_notification_shape(
+                    n, strict_descriptor_id=strict_descriptor_id
+                ) for n in notifications)):
             return False
     return True
 
 
-def valid_document(sarif):
+def valid_document(sarif, strict_descriptor_id=True):
     """True when a document contains at least one structurally valid run."""
     runs = sarif.get("runs") if isinstance(sarif, dict) else None
     return isinstance(runs, list) and bool(runs) and all(
-        valid_run_shape(run) for run in runs)
+        valid_run_shape(run, strict_descriptor_id=strict_descriptor_id)
+        for run in runs)
 
 
 def scan_failure(sarif):

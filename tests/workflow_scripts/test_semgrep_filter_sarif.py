@@ -250,11 +250,21 @@ def test_missing_raw_sarif_fails_closed(tmp_path, run_quality_script):
 
 
 def test_invalid_raw_sarif_fails_closed(tmp_path, run_quality_script):
+    non_string_id = json.dumps(make_sarif(
+        notifications=[
+            {
+                "level": "warning",
+                "descriptor": {"id": 7},
+                "message": {"text": "non-fatal"},
+            }
+        ]
+    ))
     for raw in (
         "not json",
         '{"version": "2.1.0", "runs": []}',
         '{"version": "2.1.0", "runs": [{"tool": {}}]}',
         '{"version": "2.1.0", "runs": [{"results": []}]}',
+        non_string_id,
     ):
         results = prepare(tmp_path, raw)
 

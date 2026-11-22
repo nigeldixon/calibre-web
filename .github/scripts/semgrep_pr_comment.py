@@ -81,7 +81,7 @@ def count_notifications(sarif):
 def valid_sarif(sarif):
     runs = (sarif or {}).get('runs') if isinstance(sarif, dict) else None
     return isinstance(runs, list) and len(runs) > 0 and all(
-        valid_run_shape(run) for run in runs
+        valid_run_shape(run, strict_descriptor_id=True) for run in runs
     )
 
 
