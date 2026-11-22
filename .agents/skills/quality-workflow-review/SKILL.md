@@ -73,6 +73,8 @@ Expected headings:
 ### Tests and coverage
 
 - Workflow-script tests stay under `tests/workflow_scripts/`, with their own CI step and coverage line.
+- The coverage line reports statement and branch counts; branch mode is enabled in `tests/workflow_scripts/coverage_support/coveragerc` and `coverage_total()` must surface its `Branch`/`BrPart` columns.
+- JS modules need behavior tests, not only `require()`/export checks; `tests/workflow_scripts/github_script_module_behavior.js` exercises their API calls and written payloads.
 - Coverage regenerates from `coverage.xml` plus GitHub `pulls.listFiles` patches.
 - Backfilled test reports derive per-suite outcomes from test output via `DERIVE_TEST_OUTCOMES`.
 - Standard local test command from the repository root:

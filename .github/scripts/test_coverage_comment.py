@@ -136,6 +136,12 @@ def coverage_total(path):
         if line.startswith("TOTAL"):
             parts = line.split()
             if len(parts) >= 4 and parts[-1].endswith("%"):
+                if len(parts) >= 6:
+                    # Branch mode adds total and partial branch counts.
+                    return (
+                        f"{parts[1]} statements · {parts[2]} missed · "
+                        f"{parts[3]} branches · {parts[4]} partial · {parts[-1]} covered"
+                    )
                 return f"{parts[1]} statements · {parts[2]} missed · {parts[-1]} covered"
             return " ".join(parts)
     return lines[-1] if lines else None

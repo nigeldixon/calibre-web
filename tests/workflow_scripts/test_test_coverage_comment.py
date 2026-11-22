@@ -166,6 +166,18 @@ def test_coverage_total_handles_missing_and_unformatted_totals(
     formatted.write_text("TOTAL 100 20 80%\n", encoding="utf-8")
     assert coverage_total(str(formatted)) == "100 statements · 20 missed · 80% covered"
 
+    branched = tmp_path / "branched.txt"
+    branched.write_text("TOTAL 1352 0 626 0 100%\n", encoding="utf-8")
+    assert coverage_total(str(branched)) == (
+        "1352 statements · 0 missed · 626 branches · 0 partial · 100% covered"
+    )
+
+    partial_branches = tmp_path / "partial-branches.txt"
+    partial_branches.write_text("TOTAL 100 20 80 30 36%\n", encoding="utf-8")
+    assert coverage_total(str(partial_branches)) == (
+        "100 statements · 20 missed · 80 branches · 30 partial · 36% covered"
+    )
+
 
 def test_patch_coverage_report_uses_normalized_paths(tmp_path, run_quality_script, write_json):
     coverage_xml = tmp_path / "coverage.xml"
