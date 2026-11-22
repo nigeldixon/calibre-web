@@ -131,6 +131,21 @@ const bothMissing = m.totalsContent([
 ].join('\n'));
 assert.ok(bothMissing.includes('at least 0 issues found'), bothMissing);
 assert.ok(bothMissing.includes('2 reports unavailable'), bothMissing);
+
+// A generated line can mix a numeric total with an unknown scope.
+const mixedMetric = m.totalsContent([
+  m.SECTION_START,
+  m.REPORT_DEFS.codeql.marker,
+  m.REPORT_HEADINGS.codeql,
+  '**Whole-solution issues:** 122 · **In changed files:** unknown',
+  m.REPORT_DEFS.semgrep.marker,
+  m.REPORT_HEADINGS.semgrep,
+  '**Whole-solution issues:** 60 · **In changed files:** 2',
+  m.SECTION_END,
+].join('\n'));
+assert.ok(mixedMetric.includes('at least 182 issues found'), mixedMetric);
+assert.ok(mixedMetric.includes('1 report unavailable'), mixedMetric);
+assert.ok(!mixedMetric.includes('**Quality total:** 182 issues found'), mixedMetric);
 });
 
 test('pending panels qualify totals instead of looking like zero findings', () => {
