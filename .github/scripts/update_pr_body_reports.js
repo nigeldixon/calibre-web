@@ -16,7 +16,13 @@ const REPORT_DEFS = {
     key: 'codeql', marker: C.markers.codeql, heading: C.headings.codeql,
     file: 'codeql-report.md', label: 'CodeQL', labels: true,
     artifactPrefix: 'codeql-sarif-', workflowPath: '.github/workflows/codeql.yml',
-    requiredFiles: ['.github/workflows/codeql.yml'],
+    requiredFiles: [
+      '.github/workflows/codeql.yml',
+      '.github/codeql/codeql-config.yml',
+      '.github/scripts/render_templates_for_codeql.py',
+      '.github/scripts/validate_codeql_sarif.py',
+      '.github/scripts/sarif_validation.py',
+    ],
   },
   semgrep: {
     key: 'semgrep', marker: C.markers.semgrep, heading: C.headings.semgrep,
@@ -25,6 +31,9 @@ const REPORT_DEFS = {
     requiredFiles: [
       '.github/workflows/semgrep.yml',
       '.github/scripts/semgrep_filter_sarif.py',
+      '.github/scripts/sarif_validation.py',
+      '.semgrepignore',
+      '.gitignore',
     ],
   },
   tests: {
@@ -38,6 +47,11 @@ const REPORT_DEFS = {
       '.github/scripts/sync_test_failure_comments.py',
       '.github/scripts/test_coverage_comment.py',
       '.github/scripts/test_failure_comments.py',
+      '.github/scripts/report_constants.py',
+      '.github/scripts/report_constants.json',
+      'tests/workflow_scripts/coverage_support/coveragerc',
+      'tests/workflow_scripts/coverage_support/sitecustomize.py',
+      'pyproject.toml',
     ],
   },
 };

@@ -33,6 +33,7 @@ For a PR review, do not modify files unless explicitly asked. For a fix task, ma
 - Cross-repository detection uses `head.repo.full_name != base.repo.full_name`.
 - The publisher checks out trusted workflow scripts and uses structured artifacts.
 - PR-controlled markdown, scripts, scope files, or copied PR body text are never trusted for report generation or side effects.
+- Each report's `requiredFiles` covers every PR-controlled input that can change its artifacts: CodeQL workflow, config, template renderer, and SARIF validators; Semgrep workflow, filter, validator, and ignore files; Tests workflow, report scripts, coverage-support config, and `pyproject.toml`. A modified analysis input makes fork artifacts untrusted.
 - Resolve backfill runs by base-branch workflow path/ID, not PR-controlled workflow display names.
 - Default branch is `develop`; do not hardcode a compare branch for coverage regeneration.
 
