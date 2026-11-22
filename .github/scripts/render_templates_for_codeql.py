@@ -24,8 +24,10 @@ OUTPUT_BASE = ROOT / "codeql-rendered"
 OUTPUT_ROOT = OUTPUT_BASE / "templates"
 
 # Lexing needs no loader and executes no template code. Parsing first rejects
-# malformed templates instead of silently masking their syntax.
-ENV = Environment(undefined=ChainableUndefined, keep_trailing_newline=True)
+# malformed templates instead of silently masking their syntax. Nothing is
+# rendered to a browser here, so the Flask/Jinja XSS rules do not apply.
+# nosemgrep: python.flask.security.xss.audit.direct-use-of-jinja2.direct-use-of-jinja2
+ENV = Environment(undefined=ChainableUndefined, autoescape=True, keep_trailing_newline=True)
 
 MODE_AFTER_BEGIN = {
     "variable_begin": "variable",
