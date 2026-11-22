@@ -1,9 +1,10 @@
 [run]
 branch = True
 parallel = True
-include = */.github/scripts/*
+source = ${COVERAGE_SCRIPTS_DIR}
 
 [report]
+include = */.github/scripts/*
 exclude_lines =
     pragma: no cover
     if __name__ == .__main__.:

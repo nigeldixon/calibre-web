@@ -8,7 +8,25 @@ import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+SCRIPTS = sorted((REPO_ROOT / ".github" / "scripts").glob("*.js"))
 JS_TESTS = Path(__file__).parent / "js"
+
+
+def lcov_totals(path):
+    """Return per-source LF/LH/BRF/BRH counts from an lcov report."""
+    totals = {}
+    for record in path.read_text(encoding="utf-8").split("end_of_record"):
+        lines = record.splitlines()
+        source = next((line[3:] for line in lines if line.startswith("SF:")), None)
+        if not source:
+            continue
+        values = {}
+        for line in lines:
+            key, separator, value = line.partition(":")
+            if separator and key in ("LF", "LH", "BRF", "BRH"):
+                values[key] = int(value)
+        totals[source] = values
+    return totals
 
 
 def test_javascript_workflow_scripts_have_coverage_data():
@@ -46,4 +64,17 @@ def test_javascript_workflow_scripts_have_coverage_data():
         assert proc.returncode == 0, details + proc.stdout + proc.stderr
 
     assert lcov_path.exists(), "Node did not write JavaScript coverage data"
-    assert ".github/scripts/" in lcov_path.read_text(encoding="utf-8")
+    assert SCRIPTS, "no JavaScript workflow scripts found"
+
+    coverage = lcov_totals(lcov_path)
+    for script in SCRIPTS:
+        relative = script.relative_to(REPO_ROOT).as_posix()
+        values = coverage.get(relative)
+        assert values is not None, f"missing JavaScript coverage for {relative}"
+        assert values.get("LH") == values.get("LF"), (
+            f"uncovered lines in {relative}: {values.get('LH')}/{values.get('LF')}"
+        )
+        assert values.get("BRH", 0) == values.get("BRF", 0), (
+            f"uncovered branches in {relative}: "
+            f"{values.get('BRH', 0)}/{values.get('BRF', 0)}"
+        )

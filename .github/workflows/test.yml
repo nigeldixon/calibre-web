@@ -70,6 +70,8 @@ jobs:
         if: always()
         continue-on-error: true
         shell: bash
+        env:
+          COVERAGE_SCRIPTS_DIR: ${{ github.workspace }}/.github/scripts
         run: |
           set -o pipefail
           mkdir -p workflow-coverage-data
@@ -83,6 +85,7 @@ jobs:
           python -m coverage report \
             --rcfile=tests/workflow_scripts/coverage_support/coveragerc \
             --data-file=workflow-coverage-data/scripts \
+            --fail-under=100 \
             -m > coverage-workflow-scripts-term.txt
           python -m coverage xml \
             --rcfile=tests/workflow_scripts/coverage_support/coveragerc \
