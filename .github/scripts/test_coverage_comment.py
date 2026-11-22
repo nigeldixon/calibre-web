@@ -262,7 +262,7 @@ def shell_coverage_detail():
     branches_pct = 100.0 * totals["hit_branches"] / totals["branches"] if totals["branches"] else 0.0
     detail = (
         f"{totals['hit_lines']}/{totals['lines']} lines ({lines_pct:.0f}%) · "
-        f"{totals['hit_branches']}/{totals['branches']} branches ({branches_pct:.0f}%)"
+        f"{totals['hit_branches']}/{totals['branches']} inferred branches ({branches_pct:.0f}%)"
     )
     worst = min(lines_pct, branches_pct) if totals["branches"] else lines_pct
     return {"detail": detail, "marker": coverage_marker(f"{worst}%")}
