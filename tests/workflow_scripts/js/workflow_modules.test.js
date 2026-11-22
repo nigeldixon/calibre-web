@@ -210,33 +210,36 @@ test('resolve_workflow_run_pr marks modified required files untrusted', async ()
 });
 
 test('resolve_workflow_run_pr distrusts modified analysis inputs', async () => {
-  for (const [key, changedPath] of [
-    ['codeql', '.github/codeql/codeql-config.yml'],
-    ['semgrep', '.semgrepignore'],
-    ['tests', 'tests/workflow_scripts/coverage_support/coveragerc'],
-  ]) {
-    const { core, outputs } = makeCore();
-    const { github } = githubStub({
-      'pulls.get': () => ({ data: pullRequest() }),
-    });
-    github.rest.repos = {
-      getContent: async ({ path, ref }) => {
-        const changed = path === changedPath && ref === 'head-sha';
-        return { data: { type: 'file', content: changed ? 'changed' : 'original' } };
-      },
-    };
-    const context = contextFor({
-      workflow_run: {
-        conclusion: 'success', id: 44, head_sha: 'head-sha',
-        path: REPORT_DEFS[key].workflowPath,
-        pull_requests: [{ number: 7 }],
-      },
-    });
-    await inTempDir(async () => {
-      await moduleFor('resolve_workflow_run_pr')({ github, context, core });
-    });
-    assert.strictEqual(outputs.trusted, 'false');
-    assert.strictEqual(outputs.modified, changedPath);
+  for (const key of REPORT_KEYS) {
+    for (const changedPath of REPORT_DEFS[key].requiredFiles) {
+      const { core, outputs } = makeCore();
+      const { github } = githubStub({
+        'pulls.get': () => ({ data: pullRequest() }),
+      });
+      const checked = [];
+      github.rest.repos = {
+        getContent: async ({ path, ref }) => {
+          checked.push(`${ref}:${path}`);
+          const changed = path === changedPath && ref === 'head-sha';
+          return { data: { type: 'file', content: changed ? 'changed' : 'original' } };
+        },
+      };
+      const context = contextFor({
+        workflow_run: {
+          conclusion: 'success', id: 44, head_sha: 'head-sha',
+          path: REPORT_DEFS[key].workflowPath,
+          pull_requests: [{ number: 7 }],
+        },
+      });
+      await inTempDir(async () => {
+        await moduleFor('resolve_workflow_run_pr')({ github, context, core });
+      });
+      const label = `${key}: ${changedPath}`;
+      assert.strictEqual(outputs.trusted, 'false', label);
+      assert.strictEqual(outputs.modified, changedPath, label);
+      assert.ok(checked.includes(`head-sha:${changedPath}`), label);
+      assert.ok(checked.includes(`base-sha:${changedPath}`), label);
+    }
   }
 });
 
