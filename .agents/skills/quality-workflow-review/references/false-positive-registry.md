@@ -2,9 +2,9 @@
 
 Read this before finalizing quality-workflow reviews. Do not re-raise these findings unless new evidence proves they are reachable in the shipped workflow and have reader impact.
 
-## Fallback panels hardcode `Analyze job: failure`
+## Fallback panels show a fixed `Analyze job: failure` status
 
-Those panels are emitted only when report data is unavailable or stale. They already say metrics could not be regenerated, so changing the label to `unknown` or `not_run` does not change the reader's conclusion.
+The label comes from `report_constants.json` via `ANALYZE_LABEL`; the `failure` status is a fixed literal in the shared `unavailablePanel()` helper. These panels are emitted only when report data is unavailable or stale. They already say metrics could not be regenerated, so changing the status to `unknown` or `not_run` does not change the reader's conclusion.
 
 ## CRLF legacy-header canonicalization
 
@@ -30,7 +30,7 @@ Reopen only if a path is added where report generation runs without the trusted 
 
 ## Fallback `Analyze job: failure` in no-run/stale-placeholder cases
 
-Covered by the first entry. The panels say the report is unavailable; the hardcoded status does not create a false all-clear or hide findings.
+Covered by the first entry. The panels say the report is unavailable; the fixed status does not create a false all-clear or hide findings.
 
 ## Non-standard pytest summary phrasings
 

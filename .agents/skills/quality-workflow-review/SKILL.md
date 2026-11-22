@@ -51,7 +51,7 @@ Expected headings:
 - Legacy `## Quality reports` must canonicalize cleanly.
 - Section markers are line-anchored; quoted markers inside report text are not panel boundaries.
 - Canonicalization discards injected or stale report content before rebuilding the trusted section.
-- Shared `REPORT_HEADINGS` from `update_pr_body_reports.js` is the source of truth for headings.
+- `.github/scripts/report_constants.json` is the source of truth for section markers, report markers/headings, and metric labels. `update_pr_body_reports.js` re-exports the derived JS constants and `report_constants.py` loads the same JSON for the Python generators; the parity test in `tests/workflow_scripts/test_report_constants.py` guards agreement.
 - Totals are whole-solution totals and are computed from trusted panel data, not untrusted PR body text.
 - Never present PR-filtered results as complete.
 - A suite with `no results` uses `⚪`, not `✅`.
@@ -81,7 +81,7 @@ Expected headings:
 python -m pytest tests/workflow_scripts -q
 ```
 
-Use an environment with the workflow-script test dependencies installed. Node.js must be on `PATH` for the JavaScript syntax checks. For the exact coverage invocation used by CI, see `.github/workflows/test.yml`.
+Use an environment with the workflow-script test dependencies installed. Node.js must be on `PATH` for the JavaScript-backed tests; without it those assertions skip silently. CI installs Node 20 with `actions/setup-node` in `.github/workflows/test.yml` — match that version locally. For the exact coverage invocation used by CI, see `.github/workflows/test.yml`.
 
 ### Failure comments
 
@@ -89,6 +89,9 @@ Use an environment with the workflow-script test dependencies installed. Node.js
 - Minimize resolved failures with a clear reason.
 - Reopen on recurrence.
 - Create a new comment when the failure changes.
+- Failure-comment sync must run even when the PR-body publish step fails: the publish step uses `continue-on-error: true` and the following install/sync steps use `always()` in both the `publish` and `backfill` jobs of `quality_reports.yml`.
+- Keep the payload guard (`build_test_failure_comments.outcome == 'success'` / `backfill_test_comments.outcome == 'success'`): `sync_test_failure_comments.py` opens the artifact unconditionally, so a bare `always()` on the sync step can fail when no payload was produced.
+- The internal-PR path in `test.yml` uses the same publish-then-sync pattern; check both paths when changing either.
 
 ## Verification checklist
 
