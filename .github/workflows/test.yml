@@ -33,7 +33,13 @@ jobs:
           fetch-depth: 0
 
       - name: Remove checked-in coverage data
-        run: rm -f .coverage .coverage.* coverage.xml coverage-term.txt diff-coverage.md
+        run: |
+          rm -f .coverage .coverage.* coverage.xml coverage-term.txt coverage-term.tmp \
+            diff-coverage.md coverage-workflow-scripts.xml coverage-workflow-scripts-term.txt \
+            coverage-workflow-js-lcov.info coverage-workflow-shell-lcov.info \
+            workflow-script-test-output.txt unit-test-output.txt e2e-test-output.txt \
+            functional-test-output.txt test-results.json test-failure-comments.json \
+            changed-files.json coverage-comment.md
 
       - name: Set up Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
