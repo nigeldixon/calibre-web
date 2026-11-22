@@ -54,7 +54,7 @@ Expected headings:
 - Canonicalization discards injected or stale report content before rebuilding the trusted section. `ensureSection()` always yields one complete marked section, and `sectionBounds()` only selects a start with a following end; `upsertReport()` and `stripPriorSections()` rely on those invariants instead of defensive nullish fallbacks.
 - `updateReportAndRefreshTotals()` uses an explicit retry counter: conflicts throw on the final attempt, while three consecutive concurrent body changes return `retries_exhausted`.
 - `.github/scripts/report_constants.json` is the source of truth for section markers, report markers/headings, and metric labels. `update_pr_body_reports.js` re-exports the derived JS constants and `report_constants.py` loads the same JSON for the Python generators; the parity test in `tests/workflow_scripts/test_report_constants.py` guards agreement.
-- Totals are whole-solution totals and are computed from trusted panel data, not untrusted PR body text.
+- Totals are whole-solution totals and are computed from trusted panel data, not untrusted PR body text. A labelled panel with non-numeric metrics makes the total a qualified lower bound (`at least ...`) with an explicit unavailable-report count; it must never be presented as a complete total.
 - Never present PR-filtered results as complete.
 - A suite with `no results` uses `⚪`, not `✅`.
 - Low-coverage icons: `⚠️ Low coverage` for 70–79%, `❌ Low coverage` below 70%, silent small text at 80%+. The combined workflow-coverage line applies them to either Python or JavaScript coverage.

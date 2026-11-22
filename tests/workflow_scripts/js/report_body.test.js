@@ -92,3 +92,43 @@ assert.strictEqual(trailingClean.split(START).length - 1, 1, trailingClean);
 assert.ok(trailingClean.includes('real report'), trailingClean);
 assert.ok(trailingClean.includes('Tail text'), trailingClean);
 });
+
+test('totals qualify unavailable reports instead of counting them as zero', () => {
+const m = require(path.join(ROOT, '.github', 'scripts', 'update_pr_body_reports.js'));
+const unavailable = m.unavailablePanel({
+  marker: m.REPORT_DEFS.codeql.marker,
+  heading: m.REPORT_HEADINGS.codeql,
+  labels: true,
+  message: 'artifacts were not produced',
+});
+const body = [
+  m.SECTION_START,
+  unavailable,
+  m.REPORT_DEFS.semgrep.marker,
+  m.REPORT_HEADINGS.semgrep,
+  '**Whole-solution issues:** 122 · **In changed files:** 3',
+  '**Analysis errors:** 0 · **Analysis warnings:** 70',
+  m.SECTION_END,
+].join('\n');
+
+const oneMissing = m.totalsContent(body);
+assert.ok(oneMissing.includes('at least 122 issues found'), oneMissing);
+assert.ok(oneMissing.includes('at least 0 analysis errors'), oneMissing);
+assert.ok(oneMissing.includes('at least 70 analysis warnings'), oneMissing);
+assert.ok(oneMissing.includes('1 report unavailable'), oneMissing);
+assert.ok(!oneMissing.includes('**Quality total:** 122 issues found'), oneMissing);
+
+const bothMissing = m.totalsContent([
+  m.SECTION_START,
+  unavailable,
+  m.unavailablePanel({
+    marker: m.REPORT_DEFS.semgrep.marker,
+    heading: m.REPORT_HEADINGS.semgrep,
+    labels: true,
+    message: 'artifacts expired',
+  }),
+  m.SECTION_END,
+].join('\n'));
+assert.ok(bothMissing.includes('at least 0 issues found'), bothMissing);
+assert.ok(bothMissing.includes('2 reports unavailable'), bothMissing);
+});

@@ -285,23 +285,41 @@ async function updateReports({ github, context, core, owner, repo, pull_number, 
   return result;
 }
 
+function metricValues(line, label) {
+  const values = [];
+  let pos = 0;
+  while ((pos = line.indexOf(label, pos)) !== -1) {
+    const start = pos + label.length;
+    values.push(line.slice(start).split('·')[0].trim());
+    pos = start;
+  }
+  return values;
+}
+
+function isMetricLine(rawLine) {
+  const line = rawLine.trim();
+  return METRIC_LABELS.some((prefix) => line.startsWith(prefix));
+}
+
 function sumLabel(body, label) {
   let total = 0;
   // Only trusted metric lines contribute. A failure bullet can quote label
   // text inline, but it does not start with a generated metric label.
   for (const rawLine of body.split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!METRIC_LABELS.some((prefix) => line.startsWith(prefix))) continue;
-    let pos = 0;
-    while ((pos = line.indexOf(label, pos)) !== -1) {
-      const start = pos + label.length;
-      const value = line.slice(start).split('·')[0].trim();
-      const n = Number.parseInt(value, 10);
-      if (Number.isFinite(n)) total += n;
-      pos = start;
+    if (!isMetricLine(rawLine)) continue;
+    for (const value of metricValues(rawLine.trim(), label)) {
+      if (/^[+-]?\d+$/.test(value)) total += Number.parseInt(value, 10);
     }
   }
   return total;
+}
+
+function panelHasUnknownMetric(block) {
+  return block.split(/\r?\n/).some((rawLine) => {
+    if (!isMetricLine(rawLine)) return false;
+    return METRIC_LABELS.some((label) =>
+      metricValues(rawLine.trim(), label).some((value) => value && !/^[+-]?\d+$/.test(value)));
+  });
 }
 
 // Only generated report panels contribute to totals. A metric-looking line
@@ -325,11 +343,19 @@ function totalsContent(body) {
   const start = lineMarkerIndices(body, SECTION_START)[0] ?? -1;
   const end = start === -1 ? -1 : lineMarkerIndices(body, SECTION_END).find((i) => i > start) ?? -1;
   const section = start !== -1 && end !== -1 ? reportBlockText(body.slice(start, end)) : '';
+  const unavailable = REPORT_KEYS.filter((key) => {
+    const bounds = panelBounds(section, REPORT_DEFS[key].marker);
+    return bounds.start !== -1 && panelHasUnknownMetric(section.slice(bounds.start, bounds.end));
+  }).length;
+  const prefix = unavailable ? 'at least ' : '';
+  const qualifier = unavailable
+    ? ` · ${unavailable} report${unavailable === 1 ? '' : 's'} unavailable`
+    : '';
   return [
     SUMMARY_MARKER,
-    `**Quality total:** ${sumLabel(section, ISSUES_LABEL)} issues found · ` +
-      `${sumLabel(section, ERRORS_LABEL)} analysis errors · ` +
-      `${sumLabel(section, WARNINGS_LABEL)} analysis warnings`,
+    `**Quality total:** ${prefix}${sumLabel(section, ISSUES_LABEL)} issues found · ` +
+      `${prefix}${sumLabel(section, ERRORS_LABEL)} analysis errors · ` +
+      `${prefix}${sumLabel(section, WARNINGS_LABEL)} analysis warnings${qualifier}`,
   ].join('\n');
 }
 
