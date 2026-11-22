@@ -196,8 +196,11 @@ jobs:
               updateReportAndRefreshTotals, REPORT_DEFS, unavailablePanel,
             } = require('./.github/scripts/update_pr_body_reports.js');
             const report = REPORT_DEFS.codeql;
-            let content = fs.existsSync(report.file)
-              ? fs.readFileSync(report.file, 'utf8')
+            // Internal push runs write codeql-comment.md; codeql-report.md is
+            // the regenerated artifact used by the privileged fork publisher.
+            const reportFile = 'codeql-comment.md';
+            let content = fs.existsSync(reportFile)
+              ? fs.readFileSync(reportFile, 'utf8')
               : '';
             if (!content.trim() || !content.includes(report.marker)) {
               content = unavailablePanel({

@@ -36,3 +36,4 @@ def test_codeql_publishes_failure_panel_after_generator_fails():
     )
     assert "steps.codeql_comment.outcome" not in publish
     assert "unavailablePanel" in publish
+    assert "const reportFile = 'codeql-comment.md';" in publish
