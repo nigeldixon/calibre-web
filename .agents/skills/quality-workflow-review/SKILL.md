@@ -74,7 +74,8 @@ Expected headings:
 
 - Workflow-script tests stay under `tests/workflow_scripts/`, with their own CI step and coverage line.
 - The coverage line reports statement and branch counts; branch mode is enabled in `tests/workflow_scripts/coverage_support/coveragerc` and `coverage_total()` must surface its `Branch`/`BrPart` columns.
-- JS modules need behavior tests, not only `require()`/export checks; `tests/workflow_scripts/github_script_module_behavior.js` exercises their API calls and written payloads.
+- JS coverage is measured with Node's built-in test runner (`--experimental-test-coverage`, lcov reporter) by `tests/workflow_scripts/test_javascript_suite.py`, which runs the `node:test` files under `tests/workflow_scripts/js/`. The lcov file is uploaded in the `coverage-data` artifact and summarized by `js_coverage_line()`; it counts only `.github/scripts/*.js`, not the test files.
+- JS modules need behavior tests, not only `require()`/export checks; `tests/workflow_scripts/js/workflow_modules.test.js` exercises their API calls and written payloads.
 - Coverage regenerates from `coverage.xml` plus GitHub `pulls.listFiles` patches.
 - Backfilled test reports derive per-suite outcomes from test output via `DERIVE_TEST_OUTCOMES`.
 - Standard local test command from the repository root:

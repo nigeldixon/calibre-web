@@ -1,15 +1,11 @@
-import shutil
-import subprocess
-from pathlib import Path
+const { test } = require('node:test');
+const assert = require('node:assert');
+const path = require('path');
 
-import pytest
+const ROOT = path.resolve(__dirname, '../../..');
 
-
-REPO_ROOT = Path(__file__).resolve().parents[2]
-
-JS_TEST = r"""
-const assert = require('assert');
-const m = require('./.github/scripts/update_pr_body_reports.js');
+test('report markers and totals are line-anchored', () => {
+const m = require(path.join(ROOT, '.github', 'scripts', 'update_pr_body_reports.js'));
 const START = m.SECTION_START;
 const END = m.SECTION_END;
 const H = m.REPORT_HEADINGS;
@@ -95,18 +91,4 @@ const trailingClean = m.canonicalizeSection(trailingMarker);
 assert.strictEqual(trailingClean.split(START).length - 1, 1, trailingClean);
 assert.ok(trailingClean.includes('real report'), trailingClean);
 assert.ok(trailingClean.includes('Tail text'), trailingClean);
-"""
-
-
-def test_report_markers_and_totals_are_line_anchored():
-    if not shutil.which("node"):
-        pytest.skip("node is not installed")
-
-    proc = subprocess.run(
-        ["node", "-e", JS_TEST],
-        cwd=str(REPO_ROOT),
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert proc.returncode == 0, proc.stderr
+});

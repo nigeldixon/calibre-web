@@ -214,6 +214,7 @@ jobs:
             diff-coverage.md
             coverage-workflow-scripts.xml
             coverage-workflow-scripts-term.txt
+            coverage-workflow-js-lcov.info
             workflow-script-test-output.txt
             unit-test-output.txt
             e2e-test-output.txt

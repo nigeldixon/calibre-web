@@ -19,6 +19,7 @@ coverage_xml_path = os.environ.get("COVERAGE_XML_PATH", "coverage.xml").strip() 
 run_url = os.environ.get("RUN_URL", "").strip()
 changed_json_path = os.environ.get("CHANGED_FILES_JSON", "").strip()
 workflow_coverage_path = os.environ.get("WORKFLOW_COVERAGE_TERM_PATH", "coverage-workflow-scripts-term.txt").strip()
+js_coverage_path = os.environ.get("WORKFLOW_JS_COVERAGE_LCOV_PATH", "coverage-workflow-js-lcov.info").strip()
 test_results_path = os.environ.get("TEST_RESULTS_JSON", "test-results.json").strip()
 
 DEFAULT_SUITES = [
@@ -164,10 +165,61 @@ def workflow_coverage_line():
     if not total:
         return None
     marker = coverage_marker(total)
-    scope = "Python only; JS/shell scripts not measured"
+    scope = "Python; shell scripts not measured"
     if marker:
         return f"**Workflow script coverage ({scope}):** {marker} `{total}`"
     return f"<small>Workflow script coverage ({scope}): `{total}`</small>"
+
+
+def js_coverage_total(path):
+    if not path or not os.path.exists(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            records = f.read().split("end_of_record")
+    except Exception:
+        return None
+
+    totals = {"lines": 0, "hit_lines": 0, "branches": 0, "hit_branches": 0}
+    for record in records:
+        lines = record.splitlines()
+        source = next((ln[3:] for ln in lines if ln.startswith("SF:")), "")
+        if ".github/scripts/" not in source or not source.endswith(".js"):
+            continue
+
+        def value(prefix):
+            for ln in lines:
+                if ln.startswith(prefix):
+                    return int(ln.split(":", 1)[1])
+            return 0
+
+        totals["lines"] += value("LF:")
+        totals["hit_lines"] += value("LH:")
+        totals["branches"] += value("BRF:")
+        totals["hit_branches"] += value("BRH:")
+
+    return totals if totals["lines"] else None
+
+
+def js_coverage_line():
+    totals = js_coverage_total(js_coverage_path)
+    if not totals:
+        return None
+    lines_pct = 100.0 * totals["hit_lines"] / totals["lines"]
+    branches_pct = 100.0 * totals["hit_branches"] / totals["branches"] if totals["branches"] else 0.0
+    detail = (
+        f"{totals['hit_lines']}/{totals['lines']} lines ({lines_pct:.0f}%) · "
+        f"{totals['hit_branches']}/{totals['branches']} branches ({branches_pct:.0f}%)"
+    )
+    return f"<small>JavaScript workflow script coverage: `{detail}`</small>"
+
+
+def coverage_extras():
+    out = []
+    for line in (workflow_coverage_line(), js_coverage_line()):
+        if line:
+            out += ["", line]
+    return out
 
 
 def load_test_results():
@@ -244,9 +296,7 @@ def coverage_section():
 
     if not os.path.exists(coverage_xml_path):
         out += ["No coverage data was generated for this run."]
-        extra = workflow_coverage_line()
-        if extra:
-            out += ["", extra]
+        out += coverage_extras()
         return out
 
     # Trusted path: compute patch coverage from coverage XML + GitHub's file patches.
@@ -309,9 +359,7 @@ def coverage_section():
         # no hardcoded compare branch and no env-derived git subprocess argument.
         out += ["", "_Patch coverage could not be computed for this run._"]
 
-    extra = workflow_coverage_line()
-    if extra:
-        out += ["", extra]
+    out += coverage_extras()
     return out
 
 

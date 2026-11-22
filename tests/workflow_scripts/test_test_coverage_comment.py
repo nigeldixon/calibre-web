@@ -179,6 +179,49 @@ def test_coverage_total_handles_missing_and_unformatted_totals(
     )
 
 
+def test_js_coverage_line_uses_only_workflow_scripts(load_quality_script, tmp_path):
+    lcov = tmp_path / "js-lcov.info"
+    lcov.write_text(
+        "TN:\n"
+        "SF:.github/scripts/publish_quality_report.js\n"
+        "LF:10\nLH:9\nBRF:8\nBRH:6\n"
+        "end_of_record\n"
+        "SF:tests/workflow_scripts/js/workflow_modules.test.js\n"
+        "LF:100\nLH:100\nBRF:50\nBRH:50\n"
+        "end_of_record\n",
+        encoding="utf-8",
+    )
+    script = load_helpers(load_quality_script, tmp_path)
+    assert script["js_coverage_total"](str(lcov)) == {
+        "lines": 10, "hit_lines": 9, "branches": 8, "hit_branches": 6,
+    }
+
+    loaded = load_quality_script(
+        "test_coverage_comment.py", tmp_path,
+        env={"WORKFLOW_JS_COVERAGE_LCOV_PATH": str(lcov)},
+    )
+    line = loaded["js_coverage_line"]()
+    assert "9/10 lines (90%)" in line
+    assert "6/8 branches (75%)" in line
+    assert "JavaScript workflow script coverage" in line
+
+    assert script["js_coverage_total"](str(tmp_path)) is None
+
+    no_branches = tmp_path / "no-branches.info"
+    no_branches.write_text(
+        "SF:.github/scripts/example.js\nLF:4\nLH:4\nend_of_record\n",
+        encoding="utf-8",
+    )
+    assert script["js_coverage_total"](str(no_branches)) == {
+        "lines": 4, "hit_lines": 4, "branches": 0, "hit_branches": 0,
+    }
+    no_branch_line = load_quality_script(
+        "test_coverage_comment.py", tmp_path,
+        env={"WORKFLOW_JS_COVERAGE_LCOV_PATH": str(no_branches)},
+    )["js_coverage_line"]()
+    assert "0/0 branches (0%)" in no_branch_line
+
+
 def test_patch_coverage_report_uses_normalized_paths(tmp_path, run_quality_script, write_json):
     coverage_xml = tmp_path / "coverage.xml"
     coverage_xml.write_text(
@@ -239,7 +282,7 @@ def test_patch_coverage_report_uses_normalized_paths(tmp_path, run_quality_scrip
     assert proc.returncode == 0
     assert "**Full analysis:** [Workflow run](https://example.test/run/1)" in out
     assert (
-        "**Workflow script coverage (Python only; JS/shell scripts not measured):** ❌ Low coverage "
+        "**Workflow script coverage (Python; shell scripts not measured):** ❌ Low coverage "
         "`673 statements · 432 missed · 36% covered`"
     ) in out
     assert "**Diff lines:** 3 &nbsp;|&nbsp; **Missing:** 2 &nbsp;|&nbsp; **Covered:** 1" in out
@@ -352,7 +395,7 @@ def test_missing_coverage_xml_still_reports_workflow_coverage(tmp_path, run_qual
 
     assert proc.returncode == 0
     assert (
-        "<small>Workflow script coverage (Python only; JS/shell scripts not measured): "
+        "<small>Workflow script coverage (Python; shell scripts not measured): "
         "`100 statements · 20 missed · 80% covered`</small>"
     ) in proc.stdout
 
@@ -370,7 +413,7 @@ def test_medium_and_low_coverage_use_severity_icons(tmp_path, run_quality_script
 
         assert proc.returncode == 0
         assert (
-            f"**Workflow script coverage (Python only; JS/shell scripts not measured):** {marker} "
+            f"**Workflow script coverage (Python; shell scripts not measured):** {marker} "
             f"`100 statements · 30 missed · {percent}% covered`"
         ) in proc.stdout
 
@@ -509,6 +552,6 @@ def test_coverage_xml_without_changed_file_json_does_not_compute_patch(
     assert proc.returncode == 0
     assert "_Patch coverage could not be computed for this run._" in proc.stdout
     assert (
-        "<small>Workflow script coverage (Python only; JS/shell scripts not measured): "
+        "<small>Workflow script coverage (Python; shell scripts not measured): "
         "`100 statements · 20 missed · 80% covered`</small>"
     ) in proc.stdout

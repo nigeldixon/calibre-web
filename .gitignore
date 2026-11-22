@@ -5,6 +5,7 @@ __pycache__/
 *$py.class
 
 workflow-coverage-data/
+coverage-workflow-js-lcov.info
 codeql-rendered/
 
 # Distribution / packaging

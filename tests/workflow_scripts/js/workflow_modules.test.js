@@ -1,19 +1,18 @@
 // Behavior tests for the workflow modules extracted from github-script steps.
-// Run by test_github_script_module_behavior.py; stubs stand in for the GitHub
+// Run through node:test by test_javascript_suite.py; stubs stand in for GitHub
 // API so assertions cover the payloads each module writes, not just wiring.
 const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const ROOT = path.resolve(__dirname, '../..');
+const ROOT = path.resolve(__dirname, '../../..');
 const SCRIPTS = path.join(ROOT, '.github', 'scripts');
 const shared = require(path.join(SCRIPTS, 'update_pr_body_reports.js'));
 const { REPORT_DEFS, REPORT_KEYS } = shared;
 const moduleFor = (name) => require(path.join(SCRIPTS, `${name}.js`));
 
-const tests = [];
-const test = (name, fn) => tests.push([name, fn]);
+const { test } = require('node:test');
 
 function makeCore() {
   const outputs = {};
@@ -540,17 +539,3 @@ test('create_pending_quality_reports adds placeholders only for missing panels',
   assert.ok(fillStub.currentBody().includes('⏳'));
 });
 
-(async () => {
-  let failed = 0;
-  for (const [name, fn] of tests) {
-    try {
-      await fn();
-      console.log(`ok - ${name}`);
-    } catch (err) {
-      failed += 1;
-      console.error(`not ok - ${name}\n${err.stack}`);
-    }
-  }
-  console.log(`${tests.length - failed}/${tests.length} module behavior tests passed`);
-  if (failed) process.exit(1);
-})();
