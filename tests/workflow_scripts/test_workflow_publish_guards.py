@@ -26,8 +26,10 @@ def test_fork_publish_requires_successful_resolver():
 def test_codeql_publishes_failure_panel_after_generator_fails():
     text = CODEQL_WORKFLOW.read_text(encoding="utf-8")
 
+    report_file = "codeql-comment.md"
     generator = step_block(text, "Generate CodeQL PR comment")
     assert "continue-on-error: true" in generator
+    assert f"> {report_file}" in generator
 
     publish = step_block(text, "Update CodeQL report in PR body")
     assert (
@@ -36,4 +38,4 @@ def test_codeql_publishes_failure_panel_after_generator_fails():
     )
     assert "steps.codeql_comment.outcome" not in publish
     assert "unavailablePanel" in publish
-    assert "const reportFile = 'codeql-comment.md';" in publish
+    assert f"const reportFile = '{report_file}';" in publish
