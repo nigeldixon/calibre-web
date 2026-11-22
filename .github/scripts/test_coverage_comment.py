@@ -191,14 +191,16 @@ def python_coverage_detail():
     covered = statements - stats["missed"]
     lines_pct = 100.0 * covered / statements if statements else 0.0
     parts = [f"{covered}/{statements} statements ({lines_pct:.0f}%)"]
+    worst = lines_pct
     if stats["branches"]:
         branches = stats["branches"]
         branch_covered = branches - stats["partial"]
         branches_pct = 100.0 * branch_covered / branches
         parts.append(f"{branch_covered}/{branches} branches ({branches_pct:.0f}%)")
+        worst = min(worst, branches_pct)
     return {
         "detail": " · ".join(parts),
-        "marker": coverage_marker(f"{stats['percent']}%"),
+        "marker": coverage_marker(f"{worst}%"),
     }
 
 

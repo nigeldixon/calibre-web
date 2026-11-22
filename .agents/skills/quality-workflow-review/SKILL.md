@@ -58,7 +58,7 @@ Expected headings:
 - The stale-placeholder sweep treats any workflow run whose status is not `completed` as active, including queued, requested, waiting, pending, and action-required runs.
 - Never present PR-filtered results as complete.
 - A suite with `no results` uses `⚪`, not `✅`.
-- Low-coverage icons: `⚠️ Low coverage` for 70–79%, `❌ Low coverage` below 70%, silent small text at 80%+. The combined workflow-coverage line applies them to either Python or JavaScript coverage.
+- Low-coverage icons: `⚠️ Low coverage` for 70–79%, `❌ Low coverage` below 70%, silent small text at 80%+. Each language uses the lower of its line and branch percentages (inferred branches for shell), not coverage.py's combined percentage; the workflow-coverage line shows the most severe marker present.
 
 ### SARIF and analysis jobs
 

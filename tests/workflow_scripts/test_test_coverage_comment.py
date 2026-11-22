@@ -504,12 +504,46 @@ def test_missing_coverage_xml_still_reports_workflow_coverage(
     assert zero_detail["detail"] == "0/0 statements (0%)"
 
 
+def test_python_coverage_icon_uses_worst_line_or_branch_percentage(tmp_path, load_quality_script):
+    term = tmp_path / "coverage-workflow-scripts-term.txt"
+    for total, expected_detail, expected_marker in (
+        (
+            "TOTAL 100 10 20 10 83%",
+            "90/100 statements (90%) · 10/20 branches (50%)",
+            "❌ Low coverage",
+        ),
+        (
+            "TOTAL 100 0 20 5 99%",
+            "100/100 statements (100%) · 15/20 branches (75%)",
+            "⚠️ Low coverage",
+        ),
+    ):
+        term.write_text(total + "\n", encoding="utf-8")
+        detail = load_quality_script(
+            "test_coverage_comment.py", tmp_path,
+            env={"WORKFLOW_COVERAGE_TERM_PATH": str(term)},
+        )["python_coverage_detail"]()
+        assert detail["detail"] == expected_detail
+        assert detail["marker"] == expected_marker
+
+
 def test_medium_and_low_coverage_use_severity_icons(tmp_path, run_quality_script):
     term = tmp_path / "coverage-workflow-scripts-term.txt"
     shell_lcov = write_shell_lcov(tmp_path)
 
-    for percent, marker in ((75, "⚠️ Low coverage"), (45, "❌ Low coverage")):
-        term.write_text(f"TOTAL 100 30 {percent}%\n", encoding="utf-8")
+    for total, detail, marker in (
+        (
+            "TOTAL 100 30 20 5 75%",
+            "70/100 statements (70%) · 15/20 branches (75%)",
+            "⚠️ Low coverage",
+        ),
+        (
+            "TOTAL 100 30 20 11 45%",
+            "70/100 statements (70%) · 9/20 branches (45%)",
+            "❌ Low coverage",
+        ),
+    ):
+        term.write_text(total + "\n", encoding="utf-8")
         proc = run_quality_script(
             "test_coverage_comment.py",
             tmp_path,
@@ -522,7 +556,7 @@ def test_medium_and_low_coverage_use_severity_icons(tmp_path, run_quality_script
         assert proc.returncode == 0
         assert (
             f"**Workflow script coverage — {marker}:** "
-            "Python `70/100 statements (70%)` · Shell `10/10 lines (100%) · 2/2 inferred branches (100%)`"
+            f"Python `{detail}` · Shell `10/10 lines (100%) · 2/2 inferred branches (100%)`"
         ) in proc.stdout
 
 
