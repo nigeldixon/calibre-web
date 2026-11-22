@@ -171,58 +171,7 @@ jobs:
         id: validate_sarif
         if: always()
         shell: bash
-        run: |
-          python - "${{ matrix.language }}" <<'PY'
-          import glob
-          import json
-          import sys
-
-          language = sys.argv[1]
-          files = sorted(glob.glob(f"codeql-results/{language}/*.sarif"))
-          if not files:
-              raise SystemExit(f"No CodeQL SARIF was produced for {language}")
-
-          for path in files:
-              try:
-                  with open(path, "r", encoding="utf-8") as handle:
-                      sarif = json.load(handle)
-              except Exception as exc:
-                  raise SystemExit(f"Invalid SARIF {path}: {exc}")
-
-              runs = sarif.get("runs") if isinstance(sarif, dict) else None
-              if not isinstance(runs, list) or not runs:
-                  raise SystemExit(f"Invalid SARIF {path}: no runs")
-              for run in runs:
-                  if (not isinstance(run, dict)
-                          or not isinstance(run.get("tool"), dict)
-                          or not run["tool"]):
-                      raise SystemExit(f"Invalid SARIF {path}: missing tool")
-                  results = run.get("results", [])
-                  if not isinstance(results, list):
-                      raise SystemExit(f"Invalid SARIF {path}: results is not a list")
-                  invocations = run.get("invocations", []) or []
-                  if not isinstance(invocations, list):
-                      raise SystemExit(f"Invalid SARIF {path}: invocations is not a list")
-                  for invocation in invocations:
-                      if not isinstance(invocation, dict):
-                          raise SystemExit(f"Invalid SARIF {path}: invalid invocation")
-                      if invocation.get("executionSuccessful") is False:
-                          raise SystemExit(
-                              f"CodeQL scan failed for {language}: executionSuccessful=false"
-                          )
-                      notifications = invocation.get("toolExecutionNotifications", []) or []
-                      if not isinstance(notifications, list):
-                          raise SystemExit(f"Invalid SARIF {path}: notifications is not a list")
-                      for notification in notifications:
-                          if not isinstance(notification, dict):
-                              raise SystemExit(f"Invalid SARIF {path}: invalid notification")
-                          if str(notification.get("level", "")).lower() == "error":
-                              raise SystemExit(
-                                  f"CodeQL scan failed for {language}: "
-                                  f"{notification.get('message', {}).get('text', 'error notification')}"
-                              )
-          print(f"Validated {len(files)} CodeQL SARIF file(s) for {language}")
-          PY
+        run: python .github/scripts/validate_codeql_sarif.py "${{ matrix.language }}"
 
       - name: Upload CodeQL SARIF to code scanning
         if: >-

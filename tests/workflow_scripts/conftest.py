@@ -16,11 +16,11 @@ SCRIPTS_DIR = REPO_ROOT / ".github" / "scripts"
 def run_quality_script():
     """Run a workflow helper the same way the workflows do: as a subprocess."""
 
-    def _run(name, cwd, env=None):
+    def _run(name, cwd, env=None, args=()):
         child_env = os.environ.copy()
         child_env.update({key: str(value) for key, value in (env or {}).items()})
         return subprocess.run(
-            [sys.executable, str(SCRIPTS_DIR / name)],
+            [sys.executable, str(SCRIPTS_DIR / name), *args],
             cwd=str(cwd),
             env=child_env,
             capture_output=True,
