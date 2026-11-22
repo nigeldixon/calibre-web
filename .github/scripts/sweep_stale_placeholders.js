@@ -21,10 +21,11 @@ module.exports = async ({ github, context, core }) => {
     if (!section) continue;
 
     const active = await github.rest.actions.listWorkflowRunsForRepo({
-      owner, repo, head_sha: pr.head.sha, status: 'in_progress', per_page: 1,
+      owner, repo, head_sha: pr.head.sha, per_page: 100,
     });
-    if ((active.data.workflow_runs || []).length) {
-      core.info(`PR #${pr.number} still has running workflows; skipping.`);
+    const pending = (active.data.workflow_runs || []).find((run) => run.status !== 'completed');
+    if (pending) {
+      core.info(`PR #${pr.number} still has ${pending.status || 'active'} workflows; skipping.`);
       continue;
     }
 

@@ -720,13 +720,13 @@ test('sweep_stale_placeholders replaces stale panels and skips running PRs', asy
   const { core, outputs, info } = makeCore();
   const stub = bodyGithub(body, {
     'pulls.list': () => [pullRequest()],
-    'actions.listWorkflowRunsForRepo': () => ({ data: { workflow_runs: [{ id: 1 }] } }),
+    'actions.listWorkflowRunsForRepo': () => ({ data: { workflow_runs: [{ id: 1, status: 'in_progress' }] } }),
   });
   await moduleFor('sweep_stale_placeholders')({
     github: stub.github, context: contextFor({}), core,
   });
   assert.strictEqual(stub.calls.filter((c) => c.name === 'pulls.update').length, 0);
-  assert.ok(info.some((m) => m.includes('still has running workflows')));
+  assert.ok(info.some((m) => m.includes('in_progress workflows')));
 
   const activeFree = bodyGithub(body, { 'pulls.list': () => [pullRequest()] });
   const coreFree = makeCore();
@@ -738,6 +738,34 @@ test('sweep_stale_placeholders replaces stale panels and skips running PRs', asy
   assert.ok(write.params.body.includes('no analysis completed for commit head-sha'));
   assert.ok(write.params.body.includes('❌ Report unavailable'));
   assert.strictEqual(outputs.number, undefined);
+});
+
+test('sweep_stale_placeholders skips queued and awaiting-approval runs', async () => {
+  for (const [status, label] of [
+    ['queued', 'queued'],
+    ['requested', 'requested'],
+    ['waiting', 'waiting'],
+    ['pending', 'pending'],
+    ['action_required', 'action_required'],
+    [undefined, 'active'],
+  ]) {
+    const body = bodyWithPanels({
+      codeql: `${REPORT_DEFS.codeql.heading}\n⏳ waiting`,
+    });
+    const { core, info } = makeCore();
+    const stub = bodyGithub(body, {
+      'pulls.list': () => [pullRequest()],
+      'actions.listWorkflowRunsForRepo': () => ({ data: { workflow_runs: [{ id: 7, status }] } }),
+    });
+    await moduleFor('sweep_stale_placeholders')({
+      github: stub.github, context: contextFor({}), core,
+    });
+    assert.strictEqual(stub.calls.filter((c) => c.name === 'pulls.update').length, 0);
+    assert.ok(info.some((m) => m.includes(`${label} workflows`)));
+    const query = stub.calls.find((c) => c.name === 'actions.listWorkflowRunsForRepo');
+    assert.strictEqual(query.params.status, undefined);
+    assert.strictEqual(query.params.head_sha, 'head-sha');
+  }
 });
 
 test('sweep_stale_placeholders skips empty bodies and complete panels', async () => {
