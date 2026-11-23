@@ -908,3 +908,62 @@ def test_diff_scope_fallback_and_changed_file_line_scope(tmp_path, run_quality_s
     proc = run_quality_script("codeql_pr_comment.py", d, env={"PATH": f"{b}:{os.environ['PATH']}", "PR_BASE_SHA": base, "PR_HEAD_SHA": head, "PR_BASE_REF": "develop"})
     assert proc.returncode == 0
     assert "lines changed in this PR" in proc.stdout
+
+
+def test_empty_diff_ranges_falls_back_to_file_scope(tmp_path, run_quality_script, write_json):
+    base = "a" * 40
+    head = "b" * 40
+
+    for language in ("javascript-typescript", "python"):
+        directory = tmp_path / "codeql-results" / f"codeql-sarif-{language}"
+        directory.mkdir(parents=True)
+        write_json(directory / "results.sarif", sarif(results=[finding("cps/a.py", "warning")] if language == "python" else []))
+
+    # CHANGED_FILES_FILE path: unified=0 diff succeeds but has no hunks -> file scope
+    changed = tmp_path / "changed-files.txt"
+    changed.write_text("cps/a.py\n", encoding="utf-8")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    git = bin_dir / "git"
+    git.write_text(
+        "#!/bin/sh\n"
+        "if [ \"$1\" = fetch ]; then exit 0; fi\n"
+        "if echo \"$@\" | grep -q -- --unified=0; then printf '%s\\n' 'diff --git a/cps/a.py b/cps/a.py' '--- a/cps/a.py' '+++ b/cps/a.py'; exit 0; fi\n"
+        "if echo \"$@\" | grep -q -- --name-only; then printf '%s\\n' 'cps/a.py'; exit 0; fi\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    git.chmod(0o755)
+    proc = run_quality_script(
+        "codeql_pr_comment.py", tmp_path,
+        env={"PATH": f"{bin_dir}:{os.environ['PATH']}", "CHANGED_FILES_FILE": str(changed), "PR_BASE_SHA": base, "PR_HEAD_SHA": head},
+    )
+    assert proc.returncode == 0
+    assert "files changed in this PR" in proc.stdout
+    assert "**In changed files:** 1" in proc.stdout
+
+    # base/head path: empty ranges, name-only fails -> conservative unfiltered fallback
+    tmp2 = tmp_path / "fb"
+    tmp2.mkdir()
+    for language in ("javascript-typescript", "python"):
+        directory = tmp2 / "codeql-results" / f"codeql-sarif-{language}"
+        directory.mkdir(parents=True)
+        write_json(directory / "results.sarif", sarif(results=[finding("cps/a.py", "warning")] if language == "python" else []))
+    b2 = tmp2 / "bin"
+    b2.mkdir()
+    g2 = b2 / "git"
+    g2.write_text(
+        "#!/bin/sh\n"
+        "if [ \"$1\" = fetch ]; then exit 0; fi\n"
+        "if echo \"$@\" | grep -q -- --unified=0; then printf '%s\\n' 'diff --git a/cps/a.py b/cps/a.py' '--- a/cps/a.py' '+++ b/cps/a.py'; exit 0; fi\n"
+        "if echo \"$@\" | grep -q -- --name-only; then exit 1; fi\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    g2.chmod(0o755)
+    proc = run_quality_script(
+        "codeql_pr_comment.py", tmp2,
+        env={"PATH": f"{b2}:{os.environ['PATH']}", "PR_BASE_SHA": base, "PR_HEAD_SHA": head, "PR_BASE_REF": "develop"},
+    )
+    assert proc.returncode == 0
+    assert "could not determine PR diff; showing all SARIF results" in proc.stdout

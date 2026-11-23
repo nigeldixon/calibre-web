@@ -119,6 +119,8 @@ if changed_files_file:
         head_sha = os.environ.get('PR_HEAD_SHA', '').strip()
         base_ref = os.environ.get('PR_BASE_REF', '').strip()
         changed_ranges = collect_diff_ranges(base_sha, head_sha, base_ref=base_ref)
+        if not changed_ranges:
+            changed_ranges = None
         scope_reason = 'full_scan'
         if changed is not None:
             scope_reason = 'pr_changed_lines' if changed_ranges is not None else 'pr_changed_files'

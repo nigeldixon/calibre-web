@@ -68,7 +68,7 @@ if changed_files_file:
                 if line:
                     files.add(line)
         ranges = collect_diff_ranges(base_sha, head_sha, base_ref=base_ref)
-        if ranges is not None:
+        if ranges:
             _set_line_scope(files, ranges)
         else:
             _set_file_scope(files)
@@ -78,7 +78,7 @@ if changed_files_file:
 elif base_sha and head_sha:
     try:
         ranges = collect_diff_ranges(base_sha, head_sha, base_ref=base_ref)
-        if ranges is not None:
+        if ranges:
             files = set(ranges.keys())
             # Include changed files even when diff hunks have no new-line ranges,
             # so file-level fallback can still be conservative for them.
