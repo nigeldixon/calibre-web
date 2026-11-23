@@ -259,6 +259,48 @@ def test_upload_book_formats_adds_new_format_and_marks_book_changed(monkeypatch,
     assert book.last_modified.tzinfo is not None
 
 
+def test_delete_book_format_marks_book_changed_for_sync(monkeypatch, app):
+    calls = []
+    book = SimpleNamespace(id=31, last_modified=None)
+
+    class DataQuery:
+        def filter(self, *args):
+            return self
+
+        def delete(self):
+            calls.append("delete")
+
+    monkeypatch.setattr(editbooks, "db", SimpleNamespace(
+        Data=SimpleNamespace(book="books.book", format="books.format"),
+    ))
+    monkeypatch.setattr(editbooks, "calibre_db", SimpleNamespace(
+        get_book=lambda book_id: book,
+        set_metadata_dirty=lambda book_id: calls.append(("dirty", book_id)),
+        session=SimpleNamespace(
+            query=lambda model: DataQuery(),
+            commit=lambda: calls.append("commit"),
+            rollback=lambda: calls.append("rollback"),
+        ),
+    ))
+    monkeypatch.setattr(editbooks, "helper", SimpleNamespace(
+        delete_book=lambda *args, **kwargs: (True, None),
+    ))
+    monkeypatch.setattr(editbooks.config, "get_book_path", lambda: "/library")
+    monkeypatch.setattr(editbooks, "render_delete_book_result", lambda *args, **kwargs: "rendered")
+    monkeypatch.setattr(editbooks, "kobo_sync_status", SimpleNamespace(
+        remove_synced_book=lambda *args, **kwargs: calls.append(("remove", args, kwargs)),
+    ))
+
+    result = editbooks.delete_book_from_UI(31, "EPUB", "")
+
+    assert result == "rendered"
+    assert "delete" in calls
+    assert ("dirty", 31) in calls
+    assert "commit" in calls
+    _assert_no_sync_invalidation(calls)
+    assert book.last_modified.tzinfo is not None
+
+
 def test_upload_book_formats_rolls_back_when_replacing_format_fails(monkeypatch, app, tmp_path):
     calls = []
     existing_format = SimpleNamespace(uncompressed_size=1)

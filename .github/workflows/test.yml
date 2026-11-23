@@ -105,7 +105,7 @@ jobs:
         run: |
           set -o pipefail
           if [ -d tests/unit ]; then
-            pytest tests/unit -q --cov=cps.cover_history --cov=cps.editbooks --cov=cps.helper --cov=cps.kobo --cov=cps.services.SyncToken --cov-report=term-missing --cov-report=xml:coverage.xml 2>&1 | tee unit-test-output.txt
+            pytest tests/unit -q --cov=cps.cover_history --cov=cps.editbooks --cov=cps.helper --cov=cps.kobo --cov=cps.services.SyncToken --cov=cps.tasks.convert --cov-report=term-missing --cov-report=xml:coverage.xml 2>&1 | tee unit-test-output.txt
           else
             echo "tests/unit not found; skipping unit tests." | tee unit-test-output.txt
           fi

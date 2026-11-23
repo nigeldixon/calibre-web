@@ -1124,7 +1124,8 @@ def delete_book_from_UI(book_id, book_format, location=""):
                 calibre_db.session.query(db.Data).filter(db.Data.book == book.id). \
                     filter(db.Data.format == book_format).delete()
                 if book_format.upper() in ['KEPUB', 'EPUB', 'EPUB3']:
-                    kobo_sync_status.remove_synced_book(book.id, True)
+                    book.last_modified = datetime.now(timezone.utc)
+                    calibre_db.set_metadata_dirty(book.id)
             calibre_db.session.commit()
         except Exception as ex:
             log.error_or_exception(ex)
