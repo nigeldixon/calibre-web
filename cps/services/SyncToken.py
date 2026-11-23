@@ -55,6 +55,7 @@ class SyncToken:
     Attributes:
         books_last_created: Datetime representing the newest book that the device knows about.
         books_last_modified: Datetime representing the last modified book that the device knows about.
+        books_last_id: Book id used as a tie-breaker when several books share a modification time.
     """
 
     SYNC_TOKEN_HEADER = "x-kobo-synctoken"  # nosec
@@ -77,8 +78,8 @@ class SyncToken:
             "books_last_created": {"type": "string"},
             "archive_last_modified": {"type": "string"},
             "reading_state_last_modified": {"type": "string"},
-            "tags_last_modified": {"type": "string"}
-            # "books_last_id": {"type": "integer", "optional": True}
+            "tags_last_modified": {"type": "string"},
+            "books_last_id": {"type": "integer"},
         },
     }
 
@@ -89,8 +90,8 @@ class SyncToken:
         books_last_modified=datetime.min,
         archive_last_modified=datetime.min,
         reading_state_last_modified=datetime.min,
-        tags_last_modified=datetime.min
-        # books_last_id=-1
+        tags_last_modified=datetime.min,
+        books_last_id=-1
     ):  # nosec
         self.raw_kobo_store_token = raw_kobo_store_token
         self.books_last_created = books_last_created
@@ -98,7 +99,7 @@ class SyncToken:
         self.archive_last_modified = archive_last_modified
         self.reading_state_last_modified = reading_state_last_modified
         self.tags_last_modified = tags_last_modified
-        # self.books_last_id = books_last_id
+        self.books_last_id = books_last_id
 
     @staticmethod
     def from_headers(headers):
@@ -133,7 +134,8 @@ class SyncToken:
             archive_last_modified = get_datetime_from_json(data_json, "archive_last_modified")
             reading_state_last_modified = get_datetime_from_json(data_json, "reading_state_last_modified")
             tags_last_modified = get_datetime_from_json(data_json, "tags_last_modified")
-        except TypeError:
+            books_last_id = int(data_json.get("books_last_id", -1))
+        except (TypeError, ValueError):
             log.error("SyncToken timestamps don't parse to a datetime.")
             return SyncToken(raw_kobo_store_token=raw_kobo_store_token)
 
@@ -144,6 +146,7 @@ class SyncToken:
             archive_last_modified=archive_last_modified,
             reading_state_last_modified=reading_state_last_modified,
             tags_last_modified=tags_last_modified,
+            books_last_id=books_last_id,
         )
 
     def set_kobo_store_header(self, store_headers):
@@ -167,14 +170,16 @@ class SyncToken:
                 "archive_last_modified": to_epoch_timestamp(self.archive_last_modified),
                 "reading_state_last_modified": to_epoch_timestamp(self.reading_state_last_modified),
                 "tags_last_modified": to_epoch_timestamp(self.tags_last_modified),
+                "books_last_id": self.books_last_id,
             },
         }
         return b64encode_json(token)
 
     def __str__(self):
-        return "{},{},{},{},{},{}".format(self.books_last_created,
-                                          self.books_last_modified,
-                                          self.archive_last_modified,
-                                          self.reading_state_last_modified,
-                                          self.tags_last_modified,
-                                          self.raw_kobo_store_token)
+        return "{},{},{},{},{},{},{}".format(self.books_last_created,
+                                             self.books_last_modified,
+                                             self.archive_last_modified,
+                                             self.reading_state_last_modified,
+                                             self.tags_last_modified,
+                                             self.books_last_id,
+                                             self.raw_kobo_store_token)

@@ -5,7 +5,7 @@ import os
 import re
 from defusedxml import ElementTree as SafeET
 
-from application_changes import application_changed_files, normalize_path
+from application_changes import application_changed_files, is_application_file, normalize_path
 from application_changes import load_changed_files as _load_changed_files
 from report_constants import load_constants
 
@@ -382,7 +382,7 @@ def coverage_section():
             if item.get("status") == "removed":
                 continue
             filename = normalize_path(item.get("filename", ""))
-            if not filename:
+            if not is_application_file(filename):
                 continue
             added = sorted(added_lines_from_patch(item.get("patch", "")))
             file_cov = coverage.get(filename, {})

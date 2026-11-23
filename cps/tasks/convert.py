@@ -21,6 +21,7 @@ import re
 import glob
 from shutil import copyfile, copyfileobj
 from markupsafe import escape
+from datetime import datetime, timezone
 from time import time
 from uuid import uuid4
 
@@ -32,8 +33,6 @@ from cps import db, app
 from cps import logger, config
 from cps.subproc_wrapper import process_open
 from flask_babel import gettext as _
-from cps.kobo_sync_status import remove_synced_book
-from cps.ub import init_db_thread
 from cps.file_helper import get_temp_dir
 from cps.binary_helper import resolve_binary_path, SUPPORTED_KEPUBIFY_BINARIES
 
@@ -192,12 +191,11 @@ class TaskConvert(CalibreTask):
                                              book_format=self.settings['new_book_format'].upper(),
                                              book=book_id, uncompressed_size=os.path.getsize(file_path + format_new_ext))
                         try:
+                            if self.settings['new_book_format'].upper() in ['KEPUB', 'EPUB', 'EPUB3']:
+                                cur_book.last_modified = datetime.now(timezone.utc)
+                                local_db.set_metadata_dirty(book_id)
                             local_db.session.merge(new_format)
                             local_db.session.commit()
-                            if self.settings['new_book_format'].upper() in ['KEPUB', 'EPUB', 'EPUB3']:
-                                ub_session = init_db_thread()
-                                remove_synced_book(book_id, True, ub_session)
-                                ub_session.close()
                         except SQLAlchemyError as e:
                             local_db.session.rollback()
                             log.error("Database error: %s", e)

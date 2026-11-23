@@ -138,6 +138,17 @@ def convert_to_kobo_timestamp_string(timestamp):
         return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def book_change_filter(sync_token, change_timestamp):
+    """Select changes newer than the device token, using the book id for ties."""
+    if sync_token.books_last_id > -1:
+        return or_(
+            change_timestamp > sync_token.books_last_modified,
+            and_(change_timestamp == sync_token.books_last_modified,
+                 db.Books.id > sync_token.books_last_id),
+        )
+    return change_timestamp > sync_token.books_last_modified
+
+
 @kobo.route("/v1/library/sync")
 @requires_kobo_auth
 def HandleSyncRequest():
@@ -150,12 +161,6 @@ def HandleSyncRequest():
     log.debug("Download link format {}".format(get_download_url_for_book('[bookid]', '[bookformat]')))
     if not current_app.wsgi_app.is_proxied:
         log.debug('Kobo: Received unproxied request, changed request port to external server port')
-
-    # if no books synced don't respect sync_token
-    if not ub.session.query(ub.KoboSyncedBooks).filter(ub.KoboSyncedBooks.user_id == current_user.id).count():
-        sync_token.books_last_modified = datetime.min
-        sync_token.books_last_created = datetime.min
-        sync_token.reading_state_last_modified = datetime.min
 
     new_books_last_modified = sync_token.books_last_modified  # needed for sync selected shelfs only
     new_books_last_created = sync_token.books_last_created  # needed to distinguish between new and changed entitlement
@@ -170,7 +175,16 @@ def HandleSyncRequest():
 
     only_kobo_shelves = current_user.kobo_only_shelves_sync
 
+    # Archive/unarchive changes have their own timestamp. Include it in the
+    # book change cursor so a removal is selected even when only the archive
+    # row changed since the device's last sync. Older Calibre libraries can
+    # have a missing last_modified, so fall back to the book's timestamp.
+    book_last_modified = func.coalesce(db.Books.last_modified, db.Books.timestamp)
+    archive_change_timestamp = func.coalesce(ub.ArchivedBook.last_modified, book_last_modified)
+
     if only_kobo_shelves:
+        book_change_timestamp = func.max(book_last_modified, archive_change_timestamp,
+                                         ub.BookShelf.date_added)
         changed_entries = calibre_db.session.query(db.Books,
                                                    ub.ArchivedBook.last_modified,
                                                    ub.BookShelf.date_added,
@@ -178,35 +192,35 @@ def HandleSyncRequest():
         changed_entries = (changed_entries
                            .join(db.Data).outerjoin(ub.ArchivedBook, and_(db.Books.id == ub.ArchivedBook.book_id,
                                                                           ub.ArchivedBook.user_id == current_user.id))
-                           .filter(db.Books.id.notin_(calibre_db.session.query(ub.KoboSyncedBooks.book_id)
-                                                      .filter(ub.KoboSyncedBooks.user_id == current_user.id)))
-                           .filter(ub.BookShelf.date_added > sync_token.books_last_modified)
+                           .filter(book_change_filter(sync_token, book_change_timestamp))
                            .filter(db.Data.format.in_(KOBO_FORMATS))
                            .filter(calibre_db.common_filters(allow_show_archived=True))
-                           .order_by(db.Books.id)
-                           .order_by(ub.ArchivedBook.last_modified)
                            .join(ub.BookShelf, db.Books.id == ub.BookShelf.book_id)
                            .join(ub.Shelf)
                            .filter(ub.Shelf.user_id == current_user.id)
                            .filter(ub.Shelf.kobo_sync)
+                           .order_by(book_change_timestamp)
+                           .order_by(db.Books.id)
+                           .order_by(ub.ArchivedBook.last_modified)
                            .distinct())
     else:
+        book_change_timestamp = func.max(book_last_modified, archive_change_timestamp)
         changed_entries = calibre_db.session.query(db.Books,
                                                    ub.ArchivedBook.last_modified,
                                                    ub.ArchivedBook.is_archived)
         changed_entries = (changed_entries
                            .join(db.Data).outerjoin(ub.ArchivedBook, and_(db.Books.id == ub.ArchivedBook.book_id,
                                                                           ub.ArchivedBook.user_id == current_user.id))
-                           .filter(db.Books.id.notin_(calibre_db.session.query(ub.KoboSyncedBooks.book_id)
-                                                      .filter(ub.KoboSyncedBooks.user_id == current_user.id)))
+                           .filter(book_change_filter(sync_token, book_change_timestamp))
                            .filter(calibre_db.common_filters(allow_show_archived=True))
                            .filter(db.Data.format.in_(KOBO_FORMATS))
-                           .order_by(db.Books.last_modified)
+                           .order_by(book_change_timestamp)
                            .order_by(db.Books.id))
 
     reading_states_in_new_entitlements = []
-    books = changed_entries.limit(SYNC_ITEM_LIMIT)
-    log.debug("Books to Sync: {}".format(len(books.all())))
+    books = changed_entries.limit(SYNC_ITEM_LIMIT).all()
+    books_last_id = books[-1].Books.id if books else -1
+    log.debug("Books to Sync: {}".format(len(books)))
     for book in books:
         formats = [data.format for data in book.Books.data]
         if 'KEPUB' not in formats and config.config_kepubifypath and 'EPUB' in formats:
@@ -235,9 +249,16 @@ def HandleSyncRequest():
         else:
             sync_results.append({"ChangedEntitlement": entitlement})
 
-        new_books_last_modified = max(
-            book.Books.last_modified.replace(tzinfo=None), new_books_last_modified
-        )
+        effective_last_modified = book.Books.last_modified or book.Books.timestamp
+        if effective_last_modified:
+            new_books_last_modified = max(
+                effective_last_modified.replace(tzinfo=None), new_books_last_modified
+            )
+        archived_timestamp = getattr(book, "last_modified", None)
+        if archived_timestamp:
+            new_books_last_modified = max(
+                new_books_last_modified, archived_timestamp.replace(tzinfo=None)
+            )
         try:
             new_books_last_modified = max(
                 new_books_last_modified, book.date_added
@@ -248,13 +269,12 @@ def HandleSyncRequest():
         new_books_last_created = max(ts_created, new_books_last_created)
         kobo_sync_status.add_synced_books(book.Books.id)
 
-    max_change = changed_entries.filter(ub.ArchivedBook.is_archived)\
-        .filter(ub.ArchivedBook.user_id == current_user.id) \
-        .order_by(func.datetime(ub.ArchivedBook.last_modified).desc()).first()
-
-    max_change = max_change.last_modified if max_change else new_archived_last_modified
-
-    new_archived_last_modified = max(new_archived_last_modified, max_change)
+    for archived in books:
+        archived_timestamp = getattr(archived, "last_modified", None)
+        if archived.is_archived and archived_timestamp:
+            new_archived_last_modified = max(
+                new_archived_last_modified, archived_timestamp.replace(tzinfo=None)
+            )
 
     # no. of books returned
     book_count = changed_entries.count()
@@ -299,6 +319,7 @@ def HandleSyncRequest():
     if not cont_sync:
         sync_token.books_last_created = new_books_last_created
     sync_token.books_last_modified = new_books_last_modified
+    sync_token.books_last_id = books_last_id
     sync_token.archive_last_modified = new_archived_last_modified
     sync_token.reading_state_last_modified = new_reading_state_last_modified
 
@@ -350,14 +371,31 @@ def HandleMetadataRequest(book_uuid):
     return response
 
 
-def get_download_url_for_book(book_id, book_format):
+def get_book_format_binary_version(book, book_data):
+    try:
+        path = os.path.join(config.get_book_path(), book.path, book_data.name + "." + book_data.format.lower())
+        st = os.stat(path)
+        return "{}-{}".format(st.st_mtime_ns, st.st_size)
+    except Exception:
+        return str(book_data.uncompressed_size or 0)
+
+
+def get_download_url_for_book(book_id, book_format, version=None):
+    if version is not None:
+        try:
+            if hasattr(version, "timestamp"):
+                version = int(version.replace(tzinfo=timezone.utc).timestamp()) if version.tzinfo is None else int(version.timestamp())
+            else:
+                version = str(version)
+        except Exception:
+            version = None
     if not current_app.wsgi_app.is_proxied:
         if ':' in request.host and not request.host.endswith(']'):
             host = "".join(request.host.split(':')[:-1])
         else:
             host = request.host
 
-        return "{url_scheme}://{url_base}:{url_port}/kobo/{auth_token}/download/{book_id}/{book_format}".format(
+        url = "{url_scheme}://{url_base}:{url_port}/kobo/{auth_token}/download/{book_id}/{book_format}".format(
             url_scheme=request.scheme,
             url_base=host,
             url_port=config.config_external_port,
@@ -365,17 +403,21 @@ def get_download_url_for_book(book_id, book_format):
             book_id=book_id,
             book_format=book_format.lower()
         )
-    return url_for(
-        "kobo.download_book",
+        return "{}?v={}".format(url, version) if version is not None else url
+    params = dict(
         auth_token=get_auth_token(),
         book_id=book_id,
         book_format=book_format.lower(),
         _external=True,
     )
+    if version is not None:
+        params["v"] = version
+    return url_for("kobo.download_book", **params)
 
 
 def create_book_entitlement(book, archived):
     book_uuid = str(book.uuid)
+    last_modified = book.last_modified or book.timestamp
     return {
         "Accessibility": "Full",
         "ActivePeriod": {"From": convert_to_kobo_timestamp_string(datetime.now(timezone.utc))},
@@ -385,7 +427,7 @@ def create_book_entitlement(book, archived):
         "IsRemoved": archived,
         "IsHiddenFromArchive": False,
         "IsLocked": False,
-        "LastModified": convert_to_kobo_timestamp_string(book.last_modified),
+        "LastModified": convert_to_kobo_timestamp_string(last_modified),
         "OriginCategory": "Imported",
         "RevisionId": book_uuid,
         "Status": "Active",
@@ -451,7 +493,8 @@ def get_metadata(book):
                     {
                         "Format": kobo_format,
                         "Size": book_data.uncompressed_size,
-                        "Url": get_download_url_for_book(book.id, book_data.format),
+                        "Url": get_download_url_for_book(book.id, book_data.format,
+                                                       get_book_format_binary_version(book, book_data)),
                         # The Kobo forma accepts platforms: (Generic, Android)
                         "Platform": "Generic",
                         # "DrmType": "None", # Not required

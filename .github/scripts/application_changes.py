@@ -33,6 +33,12 @@ def load_changed_files(path):
     return data
 
 
+def is_application_file(filename):
+    """Return True for application source paths measured by coverage.xml."""
+    filename = normalize_path(filename)
+    return filename in APP_FILES or filename.startswith(APP_PREFIXES)
+
+
 def application_changed_files(path):
     """Return sorted application paths, [] for none, or None if unknown."""
     files = load_changed_files(path)
@@ -43,6 +49,6 @@ def application_changed_files(path):
         if not isinstance(item, dict) or item.get("status") == "removed":
             continue
         filename = normalize_path(item.get("filename", ""))
-        if filename in APP_FILES or filename.startswith(APP_PREFIXES):
+        if is_application_file(filename):
             changed.add(filename)
     return sorted(changed)
