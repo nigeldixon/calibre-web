@@ -792,7 +792,7 @@ test('sweep_stale_placeholders skips active pull_request_target backfill runs', 
       github: stub.github, context: contextFor({}), core,
     });
     assert.strictEqual(stub.calls.filter((c) => c.name === 'pulls.update').length, 0);
-    assert.ok(info.some((m) => m.includes('active backfill')));
+    assert.ok(info.some((m) => m.includes('backfill; skipping.')));
   }
 });
 
