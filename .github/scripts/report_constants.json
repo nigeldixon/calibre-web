@@ -1,0 +1,25 @@
+{
+  "sectionStart": "<!-- quality-reports:start -->",
+  "sectionEnd": "<!-- quality-reports:end -->",
+  "sectionHeader": "\n\n---\n## 📊 Quality reports\n",
+  "legacySectionHeader": "\n\n---\n## Quality reports\n",
+  "summaryMarker": "<!-- quality-totals -->",
+  "reportKeys": ["codeql", "semgrep", "tests"],
+  "markers": {
+    "codeql": "<!-- codeql-report -->",
+    "semgrep": "<!-- semgrep-report -->",
+    "tests": "<!-- coverage-report -->"
+  },
+  "headings": {
+    "codeql": "### 🔍 CodeQL analysis",
+    "semgrep": "### 🛡️ Semgrep analysis",
+    "tests": "### 🧪 Tests"
+  },
+  "labels": {
+    "issues": "**Whole-solution issues:** ",
+    "changed": "**In changed files:** ",
+    "errors": "**Analysis errors:** ",
+    "warnings": "**Analysis warnings:** ",
+    "analyze": "**Analyze job:** "
+  }
+}

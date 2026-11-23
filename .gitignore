@@ -4,6 +4,29 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+workflow-coverage-data/
+codeql-rendered/
+
+# Generated workflow report artifacts
+.coverage
+.coverage.*
+coverage.xml
+coverage-term.txt
+coverage-term.tmp
+diff-coverage.md
+coverage-workflow-scripts.xml
+coverage-workflow-scripts-term.txt
+coverage-workflow-js-lcov.info
+coverage-workflow-shell-lcov.info
+workflow-script-test-output.txt
+unit-test-output.txt
+e2e-test-output.txt
+functional-test-output.txt
+test-results.json
+test-failure-comments.json
+changed-files.json
+coverage-comment.md
+
 # Distribution / packaging
 .Python
 .python-version

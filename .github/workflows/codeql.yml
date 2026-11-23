@@ -1,0 +1,219 @@
+name: CodeQL
+
+on:
+  push:
+    branches:
+      - '**'
+  pull_request_target:
+    types:
+      - opened
+      - reopened
+  pull_request:
+    types:
+      - opened
+      - reopened
+      - synchronize
+  schedule:
+    - cron: '30 5 * * 1'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  placeholder-comment:
+    name: Placeholder PR comments
+    if: github.event_name == 'pull_request_target'
+    runs-on: ubuntu-latest
+    # Serialize PR body writes with the backfill and push publishers.
+    concurrency:
+      group: quality-pr-body
+      cancel-in-progress: false
+      queue: max
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Create or update pending quality reports in PR body
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        with:
+          script: |
+            const script = require('./.github/scripts/create_pending_quality_reports.js');
+            await script({ github, context, core });
+
+  analyze:
+    if: github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.event.pull_request.base.repo.full_name)
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: javascript-typescript
+            build-mode: none
+          - language: python
+            build-mode: none
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Install template rendering dependencies
+        if: matrix.language == 'javascript-typescript'
+        run: python -m pip install --quiet 'jinja2>=3.1,<3.2'
+
+      - name: Render Jinja templates for CodeQL
+        if: matrix.language == 'javascript-typescript'
+        run: python .github/scripts/render_templates_for_codeql.py
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066 # v4
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+          config-file: .github/codeql/codeql-config.yml
+
+      - name: Perform CodeQL Analysis
+        id: analyze
+        uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4
+        with:
+          category: "/language:${{ matrix.language }}"
+          output: codeql-results/${{ matrix.language }}
+          # Upload only after the structural gate below has passed.
+          upload: never
+
+      - name: Record analyze outcome
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p codeql-results/${{ matrix.language }}
+          echo '${{ steps.analyze.outcome }}' > codeql-results/${{ matrix.language }}/status.txt
+
+      - name: Validate CodeQL SARIF
+        id: validate_sarif
+        if: always()
+        shell: bash
+        run: python .github/scripts/validate_codeql_sarif.py "${{ matrix.language }}"
+
+      - name: Upload CodeQL SARIF to code scanning
+        if: >-
+          always() && steps.analyze.outcome == 'success' &&
+          steps.validate_sarif.outcome == 'success' &&
+          github.event_name != 'pull_request'
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4
+        with:
+          sarif_file: codeql-results/${{ matrix.language }}
+          category: "/language:${{ matrix.language }}"
+
+      - name: Upload SARIF artifact
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: codeql-sarif-${{ matrix.language }}
+          path: codeql-results/${{ matrix.language }}/
+          if-no-files-found: warn
+          retention-days: 5
+
+  comment:
+    name: PR comment
+    runs-on: ubuntu-latest
+    if: always() && github.event_name == 'push'
+    needs: analyze
+    # Serialize PR body writes across all quality workflows. GitHub has no
+    # conditional PR update, so concurrent publishers can lose each other's
+    # reports even with the re-read check in updateReportAndRefreshTotals.
+    concurrency:
+      group: quality-pr-body
+      cancel-in-progress: false
+      queue: max
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Checkout repository
+        if: always()
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Find associated pull request
+        id: find_pr
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        with:
+          script: |
+            const script = require('./.github/scripts/find_associated_pr.js');
+            await script({ github, context, core });
+
+      - name: Download SARIF artifacts
+        if: steps.find_pr.outputs.number != ''
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: codeql-sarif-*
+          path: codeql-results
+          merge-multiple: false
+        continue-on-error: true
+
+      - name: Generate CodeQL PR comment
+        if: steps.find_pr.outputs.number != ''
+        id: codeql_comment
+        # The generator exits 1 after printing a complete failure panel when
+        # SARIF is missing or invalid. Keep that panel publishable instead of
+        # leaving the previous commit's report in the PR body.
+        continue-on-error: true
+        shell: bash
+        env:
+          PR_BASE_SHA: ${{ steps.find_pr.outputs.base_sha }}
+          PR_HEAD_SHA: ${{ steps.find_pr.outputs.head_sha }}
+          PR_BASE_REF: ${{ steps.find_pr.outputs.base_ref }}
+          ANALYZE_RESULT: ${{ needs.analyze.result }}
+          ANALYSIS_URL: ${{ github.server_url }}/${{ github.repository }}/security/code-scanning?query=tool%3Acodeql
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: python .github/scripts/codeql_pr_comment.py > codeql-comment.md
+
+      - name: Update CodeQL report in PR body
+        if: always() && github.event_name == 'push' && steps.find_pr.outputs.number != ''
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        env:
+          PR_NUMBER: ${{ steps.find_pr.outputs.number }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        with:
+          script: |
+            const fs = require('fs');
+            const {
+              updateReportAndRefreshTotals, REPORT_DEFS, unavailablePanel,
+            } = require('./.github/scripts/update_pr_body_reports.js');
+            const report = REPORT_DEFS.codeql;
+            // Internal push runs write codeql-comment.md; codeql-report.md is
+            // the regenerated artifact used by the privileged fork publisher.
+            const reportFile = 'codeql-comment.md';
+            let content = fs.existsSync(reportFile)
+              ? fs.readFileSync(reportFile, 'utf8')
+              : '';
+            if (!content.trim() || !content.includes(report.marker)) {
+              content = unavailablePanel({
+                marker: report.marker,
+                heading: report.heading,
+                labels: report.labels,
+                message: `CodeQL report generation failed or produced no usable output. See [workflow run](${process.env.RUN_URL}).`,
+              });
+              core.warning(`Publishing fallback for ${report.marker}: no usable CodeQL report was generated.`);
+            }
+            await updateReportAndRefreshTotals({
+              github, context, core,
+              pull_number: process.env.PR_NUMBER,
+              marker: report.marker,
+              content,
+            });
