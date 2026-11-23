@@ -180,7 +180,8 @@ def HandleSyncRequest():
                                                                           ub.ArchivedBook.user_id == current_user.id))
                            .filter(db.Books.id.notin_(calibre_db.session.query(ub.KoboSyncedBooks.book_id)
                                                       .filter(ub.KoboSyncedBooks.user_id == current_user.id)))
-                           .filter(ub.BookShelf.date_added > sync_token.books_last_modified)
+                           .filter(or_(ub.BookShelf.date_added > sync_token.books_last_modified,
+                                       db.Books.last_modified > sync_token.books_last_modified))
                            .filter(db.Data.format.in_(KOBO_FORMATS))
                            .filter(calibre_db.common_filters(allow_show_archived=True))
                            .order_by(db.Books.id)
@@ -350,14 +351,31 @@ def HandleMetadataRequest(book_uuid):
     return response
 
 
-def get_download_url_for_book(book_id, book_format):
+def get_book_format_binary_version(book, book_data):
+    try:
+        path = os.path.join(config.get_book_path(), book.path, book_data.name + "." + book_data.format.lower())
+        st = os.stat(path)
+        return "{}-{}".format(int(st.st_mtime), st.st_size)
+    except Exception:
+        return str(book_data.uncompressed_size or 0)
+
+
+def get_download_url_for_book(book_id, book_format, version=None):
+    if version is not None:
+        try:
+            if hasattr(version, "timestamp"):
+                version = int(version.replace(tzinfo=timezone.utc).timestamp()) if version.tzinfo is None else int(version.timestamp())
+            else:
+                version = str(version)
+        except Exception:
+            version = None
     if not current_app.wsgi_app.is_proxied:
         if ':' in request.host and not request.host.endswith(']'):
             host = "".join(request.host.split(':')[:-1])
         else:
             host = request.host
 
-        return "{url_scheme}://{url_base}:{url_port}/kobo/{auth_token}/download/{book_id}/{book_format}".format(
+        url = "{url_scheme}://{url_base}:{url_port}/kobo/{auth_token}/download/{book_id}/{book_format}".format(
             url_scheme=request.scheme,
             url_base=host,
             url_port=config.config_external_port,
@@ -365,13 +383,16 @@ def get_download_url_for_book(book_id, book_format):
             book_id=book_id,
             book_format=book_format.lower()
         )
-    return url_for(
-        "kobo.download_book",
+        return "{}?v={}".format(url, version) if version is not None else url
+    params = dict(
         auth_token=get_auth_token(),
         book_id=book_id,
         book_format=book_format.lower(),
         _external=True,
     )
+    if version is not None:
+        params["v"] = version
+    return url_for("kobo.download_book", **params)
 
 
 def create_book_entitlement(book, archived):
@@ -451,7 +472,8 @@ def get_metadata(book):
                     {
                         "Format": kobo_format,
                         "Size": book_data.uncompressed_size,
-                        "Url": get_download_url_for_book(book.id, book_data.format),
+                        "Url": get_download_url_for_book(book.id, book_data.format,
+                                                       get_book_format_binary_version(book, book_data)),
                         # The Kobo forma accepts platforms: (Generic, Android)
                         "Platform": "Generic",
                         # "DrmType": "None", # Not required
