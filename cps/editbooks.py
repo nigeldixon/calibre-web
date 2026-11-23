@@ -446,6 +446,7 @@ def edit_book_param(param, vals, multi=False):
                     continue
                 return _("Parameter not found"), 400
             book.last_modified = datetime.now(timezone.utc)
+            kobo_sync_status.remove_synced_book(book.id, all=True)
 
             calibre_db.session.commit()
             # revert change for sort if automatic fields link is deactivated
@@ -582,6 +583,11 @@ def merge_list_book():
                                                         element.format,
                                                         element.uncompressed_size,
                                                         to_name))
+                            to_file.append(element.format)
+                    to_book.last_modified = datetime.now(timezone.utc)
+                    kobo_sync_status.remove_synced_book(to_book.id, all=True)
+                    calibre_db.set_metadata_dirty(to_book.id)
+                    calibre_db.session.commit()
                     check_delete_book([from_book.id], "", True)
                     return make_response(jsonify(success=True))
     return ""
@@ -617,6 +623,7 @@ def table_xchange_author_title():
                 edit_error = helper.update_dir_structure(edited_books_id, config.get_book_path(), input_authors[0])
             if modify_date:
                 book.last_modified = datetime.now(timezone.utc)
+                kobo_sync_status.remove_synced_book(book.id, all=True)
                 calibre_db.set_metadata_dirty(book.id)
             try:
                 calibre_db.session.commit()
@@ -743,7 +750,7 @@ def do_edit_book(book_id, upload_formats=None):
 
         if modify_date:
             book.last_modified = datetime.now(timezone.utc)
-            kobo_sync_status.remove_synced_book(edited_books_id, all=True)
+            kobo_sync_status.remove_synced_book(book.id, all=True)
             calibre_db.set_metadata_dirty(book.id)
 
         calibre_db.session.merge(book)
@@ -1507,13 +1514,31 @@ def upload_book_formats(requested_files, book, book_id, no_cover=True):
 
             file_size = os.path.getsize(saved_filename)
 
-            # Format entry already exists, no need to update the database
-            if calibre_db.get_book_format(book_id, file_ext.upper()):
-                log.warning('Book format %s already existing', file_ext.upper())
+            # Format entry already exists: update file size and mark book changed for sync
+            existing_format = calibre_db.get_book_format(book_id, file_ext.upper())
+            if existing_format:
+                log.warning('Book format %s already existing, replacing file', file_ext.upper())
+                try:
+                    existing_format.uncompressed_size = file_size
+                    book.last_modified = datetime.now(timezone.utc)
+                    kobo_sync_status.remove_synced_book(book.id, all=True)
+                    calibre_db.set_metadata_dirty(book.id)
+                    calibre_db.session.commit()
+                    calibre_db.create_functions(config)
+                except (OperationalError, IntegrityError, StaleDataError) as e:
+                    calibre_db.session.rollback()
+                    log.error_or_exception("Database error: {}".format(e))
+                    flash(_("Oops! Database Error: %(error)s.", error=e.orig if hasattr(e, "orig") else e),
+                          category="error")
+                    error = True
+                    continue
             else:
                 try:
                     db_format = db.Data(book_id, file_ext.upper(), file_size, file_name)
                     calibre_db.session.add(db_format)
+                    book.last_modified = datetime.now(timezone.utc)
+                    kobo_sync_status.remove_synced_book(book.id, all=True)
+                    calibre_db.set_metadata_dirty(book.id)
                     calibre_db.session.commit()
                     calibre_db.create_functions(config)
                 except (OperationalError, IntegrityError, StaleDataError) as e:
