@@ -5,7 +5,7 @@ import os
 import re
 from defusedxml import ElementTree as SafeET
 
-from application_changes import application_changed_files, normalize_path
+from application_changes import application_changed_files, is_application_file, normalize_path
 from application_changes import load_changed_files as _load_changed_files
 from report_constants import load_constants
 
@@ -24,15 +24,6 @@ workflow_coverage_path = os.environ.get("WORKFLOW_COVERAGE_TERM_PATH", "coverage
 js_coverage_path = os.environ.get("WORKFLOW_JS_COVERAGE_LCOV_PATH", "coverage-workflow-js-lcov.info").strip()
 shell_coverage_path = os.environ.get("WORKFLOW_SHELL_COVERAGE_LCOV_PATH", "coverage-workflow-shell-lcov.info").strip()
 test_results_path = os.environ.get("TEST_RESULTS_JSON", "test-results.json").strip()
-
-# Test files are not application code: they are the thing providing coverage,
-# so counting their added lines as uncovered would swamp the patch percentage.
-PATCH_COVERAGE_EXCLUDED_PREFIXES = ("tests/",)
-
-
-def is_patch_coverage_test_file(filename):
-    return filename.startswith(PATCH_COVERAGE_EXCLUDED_PREFIXES)
-
 
 DEFAULT_SUITES = [
     ("workflow_script_tests", "Workflow script tests"),
@@ -391,7 +382,7 @@ def coverage_section():
             if item.get("status") == "removed":
                 continue
             filename = normalize_path(item.get("filename", ""))
-            if not filename or is_patch_coverage_test_file(filename):
+            if not is_application_file(filename):
                 continue
             added = sorted(added_lines_from_patch(item.get("patch", "")))
             file_cov = coverage.get(filename, {})
