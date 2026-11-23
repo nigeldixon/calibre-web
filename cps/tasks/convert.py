@@ -191,11 +191,11 @@ class TaskConvert(CalibreTask):
                                              book_format=self.settings['new_book_format'].upper(),
                                              book=book_id, uncompressed_size=os.path.getsize(file_path + format_new_ext))
                         try:
-                            local_db.session.merge(new_format)
-                            local_db.session.commit()
                             if self.settings['new_book_format'].upper() in ['KEPUB', 'EPUB', 'EPUB3']:
                                 cur_book.last_modified = datetime.now(timezone.utc)
                                 local_db.set_metadata_dirty(book_id)
+                            local_db.session.merge(new_format)
+                            local_db.session.commit()
                         except SQLAlchemyError as e:
                             local_db.session.rollback()
                             log.error("Database error: %s", e)

@@ -16,9 +16,10 @@ class _FakeQuery:
 
 
 class _FakeSession:
-    def __init__(self):
+    def __init__(self, on_commit=None):
         self.commits = []
         self.merged = []
+        self.on_commit = on_commit
 
     def query(self, model):
         return _FakeQuery()
@@ -28,6 +29,8 @@ class _FakeSession:
 
     def commit(self):
         self.commits.append(True)
+        if self.on_commit:
+            self.on_commit()
 
 
 def test_convert_marks_book_changed_for_kobo_sync(monkeypatch):
@@ -49,8 +52,11 @@ def test_convert_marks_book_changed_for_kobo_sync(monkeypatch):
         last_modified=None,
         data=[SimpleNamespace(name="book")],
     )
-    session = _FakeSession()
     dirty = []
+    commit_states = []
+    session = _FakeSession(on_commit=lambda: commit_states.append(
+        (book.last_modified, list(dirty))
+    ))
     local_db = SimpleNamespace(
         get_book=lambda book_id: book,
         get_book_format=lambda book_id, book_format: None,
@@ -97,6 +103,7 @@ def test_convert_marks_book_changed_for_kobo_sync(monkeypatch):
     assert result == "book.kepub"
     assert book.last_modified == timestamp
     assert dirty == [32]
+    assert commit_states == [(timestamp, [32])]
     assert session.commits == [True]
     assert session.merged[0].uncompressed_size == 123
     assert handled == ["success"]

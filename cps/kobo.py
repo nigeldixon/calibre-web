@@ -141,8 +141,11 @@ def convert_to_kobo_timestamp_string(timestamp):
 def book_change_filter(sync_token, change_timestamp):
     """Select changes newer than the device token, using the book id for ties."""
     if sync_token.books_last_id > -1:
-        return and_(change_timestamp >= sync_token.books_last_modified,
-                    db.Books.id > sync_token.books_last_id)
+        return or_(
+            change_timestamp > sync_token.books_last_modified,
+            and_(change_timestamp == sync_token.books_last_modified,
+                 db.Books.id > sync_token.books_last_id),
+        )
     return change_timestamp > sync_token.books_last_modified
 
 
@@ -174,11 +177,13 @@ def HandleSyncRequest():
 
     # Archive/unarchive changes have their own timestamp. Include it in the
     # book change cursor so a removal is selected even when only the archive
-    # row changed since the device's last sync.
-    archive_change_timestamp = func.coalesce(ub.ArchivedBook.last_modified, db.Books.last_modified)
+    # row changed since the device's last sync. Older Calibre libraries can
+    # have a missing last_modified, so fall back to the book's timestamp.
+    book_last_modified = func.coalesce(db.Books.last_modified, db.Books.timestamp)
+    archive_change_timestamp = func.coalesce(ub.ArchivedBook.last_modified, book_last_modified)
 
     if only_kobo_shelves:
-        book_change_timestamp = func.max(db.Books.last_modified, archive_change_timestamp,
+        book_change_timestamp = func.max(book_last_modified, archive_change_timestamp,
                                          ub.BookShelf.date_added)
         changed_entries = calibre_db.session.query(db.Books,
                                                    ub.ArchivedBook.last_modified,
@@ -199,7 +204,7 @@ def HandleSyncRequest():
                            .order_by(ub.ArchivedBook.last_modified)
                            .distinct())
     else:
-        book_change_timestamp = func.max(db.Books.last_modified, archive_change_timestamp)
+        book_change_timestamp = func.max(book_last_modified, archive_change_timestamp)
         changed_entries = calibre_db.session.query(db.Books,
                                                    ub.ArchivedBook.last_modified,
                                                    ub.ArchivedBook.is_archived)
@@ -244,9 +249,11 @@ def HandleSyncRequest():
         else:
             sync_results.append({"ChangedEntitlement": entitlement})
 
-        new_books_last_modified = max(
-            book.Books.last_modified.replace(tzinfo=None), new_books_last_modified
-        )
+        effective_last_modified = book.Books.last_modified or book.Books.timestamp
+        if effective_last_modified:
+            new_books_last_modified = max(
+                effective_last_modified.replace(tzinfo=None), new_books_last_modified
+            )
         archived_timestamp = getattr(book, "last_modified", None)
         if archived_timestamp:
             new_books_last_modified = max(
@@ -368,7 +375,7 @@ def get_book_format_binary_version(book, book_data):
     try:
         path = os.path.join(config.get_book_path(), book.path, book_data.name + "." + book_data.format.lower())
         st = os.stat(path)
-        return "{}-{}".format(int(st.st_mtime), st.st_size)
+        return "{}-{}".format(st.st_mtime_ns, st.st_size)
     except Exception:
         return str(book_data.uncompressed_size or 0)
 
@@ -410,6 +417,7 @@ def get_download_url_for_book(book_id, book_format, version=None):
 
 def create_book_entitlement(book, archived):
     book_uuid = str(book.uuid)
+    last_modified = book.last_modified or book.timestamp
     return {
         "Accessibility": "Full",
         "ActivePeriod": {"From": convert_to_kobo_timestamp_string(datetime.now(timezone.utc))},
@@ -419,7 +427,7 @@ def create_book_entitlement(book, archived):
         "IsRemoved": archived,
         "IsHiddenFromArchive": False,
         "IsLocked": False,
-        "LastModified": convert_to_kobo_timestamp_string(book.last_modified),
+        "LastModified": convert_to_kobo_timestamp_string(last_modified),
         "OriginCategory": "Imported",
         "RevisionId": book_uuid,
         "Status": "Active",

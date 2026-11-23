@@ -50,7 +50,8 @@ def _write_epub(path, layout="reflowable"):
 """,
         )
     os.utime(path, (1700000000, 1700000000))
-    return path.stat().st_size
+    stat = path.stat()
+    return stat.st_size, stat.st_mtime_ns
 
 
 def _make_book():
@@ -217,7 +218,7 @@ def _generate_token(application):
 
 def test_kobo_metadata_payload_uses_generated_token_and_binary_version(monkeypatch, tmp_path):
     library = tmp_path / "library"
-    book_file_size = _write_epub(library / "Author" / "Book" / "book.epub")
+    book_file_size, book_file_mtime_ns = _write_epub(library / "Author" / "Book" / "book.epub")
     book = _make_book()
     store = TokenStore()
     rendered = {}
@@ -254,7 +255,7 @@ def test_kobo_metadata_payload_uses_generated_token_and_binary_version(monkeypat
     assert metadata["EntitlementId"] == "book-uuid"
     assert metadata["PublicationDate"] == "2020-01-01T00:00:00Z"
 
-    version = f"1700000000-{book_file_size}"
+    version = f"{book_file_mtime_ns}-{book_file_size}"
     expected_url = f"http://localhost:8081/kobo/{token}/download/9/epub?v={version}"
     assert metadata["DownloadUrls"] == [
         {
@@ -269,7 +270,7 @@ def test_kobo_metadata_payload_uses_generated_token_and_binary_version(monkeypat
 
 def test_kobo_sync_payload_includes_book_changed_in_selected_shelf(monkeypatch, tmp_path):
     library = tmp_path / "library"
-    book_file_size = _write_epub(library / "Author" / "Book" / "book.epub")
+    book_file_size, book_file_mtime_ns = _write_epub(library / "Author" / "Book" / "book.epub")
     book = _make_book()
     changed_row = SimpleNamespace(
         Books=book,
@@ -402,6 +403,6 @@ def test_kobo_sync_payload_includes_book_changed_in_selected_shelf(monkeypatch, 
     assert entitlement["BookEntitlement"]["Id"] == "book-uuid"
     assert entitlement["BookMetadata"]["Title"] == "A Book"
 
-    version = f"1700000000-{book_file_size}"
+    version = f"{book_file_mtime_ns}-{book_file_size}"
     expected_url = f"http://localhost:8081/kobo/{token}/download/9/epub?v={version}"
     assert entitlement["BookMetadata"]["DownloadUrls"][0]["Url"] == expected_url
