@@ -377,3 +377,148 @@ def test_legacy_path_tolerates_null_exec_errors_in_scope(tmp_path, run_quality_s
     assert "**Analysis errors:** 0 · **Analysis warnings:** 0" in out
     assert "**Whole-solution issues:** 5 · **In changed files:** 1" in out
     assert "❌ Semgrep scan failed" not in out
+
+
+def test_trusted_path_line_scope_filters_to_changed_hunks(tmp_path, run_quality_script, write_json):
+    base = "a" * 40
+    head = "b" * 40
+    raw = {
+        "version": "2.1.0",
+        "runs": [{
+            "tool": {"driver": {"name": "semgrep"}},
+            "results": [
+                {"level": "warning", "message": {"text": "on line"}, "locations": [{"physicalLocation": {"artifactLocation": {"uri": "cps/a.py"}, "region": {"startLine": 10}}}]},
+                {"level": "warning", "message": {"text": "off line"}, "locations": [{"physicalLocation": {"artifactLocation": {"uri": "cps/a.py"}, "region": {"startLine": 99}}}]},
+                {"level": "note", "message": {"text": "via related"}, "locations": [{"physicalLocation": {"artifactLocation": {"uri": "cps/a.py"}, "region": {"startLine": 99}}}], "relatedLocations": [{"physicalLocation": {"artifactLocation": {"uri": "cps/a.py"}, "region": {"startLine": 11}}}]},
+            ],
+            "invocations": [{"toolExecutionNotifications": []}],
+        }],
+    }
+    write_json(tmp_path / "semgrep.raw.sarif", raw)
+    (tmp_path / "scan-exit-code.txt").write_text("0\n", encoding="utf-8")
+    (tmp_path / "changed-files.txt").write_text("cps/a.py\n", encoding="utf-8")
+
+    bin_dir = tmp_path / "fake-bin"
+    bin_dir.mkdir(exist_ok=True)
+    git = bin_dir / "git"
+    git.write_text(
+        "#!/bin/sh\n"
+        'if [ "$1" = "fetch" ]; then exit 0; fi\n'
+        'if [ "$1" = "diff" ] && echo "$@" | grep -q -- "--unified=0"; then\n'
+        '  printf "%s\\n" "diff --git a/cps/a.py b/cps/a.py" "--- a/cps/a.py" "+++ b/cps/a.py" "@@ -10,2 +10,2 @@" "+x"\n'
+        '  exit 0\n'
+        'fi\n'
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    git.chmod(0o755)
+
+    import os
+
+    proc = run_quality_script(
+        "semgrep_pr_comment.py",
+        tmp_path,
+        env={
+            "PATH": f"{bin_dir}:{os.environ['PATH']}",
+            "CHANGED_FILES_FILE": "changed-files.txt",
+            "RAW_SARIF_PATH": "semgrep.raw.sarif",
+            "SCAN_EXIT_PATH": "scan-exit-code.txt",
+            "PR_BASE_SHA": base,
+            "PR_HEAD_SHA": head,
+            "ANALYZE_RESULT": "success",
+        },
+    )
+
+    assert proc.returncode == 0
+    out = proc.stdout
+    assert "lines changed in this PR" in out
+    assert "| ⚠️ | 2 | 0 | 1 | 1 |" in out
+    assert "**Whole-solution issues:** 3 · **In changed files:** 2" in out
+
+
+def test_trusted_path_falls_back_to_file_scope_when_diff_unavailable(tmp_path, run_quality_script, write_json):
+    raw = {
+        "version": "2.1.0",
+        "runs": [{
+            "tool": {"driver": {"name": "semgrep"}},
+            "results": [
+                {"level": "warning", "message": {"text": "on line"}, "locations": [{"physicalLocation": {"artifactLocation": {"uri": "cps/a.py"}, "region": {"startLine": 99}}}]},
+            ],
+            "invocations": [{"toolExecutionNotifications": []}],
+        }],
+    }
+    write_json(tmp_path / "semgrep.raw.sarif", raw)
+    (tmp_path / "scan-exit-code.txt").write_text("0\n", encoding="utf-8")
+    (tmp_path / "changed-files.txt").write_text("cps/a.py\n", encoding="utf-8")
+
+    proc = run_quality_script(
+        "semgrep_pr_comment.py",
+        tmp_path,
+        env={
+            "CHANGED_FILES_FILE": "changed-files.txt",
+            "RAW_SARIF_PATH": "semgrep.raw.sarif",
+            "SCAN_EXIT_PATH": "scan-exit-code.txt",
+            "PR_BASE_SHA": "a" * 40,
+            "PR_HEAD_SHA": "b" * 40,
+            "ANALYZE_RESULT": "success",
+        },
+    )
+
+    assert proc.returncode == 0
+    out = proc.stdout
+    assert "files changed in this PR" in out
+    assert "**In changed files:** 1" in out
+
+
+def test_trusted_path_empty_diff_ranges_falls_back_to_file_scope(tmp_path, run_quality_script, write_json):
+    base = "a" * 40
+    head = "b" * 40
+    raw = {
+        "version": "2.1.0",
+        "runs": [{
+            "tool": {"driver": {"name": "semgrep"}},
+            "results": [
+                {"level": "warning", "message": {"text": "on line"}, "locations": [{"physicalLocation": {"artifactLocation": {"uri": "cps/a.py"}, "region": {"startLine": 99}}}]},
+            ],
+            "invocations": [{"toolExecutionNotifications": []}],
+        }],
+    }
+    write_json(tmp_path / "semgrep.raw.sarif", raw)
+    (tmp_path / "scan-exit-code.txt").write_text("0\n", encoding="utf-8")
+    (tmp_path / "changed-files.txt").write_text("cps/a.py\n", encoding="utf-8")
+
+    bin_dir = tmp_path / "fake-bin"
+    bin_dir.mkdir(exist_ok=True)
+    git = bin_dir / "git"
+    git.write_text(
+        "#!/bin/sh\n"
+        "if [ \"$1\" = fetch ]; then exit 0; fi\n"
+        "if [ \"$1\" = diff ] && echo \"$@\" | grep -q -- --unified=0; then\n"
+        "  printf '%s\\n' 'diff --git a/cps/a.py b/cps/a.py' '--- a/cps/a.py' '+++ b/cps/a.py'\n"
+        "  exit 0\n"
+        "fi\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    git.chmod(0o755)
+
+    import os
+
+    proc = run_quality_script(
+        "semgrep_pr_comment.py",
+        tmp_path,
+        env={
+            "PATH": f"{bin_dir}:{os.environ['PATH']}",
+            "CHANGED_FILES_FILE": "changed-files.txt",
+            "RAW_SARIF_PATH": "semgrep.raw.sarif",
+            "SCAN_EXIT_PATH": "scan-exit-code.txt",
+            "PR_BASE_SHA": base,
+            "PR_HEAD_SHA": head,
+            "ANALYZE_RESULT": "success",
+        },
+    )
+
+    assert proc.returncode == 0
+    out = proc.stdout
+    assert "files changed in this PR" in out
+    assert "**In changed files:** 1" in out

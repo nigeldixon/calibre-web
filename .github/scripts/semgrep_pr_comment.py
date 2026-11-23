@@ -2,6 +2,7 @@
 import json
 import os
 
+from diff_scope import collect_diff_ranges, result_intersects_changed_lines
 from report_constants import load_constants
 from sarif_validation import valid_run_shape
 
@@ -33,18 +34,8 @@ def norm_uri(uri):
     return uri
 
 
-def result_in_changed(result, changed):
-    if changed is None:
-        return True
-    locs = list(result.get('locations') or []) + list(result.get('relatedLocations') or [])
-    if not locs:
-        return False
-    for loc in locs:
-        phys = (loc or {}).get('physicalLocation') or {}
-        art = phys.get('artifactLocation') or {}
-        if norm_uri(art.get('uri', '')) in changed:
-            return True
-    return False
+def result_in_changed(result, changed, changed_ranges=None):
+    return result_intersects_changed_lines(result, changed, changed_ranges, norm_uri)
 
 
 def count_findings(sarif):
@@ -124,21 +115,34 @@ if changed_files_file:
             'warnings': 0, 'warning_detail': {}, 'exec_errors': 0,
         }
     else:
+        base_sha = os.environ.get('PR_BASE_SHA', '').strip()
+        head_sha = os.environ.get('PR_HEAD_SHA', '').strip()
+        base_ref = os.environ.get('PR_BASE_REF', '').strip()
+        changed_ranges = collect_diff_ranges(base_sha, head_sha, base_ref=base_ref)
+        if not changed_ranges:
+            changed_ranges = None
+        scope_reason = 'full_scan'
+        if changed is not None:
+            scope_reason = 'pr_changed_lines' if changed_ranges is not None else 'pr_changed_files'
         total_all = sum(len(run.get('results', []) or []) for run in raw.get('runs', []) or [])
         runs = []
         for run in raw.get('runs', []) or []:
             filtered = dict(run)
-            filtered['results'] = [r for r in (run.get('results') or []) if result_in_changed(r, changed)]
+            filtered['results'] = [
+                r for r in (run.get('results') or [])
+                if result_in_changed(r, changed, changed_ranges)
+            ]
             runs.append(filtered)
         sarif = {'version': raw.get('version', '2.1.0'), 'runs': runs}
         notification_detail, warnings, exec_errors = count_notifications(raw)
         scan_exit = read_scan_exit()
         scope = {
             'scoped': changed is not None,
-            'reason': 'pr_changed_files' if changed is not None else 'full_scan',
+            'reason': scope_reason,
+            'scope_kind': 'lines' if changed_ranges is not None else 'files',
             'changed_count': len(changed) if changed is not None else 0,
-            'base': os.environ.get('PR_BASE_SHA', '').strip(),
-            'head': os.environ.get('PR_HEAD_SHA', '').strip(),
+            'base': base_sha,
+            'head': head_sha,
             'scan_ok': scan_exit_is_ok(scan_exit) and exec_errors == 0,
             'scan_exit': scan_exit,
             'exec_errors': exec_errors,
@@ -206,7 +210,11 @@ full_analysis = '\n'.join(full_analysis)
 
 lines = [marker, C['headings']['semgrep'], '']
 if scope.get('scoped'):
-    lines.append('Automated Semgrep summary for files changed in this PR (filtered SARIF).')
+    scope_kind = scope.get('scope_kind') or ('lines' if scope.get('reason') == 'pr_changed_lines' else 'files')
+    if scope_kind == 'lines':
+        lines.append('Automated Semgrep summary for lines changed in this PR (filtered SARIF).')
+    else:
+        lines.append('Automated Semgrep summary for files changed in this PR (filtered SARIF).')
 elif scope.get('reason') == 'diff_failed_full_scan':
     lines.append('Automated Semgrep summary (could not determine PR diff; showing unfiltered/full scan results).')
 elif os.environ.get('GITHUB_EVENT_NAME') == 'schedule':

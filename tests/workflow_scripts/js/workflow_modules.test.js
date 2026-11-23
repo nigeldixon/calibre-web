@@ -37,6 +37,7 @@ const DEFAULTS = {
   'pulls.update': () => ({}),
   'actions.listRepoWorkflows': () => [],
   'actions.listWorkflowRunsForRepo': () => ({ data: { workflow_runs: [] } }),
+  'actions.listWorkflowRuns': () => ({ data: { workflow_runs: [] } }),
   'actions.listWorkflowRunArtifacts': () => ({ data: { artifacts: [] } }),
   'actions.reRunWorkflow': () => ({}),
 };
@@ -58,6 +59,7 @@ function githubStub(handlers = {}) {
       actions: {
         listRepoWorkflows: invoke('actions.listRepoWorkflows'),
         listWorkflowRunsForRepo: invoke('actions.listWorkflowRunsForRepo'),
+        listWorkflowRuns: invoke('actions.listWorkflowRuns'),
         listWorkflowRunArtifacts: invoke('actions.listWorkflowRunArtifacts'),
         reRunWorkflow: invoke('actions.reRunWorkflow'),
       },
@@ -769,6 +771,64 @@ test('sweep_stale_placeholders skips queued and awaiting-approval runs', async (
     assert.strictEqual(query.params.status, undefined);
     assert.strictEqual(query.params.head_sha, 'head-sha');
   }
+});
+
+test('sweep_stale_placeholders skips active pull_request_target backfill runs', async () => {
+  for (const run of [
+    { id: 9, status: undefined, pull_requests: [{ number: 7 }] },
+    { id: 10, status: 'in_progress', pull_requests: [] },
+    { id: 11, status: 'queued', pull_requests: undefined },
+  ]) {
+    const body = bodyWithPanels({
+      codeql: `${REPORT_DEFS.codeql.heading}\n⏳ waiting`,
+    });
+    const { core, info } = makeCore();
+    const stub = bodyGithub(body, {
+      'pulls.list': () => [pullRequest()],
+      'actions.listWorkflowRunsForRepo': () => ({ data: { workflow_runs: [] } }),
+      'actions.listWorkflowRuns': () => ({ data: { workflow_runs: [run] } }),
+    });
+    await moduleFor('sweep_stale_placeholders')({
+      github: stub.github, context: contextFor({}), core,
+    });
+    assert.strictEqual(stub.calls.filter((c) => c.name === 'pulls.update').length, 0);
+    assert.ok(info.some((m) => m.includes('backfill; skipping.')));
+  }
+});
+
+test('sweep_stale_placeholders ignores unrelated or completed pull_request_target runs', async () => {
+  const body = bodyWithPanels({
+    codeql: `${REPORT_DEFS.codeql.heading}\n⏳ waiting`,
+  });
+  const { core } = makeCore();
+  const stub = bodyGithub(body, {
+    'pulls.list': () => [pullRequest()],
+    'actions.listWorkflowRunsForRepo': () => ({ data: { workflow_runs: [] } }),
+    'actions.listWorkflowRuns': () => ({
+      data: {
+        workflow_runs: [
+          { id: 1, status: 'completed', pull_requests: [{ number: 7 }] },
+          { id: 2, status: 'completed', pull_requests: [] },
+          { id: 3, status: 'in_progress', pull_requests: [{ number: 99 }] },
+        ],
+      },
+    }),
+  });
+  await moduleFor('sweep_stale_placeholders')({
+    github: stub.github, context: contextFor({}), core,
+  });
+  assert.ok(stub.calls.some((c) => c.name === 'pulls.update'));
+  assert.ok(stub.currentBody().includes('no analysis completed for commit head-sha'));
+
+  const undefinedRuns = bodyGithub(body, {
+    'pulls.list': () => [pullRequest()],
+    'actions.listWorkflowRunsForRepo': () => ({ data: { workflow_runs: [] } }),
+    'actions.listWorkflowRuns': () => ({ data: {} }),
+  });
+  await moduleFor('sweep_stale_placeholders')({
+    github: undefinedRuns.github, context: contextFor({}), core: makeCore().core,
+  });
+  assert.ok(undefinedRuns.calls.some((c) => c.name === 'pulls.update'));
 });
 
 test('sweep_stale_placeholders skips empty bodies and complete panels', async () => {
