@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 import json
 import os
-import subprocess
 import sys
 from collections import Counter
 
+from diff_scope import collect_changed_files, collect_diff_ranges, result_intersects_changed_lines
 from sarif_validation import load_sarif, valid_run_shape
 
 raw_path = 'semgrep-results/semgrep.raw.sarif'
@@ -89,31 +89,25 @@ base = (os.environ.get('PR_BASE_SHA') or '').strip()
 head = (os.environ.get('PR_HEAD_SHA') or '').strip()
 base_ref = (os.environ.get('PR_BASE_REF') or '').strip()
 changed = None
+changed_ranges = None
 reason = 'full_scan'
 
+# Use the same diff-line scoping as the trusted report generator so the
+# push path cannot surface pre-existing findings from unchanged lines.
 if event in ('pull_request', 'push') and base and head:
-    try:
-        if base_ref:
-            subprocess.run(['git', 'fetch', 'origin', base_ref, '--depth=1'], check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        subprocess.run(['git', 'fetch', 'origin', base, '--depth=1'], check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        subprocess.run(['git', 'fetch', 'origin', head, '--depth=1'], check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        diff = subprocess.run(['git', 'diff', '--name-only', f'{base}...{head}'], check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        if diff.returncode != 0:
-            diff = subprocess.run(['git', 'diff', '--name-only', base, head], check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        if diff.returncode == 0:
-            changed = set()
-            for line in (diff.stdout or '').splitlines():
-                line = line.strip().replace('\\', '/')
-                if line:
-                    changed.add(line)
-                    if line.startswith('./'):
-                        changed.add(line[2:])
-            reason = 'pr_changed_files'
-        else:
-            reason = 'diff_failed_full_scan'
-    except Exception:
-        changed = None
-        reason = 'diff_failed_full_scan'
+    changed_ranges = collect_diff_ranges(base, head, base_ref)
+    changed_files = collect_changed_files(base, head, base_ref)
+    if changed_ranges:
+        # Keep deletion-only files in scope, matching the trusted generator's
+        # conservative file-level fallback for files without changed hunks.
+        changed = (changed_files or set()) | set(changed_ranges)
+        reason = 'pr_changed_lines'
+    else:
+        # No usable hunks (or no diff at all): fall back conservatively to
+        # file-level scoping, or to the full scan if the diff is unavailable.
+        changed_ranges = None
+        changed = changed_files
+        reason = 'pr_changed_files' if changed is not None else 'diff_failed_full_scan'
 
 
 def norm(uri):
@@ -125,25 +119,14 @@ def norm(uri):
     return uri
 
 
-def in_changed(result, changed_set):
-    if changed_set is None:
-        return True
-    locs = list(result.get('locations') or []) + list(result.get('relatedLocations') or [])
-    if not locs:
-        return False
-    for loc in locs:
-        phys = (loc or {}).get('physicalLocation') or {}
-        art = phys.get('artifactLocation') or {}
-        uri = norm(art.get('uri', ''))
-        if uri in changed_set:
-            return True
-    return False
+def in_changed(result, changed_set, ranges=None):
+    return result_intersects_changed_lines(result, changed_set, ranges, norm)
 
 
 if changed is not None:
     for run in sarif.get('runs', []) or []:
         results = run.get('results', []) or []
-        run['results'] = [r for r in results if in_changed(r, changed)]
+        run['results'] = [r for r in results if in_changed(r, changed, changed_ranges)]
 
 with open(out_path, 'w', encoding='utf-8') as f:
     json.dump(sarif, f)
@@ -176,6 +159,7 @@ for run in sarif.get('runs', []) or []:
 write_scope(base_scope(
     scoped=changed is not None,
     reason=reason,
+    scope_kind=('lines' if changed_ranges else 'files') if changed is not None else None,
     changed_count=len(changed) if changed is not None else 0,
     base=base,
     head=head,

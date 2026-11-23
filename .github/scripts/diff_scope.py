@@ -58,13 +58,8 @@ def parse_unified_zero_diff(diff_text):
     return {path: vals for path, vals in ranges.items() if vals}
 
 
-def collect_diff_ranges(base_sha, head_sha, base_ref="", fetch=True):
-    """Return changed-line ranges for base...head, or None if unavailable.
-
-    None means the diff could not be determined and callers must fall back
-    conservatively. An empty dict means the diff was determined but had no
-    changed line ranges.
-    """
+def _pr_diff_output(base_sha, head_sha, base_ref="", fetch=True, diff_args=()):
+    """Run a PR diff, returning its output or None when it cannot be determined."""
     if not base_sha or not head_sha:
         return None
     try:
@@ -79,19 +74,42 @@ def collect_diff_ranges(base_sha, head_sha, base_ref="", fetch=True):
                     ["git", "fetch", "origin", sha, "--depth=1"],
                     check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 )
-        for args in (
-            ["git", "diff", "--unified=0", f"{base_sha}...{head_sha}"],
-            ["git", "diff", "--unified=0", base_sha, head_sha],
-        ):
+        for revs in ((f"{base_sha}...{head_sha}",), (base_sha, head_sha)):
             proc = subprocess.run(
-                args, check=False,
+                ["git", "diff", *diff_args, *revs], check=False,
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
             )
             if proc.returncode == 0:
-                return parse_unified_zero_diff(proc.stdout or "")
+                return proc.stdout or ""
     except Exception:
         return None
     return None
+
+
+def collect_diff_ranges(base_sha, head_sha, base_ref="", fetch=True):
+    """Return changed-line ranges for base...head, or None if unavailable.
+
+    None means the diff could not be determined and callers must fall back
+    conservatively. An empty dict means the diff was determined but had no
+    changed line ranges.
+    """
+    text = _pr_diff_output(base_sha, head_sha, base_ref, fetch, ("--unified=0",))
+    if text is None:
+        return None
+    return parse_unified_zero_diff(text)
+
+
+def collect_changed_files(base_sha, head_sha, base_ref="", fetch=True):
+    """Return changed paths for base...head, or None if unavailable."""
+    text = _pr_diff_output(base_sha, head_sha, base_ref, fetch, ("--name-only",))
+    if text is None:
+        return None
+    files = set()
+    for line in text.splitlines():
+        path = normalize_diff_path(line)
+        if path:
+            files.add(path)
+    return files
 
 
 def _location_path_and_line(loc, normalize_uri):
