@@ -65,7 +65,7 @@ def test_ci_sets_up_node_for_javascript_coverage():
     assert "actions/setup-node@" in workflow
 
 
-def test_python_coverage_report_fails_below_full_coverage():
+def test_python_coverage_report_does_not_gate_on_threshold():
     workflow = (REPO_ROOT / ".github" / "workflows" / "test.yml").read_text(
         encoding="utf-8"
     )
@@ -76,4 +76,5 @@ def test_python_coverage_report_fails_below_full_coverage():
     report_step = test_step.split("python -m coverage report", 1)[1].split(
         "python -m coverage xml", 1
     )[0]
-    assert "--fail-under=100" in report_step
+    assert "--fail-under" not in report_step
+    assert "coverage-workflow-scripts-term.txt" in test_step

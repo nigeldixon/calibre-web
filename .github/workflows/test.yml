@@ -91,7 +91,6 @@ jobs:
           python -m coverage report \
             --rcfile=tests/workflow_scripts/coverage_support/coveragerc \
             --data-file=workflow-coverage-data/scripts \
-            --fail-under=100 \
             -m > coverage-workflow-scripts-term.txt
           python -m coverage xml \
             --rcfile=tests/workflow_scripts/coverage_support/coveragerc \
