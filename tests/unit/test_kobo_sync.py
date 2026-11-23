@@ -279,6 +279,102 @@ def test_selected_shelf_sync_includes_books_changed_since_sync_token(monkeypatch
     assert any("books.id" in str(expression) for expression in orders)
 
 
+def test_archive_change_is_selected_from_archive_timestamp(monkeypatch, app):
+    app.wsgi_app.is_proxied = True
+    token = SimpleNamespace(
+        books_last_modified=datetime(2024, 1, 1),
+        books_last_created=datetime(2024, 1, 1),
+        books_last_id=-1,
+        archive_last_modified=datetime(2024, 1, 1),
+        reading_state_last_modified=datetime(2024, 1, 1),
+    )
+    monkeypatch.setattr(
+        kobo,
+        "SyncToken",
+        SimpleNamespace(SyncToken=SimpleNamespace(from_headers=lambda headers: token)),
+    )
+    monkeypatch.setattr(kobo, "current_user", SimpleNamespace(
+        role_download=lambda: True,
+        id=7,
+        kobo_only_shelves_sync=False,
+        name="tester",
+    ))
+    monkeypatch.setattr(kobo.config, "config_kepubifypath", False, raising=False)
+    monkeypatch.setattr(kobo, "get_download_url_for_book", lambda *args, **kwargs: "download-url")
+    monkeypatch.setattr(kobo, "get_or_create_reading_state", lambda book_id: SimpleNamespace(last_modified=datetime.min))
+    entitlement_calls = []
+    monkeypatch.setattr(kobo, "create_book_entitlement", lambda book, archived: entitlement_calls.append((book.id, archived)) or {})
+    monkeypatch.setattr(kobo, "get_metadata", lambda book: {})
+    monkeypatch.setattr(kobo, "sync_shelves", lambda *args, **kwargs: None)
+    monkeypatch.setattr(kobo.kobo_sync_status, "add_synced_books", lambda book_id: None)
+    monkeypatch.setattr(
+        kobo,
+        "generate_sync_response",
+        lambda sync_token, results, set_cont=False: "sync-response",
+    )
+
+    book = SimpleNamespace(
+        id=42,
+        uuid="archived-uuid",
+        timestamp=datetime(2020, 1, 1),
+        last_modified=datetime(2024, 1, 2),
+        data=[SimpleNamespace(format="EPUB")],
+    )
+    archived_timestamp = datetime(2024, 2, 3, 4, 5, 6, tzinfo=timezone.utc)
+    row = SimpleNamespace(Books=book, is_archived=True, last_modified=archived_timestamp)
+    filters = []
+    orders = []
+    query = RecordingQuery(rows=[row], filters=filters, orders=orders)
+    reading_state_model = SimpleNamespace(
+        book_id=column("reading.book_id"),
+        user_id=column("reading.user_id"),
+        last_modified=column("reading.last_modified"),
+    )
+
+    def session_query(*args, **kwargs):
+        if args and args[0] is reading_state_model:
+            return RecordingQuery()
+        return query
+
+    monkeypatch.setattr(kobo, "calibre_db", SimpleNamespace(
+        reconnect_db=lambda *args, **kwargs: None,
+        session=SimpleNamespace(query=session_query),
+        common_filters=lambda **kwargs: column("common_filter"),
+    ))
+    monkeypatch.setattr(kobo, "db", SimpleNamespace(
+        Books=SimpleNamespace(
+            id=column("books.id"),
+            timestamp=column("books.timestamp"),
+            last_modified=column("books.last_modified"),
+            data=column("books.data"),
+        ),
+        Data=SimpleNamespace(format=column("books.format")),
+    ))
+    monkeypatch.setattr(kobo, "ub", SimpleNamespace(
+        app_DB_path="app.db",
+        session=SimpleNamespace(query=lambda *args, **kwargs: RecordingQuery()),
+        ArchivedBook=SimpleNamespace(
+            book_id=column("archived.book_id"),
+            user_id=column("archived.user_id"),
+            last_modified=column("archived.last_modified"),
+            is_archived=column("archived.is_archived"),
+        ),
+        KoboReadingState=reading_state_model,
+    ))
+
+    with app.test_request_context("/kobo/token/v1/library/sync"):
+        result = _unwrap(kobo.HandleSyncRequest)()
+
+    assert result == "sync-response"
+    assert entitlement_calls == [(42, True)]
+    change_expressions = " ".join(str(expression) for expression in filters + orders)
+    assert "archived.last_modified" in change_expressions
+    assert "coalesce" in change_expressions.lower()
+    expected_timestamp = archived_timestamp.replace(tzinfo=None)
+    assert token.books_last_modified == expected_timestamp
+    assert token.archive_last_modified == expected_timestamp
+
+
 def test_book_change_filter_uses_id_as_timestamp_tie_breaker():
     token = SimpleNamespace(
         books_last_modified=datetime(2024, 1, 1),

@@ -172,8 +172,14 @@ def HandleSyncRequest():
 
     only_kobo_shelves = current_user.kobo_only_shelves_sync
 
+    # Archive/unarchive changes have their own timestamp. Include it in the
+    # book change cursor so a removal is selected even when only the archive
+    # row changed since the device's last sync.
+    archive_change_timestamp = func.coalesce(ub.ArchivedBook.last_modified, db.Books.last_modified)
+
     if only_kobo_shelves:
-        book_change_timestamp = func.max(db.Books.last_modified, ub.BookShelf.date_added)
+        book_change_timestamp = func.max(db.Books.last_modified, archive_change_timestamp,
+                                         ub.BookShelf.date_added)
         changed_entries = calibre_db.session.query(db.Books,
                                                    ub.ArchivedBook.last_modified,
                                                    ub.BookShelf.date_added,
@@ -193,7 +199,7 @@ def HandleSyncRequest():
                            .order_by(ub.ArchivedBook.last_modified)
                            .distinct())
     else:
-        book_change_timestamp = db.Books.last_modified
+        book_change_timestamp = func.max(db.Books.last_modified, archive_change_timestamp)
         changed_entries = calibre_db.session.query(db.Books,
                                                    ub.ArchivedBook.last_modified,
                                                    ub.ArchivedBook.is_archived)
@@ -241,6 +247,11 @@ def HandleSyncRequest():
         new_books_last_modified = max(
             book.Books.last_modified.replace(tzinfo=None), new_books_last_modified
         )
+        archived_timestamp = getattr(book, "last_modified", None)
+        if archived_timestamp:
+            new_books_last_modified = max(
+                new_books_last_modified, archived_timestamp.replace(tzinfo=None)
+            )
         try:
             new_books_last_modified = max(
                 new_books_last_modified, book.date_added
@@ -251,13 +262,12 @@ def HandleSyncRequest():
         new_books_last_created = max(ts_created, new_books_last_created)
         kobo_sync_status.add_synced_books(book.Books.id)
 
-    max_change = changed_entries.filter(ub.ArchivedBook.is_archived)\
-        .filter(ub.ArchivedBook.user_id == current_user.id) \
-        .order_by(func.datetime(ub.ArchivedBook.last_modified).desc()).first()
-
-    max_change = max_change.last_modified if max_change else new_archived_last_modified
-
-    new_archived_last_modified = max(new_archived_last_modified, max_change)
+    for archived in books:
+        archived_timestamp = getattr(archived, "last_modified", None)
+        if archived.is_archived and archived_timestamp:
+            new_archived_last_modified = max(
+                new_archived_last_modified, archived_timestamp.replace(tzinfo=None)
+            )
 
     # no. of books returned
     book_count = changed_entries.count()
