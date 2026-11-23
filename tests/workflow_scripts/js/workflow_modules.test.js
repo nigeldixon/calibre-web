@@ -782,14 +782,49 @@ test('sweep_stale_placeholders skips active pull_request_target backfill runs', 
     'pulls.list': () => [pullRequest()],
     'actions.listWorkflowRunsForRepo': () => ({ data: { workflow_runs: [] } }),
     'actions.listWorkflowRuns': () => ({
-      data: { workflow_runs: [{ id: 9, status: 'in_progress', pull_requests: [{ number: 7 }] }] },
+      data: { workflow_runs: [{ id: 9, status: undefined, pull_requests: [{ number: 7 }] }] },
     }),
   });
   await moduleFor('sweep_stale_placeholders')({
     github: stub.github, context: contextFor({}), core,
   });
   assert.strictEqual(stub.calls.filter((c) => c.name === 'pulls.update').length, 0);
-  assert.ok(info.some((m) => m.includes('backfill')));
+  assert.ok(info.some((m) => m.includes('active backfill')));
+});
+
+test('sweep_stale_placeholders ignores unrelated or completed pull_request_target runs', async () => {
+  const body = bodyWithPanels({
+    codeql: `${REPORT_DEFS.codeql.heading}\n⏳ waiting`,
+  });
+  const { core } = makeCore();
+  const stub = bodyGithub(body, {
+    'pulls.list': () => [pullRequest()],
+    'actions.listWorkflowRunsForRepo': () => ({ data: { workflow_runs: [] } }),
+    'actions.listWorkflowRuns': () => ({
+      data: {
+        workflow_runs: [
+          { id: 1, status: 'completed', pull_requests: [{ number: 7 }] },
+          { id: 2, status: 'in_progress', pull_requests: undefined },
+          { id: 3, status: 'in_progress', pull_requests: [{ number: 99 }] },
+        ],
+      },
+    }),
+  });
+  await moduleFor('sweep_stale_placeholders')({
+    github: stub.github, context: contextFor({}), core,
+  });
+  assert.ok(stub.calls.some((c) => c.name === 'pulls.update'));
+  assert.ok(stub.currentBody().includes('no analysis completed for commit head-sha'));
+
+  const undefinedRuns = bodyGithub(body, {
+    'pulls.list': () => [pullRequest()],
+    'actions.listWorkflowRunsForRepo': () => ({ data: { workflow_runs: [] } }),
+    'actions.listWorkflowRuns': () => ({ data: {} }),
+  });
+  await moduleFor('sweep_stale_placeholders')({
+    github: undefinedRuns.github, context: contextFor({}), core: makeCore().core,
+  });
+  assert.ok(undefinedRuns.calls.some((c) => c.name === 'pulls.update'));
 });
 
 test('sweep_stale_placeholders skips empty bodies and complete panels', async () => {
