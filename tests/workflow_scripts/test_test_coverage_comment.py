@@ -678,6 +678,37 @@ def test_unmeasured_python_file_is_counted_as_uncovered(
     assert "brightgreen" not in out
 
 
+def test_test_files_do_not_dilute_patch_coverage(tmp_path, run_quality_script, write_json):
+    xml = write_simple_coverage_xml(tmp_path, [11])
+    changed = write_json(
+        tmp_path / "changed-files.json",
+        [
+            {
+                "filename": "cps/a.py",
+                "status": "modified",
+                "patch": "@@ -1 +11 @@\n+covered",
+            },
+            {
+                "filename": "tests/unit/test_new.py",
+                "status": "added",
+                "patch": "@@ -0,0 +1,2 @@\n+def test_new():\n+    pass",
+            },
+        ],
+    )
+
+    proc = run_quality_script(
+        "test_coverage_comment.py",
+        tmp_path,
+        env={"COVERAGE_XML_PATH": str(xml), "CHANGED_FILES_JSON": str(changed)},
+    )
+
+    out = proc.stdout
+    assert proc.returncode == 0
+    assert "**Diff lines:** 1 &nbsp;|&nbsp; **Missing:** 0 &nbsp;|&nbsp; **Covered:** 1" in out
+    assert "- `cps/a.py`: 1/1 covered" in out
+    assert "tests/unit/test_new.py" not in out
+
+
 def test_fully_covered_changed_file_has_no_missing_lines_detail(
     tmp_path, run_quality_script, write_json
 ):
