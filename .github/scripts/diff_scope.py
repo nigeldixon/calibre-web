@@ -124,13 +124,13 @@ def _iter_result_locations(result):
     for key in ("locations", "relatedLocations"):
         for loc in result.get(key) or []:
             yield loc
-    for flow in result.get("codeFlows") or []:  # pragma: no branch
+    for flow in result.get("codeFlows") or []:
         if not isinstance(flow, dict):
             continue
-        for thread in flow.get("threadFlows") or []:  # pragma: no branch
+        for thread in flow.get("threadFlows") or []:
             if not isinstance(thread, dict):
                 continue
-            for tloc in thread.get("locations") or []:  # pragma: no branch
+            for tloc in thread.get("locations") or []:
                 if not isinstance(tloc, dict):
                     continue
                 loc = tloc.get("location")

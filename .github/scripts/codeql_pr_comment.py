@@ -110,11 +110,11 @@ elif base_sha and head_sha:
             )
             if diff.returncode == 0:
                 files = set()
-                for line in (diff.stdout or "").splitlines():  # pragma: no branch
+                for line in (diff.stdout or "").splitlines():
                     line = line.strip().replace("\\", "/")
                     while line.startswith("./"):
                         line = line[2:]
-                    if line:  # pragma: no branch
+                    if line:
                         files.add(line)
                 _set_file_scope(files)
             else:
@@ -124,9 +124,9 @@ elif base_sha and head_sha:
                 )
                 if diff2.returncode == 0:
                     files = set()
-                    for line in (diff2.stdout or "").splitlines():  # pragma: no branch
+                    for line in (diff2.stdout or "").splitlines():
                         line = line.strip().replace("\\", "/")
-                        if line:  # pragma: no branch
+                        if line:
                             files.add(line)
                     _set_file_scope(files)
     except Exception:
