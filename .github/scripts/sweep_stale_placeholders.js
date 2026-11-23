@@ -37,10 +37,11 @@ module.exports = async ({ github, context, core }) => {
       owner, repo, workflow_id: 'quality_reports.yml',
       event: 'pull_request_target', per_page: 100,
     });
-    const pendingBackfill = (backfills.data.workflow_runs || []).find(
-      (run) => run.status !== 'completed'
-        && (run.pull_requests || []).some((p) => p.number === pr.number),
-    );
+    const pendingBackfill = (backfills.data.workflow_runs || []).find((run) => {
+      if (run.status === 'completed') return false;
+      const pulls = Array.isArray(run.pull_requests) ? run.pull_requests : [];
+      return pulls.length === 0 || pulls.some((p) => p.number === pr.number);
+    });
     if (pendingBackfill) {
       core.info(`PR #${pr.number} still has ${pendingBackfill.status || 'active'} backfill; skipping.`);
       continue;
