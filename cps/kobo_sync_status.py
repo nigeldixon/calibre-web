@@ -18,7 +18,7 @@
 
 
 from .cw_login import current_user
-from . import ub
+from . import calibre_db, db, ub
 from datetime import datetime, timezone
 from sqlalchemy.sql.expression import or_, and_, true
 # from sqlalchemy import exc
@@ -51,6 +51,14 @@ def remove_synced_book(book_id, all=False, session=None):
         ub.session_commit(_session=session)
 
 
+def mark_book_modified_for_sync(book_id, timestamp):
+    """Make an archive change visible to token-based Kobo book selection."""
+    book = calibre_db.session.query(db.Books).filter(db.Books.id == book_id).first()
+    if book:
+        book.last_modified = timestamp
+        calibre_db.session.commit()
+
+
 # If state == none, it will toggle the archive state of the passed book_id. 
 # state = true archives it, state = false unarchives it
 def change_archived_books(book_id, state=None, message=None):
@@ -60,7 +68,9 @@ def change_archived_books(book_id, state=None, message=None):
         archived_book = ub.ArchivedBook(user_id=current_user.id, book_id=book_id)
 
     archived_book.is_archived = state if state != None else not archived_book.is_archived
-    archived_book.last_modified = datetime.now(timezone.utc)        # toDo. Check utc timestamp
+    timestamp = datetime.now(timezone.utc)
+    archived_book.last_modified = timestamp        # toDo. Check utc timestamp
+    mark_book_modified_for_sync(book_id, timestamp)
 
     ub.session.merge(archived_book)
     ub.session_commit(message)
