@@ -30,6 +30,22 @@ module.exports = async ({ github, context, core }) => {
       continue;
     }
 
+    // Backfill runs are triggered by pull_request_target, so their head_sha is the
+    // base branch, not the PR head. Check them separately to avoid failing pending
+    // placeholders while a backfill is still generating reports.
+    const backfills = await github.rest.actions.listWorkflowRuns({
+      owner, repo, workflow_id: 'quality_reports.yml',
+      event: 'pull_request_target', per_page: 100,
+    });
+    const pendingBackfill = (backfills.data.workflow_runs || []).find(
+      (run) => run.status !== 'completed'
+        && (run.pull_requests || []).some((p) => p.number === pr.number),
+    );
+    if (pendingBackfill) {
+      core.info(`PR #${pr.number} still has ${pendingBackfill.status || 'active'} backfill; skipping.`);
+      continue;
+    }
+
     for (const report of reports) {
       const bounds = panelBounds(section, report.marker, REPORT_MARKERS);
       if (bounds.start === -1) continue;
