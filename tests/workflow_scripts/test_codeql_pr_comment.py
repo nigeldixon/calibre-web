@@ -111,13 +111,23 @@ def write_fake_git(tmp_path, log_path, diff_fail=False):
         'printf "%s\\n" "$*" >> "$GIT_LOG"\n'
         'if [ "$1" = "fetch" ]; then exit 0; fi\n'
         'if [ "$1" = "diff" ]; then\n'
-        '  if [ "$3" = "$FAKE_BASE...$FAKE_HEAD" ] && [ "$FAKE_DIFF_FAIL" = "1" ]; then exit 1; fi\n'
-        '  if [ "$3" = "$FAKE_BASE...$FAKE_HEAD" ]; then\n'
-        '    printf "%s\\n" "cps/a.py" "" "./cps/b.py"\n'
+        '  unified=0\n'
+        '  echo "$@" | grep -q -- "--unified=0" && unified=1\n'
+        '  if echo "$@" | grep -q -- "$FAKE_BASE...$FAKE_HEAD"; then\n'
+        '    if [ "$FAKE_DIFF_FAIL" = "1" ]; then exit 1; fi\n'
+        '    if [ "$unified" = "1" ]; then\n'
+        '      printf "%s\\n" "diff --git a/cps/a.py b/cps/a.py" "--- a/cps/a.py" "+++ b/cps/a.py" "@@ -1,1 +1,1 @@" "+x" "diff --git a/cps/b.py b/cps/b.py" "--- a/cps/b.py" "+++ b/cps/b.py" "@@ -1,1 +1,1 @@" "+x"\n'
+        '    else\n'
+        '      printf "%s\\n" "cps/a.py" "" "./cps/b.py"\n'
+        '    fi\n'
         "    exit 0\n"
         "  fi\n"
         '  if [ "$FAKE_SECOND_DIFF_FAIL" = "1" ]; then exit 1; fi\n'
-        '  printf "%s\\n" "cps/c.py" ""\n'
+        '  if [ "$unified" = "1" ]; then\n'
+        '    printf "%s\\n" "diff --git a/cps/c.py b/cps/c.py" "--- a/cps/c.py" "+++ b/cps/c.py" "@@ -1,1 +1,1 @@" "+x"\n'
+        '  else\n'
+        '    printf "%s\\n" "cps/c.py" ""\n'
+        '  fi\n'
         "  exit 0\n"
         "fi\n"
         "exit 0\n",
@@ -748,3 +758,91 @@ def test_failed_analyze_job_with_successful_language_status_files_is_reported(
     assert "**Analysis errors:** 1 · **Analysis warnings:** 0" in out
     assert "- CodeQL analyze job reported `failure`." in out
     assert "❌ CodeQL analyze job reported `failure`." in out
+
+
+def test_diff_line_scope_filters_to_changed_hunks(tmp_path, run_quality_script, write_json):
+    base = "a" * 40
+    head = "b" * 40
+    log = tmp_path / "git.log"
+    bin_dir = tmp_path / "fake-bin"
+    bin_dir.mkdir(exist_ok=True)
+    git = bin_dir / "git"
+    git.write_text(
+        "#!/bin/sh\n"
+        'printf "%s\\n" "$*" >> "$GIT_LOG"\n'
+        'if [ "$1" = "fetch" ]; then exit 0; fi\n'
+        'if [ "$1" = "diff" ] && echo "$@" | grep -q -- "--unified=0"; then\n'
+        '  if echo "$@" | grep -q -- "--name-only"; then exit 0; fi\n'
+        '  printf "%s\\n" \\\n'
+        '    "diff --git a/cps/a.py b/cps/a.py" "--- a/cps/a.py" "+++ b/cps/a.py" "@@ -10,2 +10,2 @@" "+x" "+y" \\\n'
+        '    "diff --git a/cps/b.py b/cps/b.py" "--- a/cps/b.py" "+++ b/cps/b.py" "@@ -20,1 +20,1 @@" "+z"\n'
+        '  exit 0\n'
+        'fi\n'
+        'if [ "$1" = "diff" ] && echo "$@" | grep -q -- "--name-only"; then\n'
+        '  printf "%s\\n" "cps/a.py" "cps/b.py"\n'
+        '  exit 0\n'
+        'fi\n'
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    git.chmod(0o755)
+    log.write_text("", encoding="utf-8")
+    env = {
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "GIT_LOG": str(log),
+        "PR_BASE_SHA": base,
+        "PR_HEAD_SHA": head,
+    }
+
+    python_dir = tmp_path / "codeql-results" / "codeql-sarif-python"
+    python_dir.mkdir(parents=True)
+    write_json(
+        python_dir / "results.sarif",
+        sarif(
+            results=[
+                {
+                    "level": "warning",
+                    "message": {"text": "on changed line"},
+                    "locations": [{"physicalLocation": {"artifactLocation": {"uri": "cps/a.py"}, "region": {"startLine": 10}}}],
+                },
+                {
+                    "level": "warning",
+                    "message": {"text": "outside changed hunk"},
+                    "locations": [{"physicalLocation": {"artifactLocation": {"uri": "cps/a.py"}, "region": {"startLine": 99}}}],
+                },
+                {
+                    "level": "note",
+                    "message": {"text": "included via related location"},
+                    "locations": [{"physicalLocation": {"artifactLocation": {"uri": "cps/a.py"}, "region": {"startLine": 99}}}],
+                    "relatedLocations": [{"physicalLocation": {"artifactLocation": {"uri": "cps/a.py"}, "region": {"startLine": 11}}}],
+                },
+                {
+                    "level": "note",
+                    "message": {"text": "included via code flow"},
+                    "locations": [{"physicalLocation": {"artifactLocation": {"uri": "cps/a.py"}, "region": {"startLine": 99}}}],
+                    "codeFlows": [{
+                        "threadFlows": [{
+                            "locations": [{
+                                "location": {"physicalLocation": {"artifactLocation": {"uri": "cps/b.py"}, "region": {"startLine": 20}}}
+                            }]
+                        }]
+                    }],
+                },
+                {
+                    "level": "note",
+                    "message": {"text": "no line info in changed file"},
+                    "locations": [{"physicalLocation": {"artifactLocation": {"uri": "cps/a.py"}}}],
+                },
+            ]
+        ),
+    )
+    js_dir = tmp_path / "codeql-results" / "codeql-sarif-javascript-typescript"
+    js_dir.mkdir(parents=True)
+    write_json(js_dir / "results.sarif", sarif(results=[]))
+
+    proc = run_quality_script("codeql_pr_comment.py", tmp_path, env=env)
+
+    assert proc.returncode == 0
+    out = proc.stdout
+    assert "lines changed in this PR" in out
+    assert "**Whole-solution issues:** 5 · **In changed files:** 4" in out

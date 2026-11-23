@@ -38,54 +38,100 @@ head_sha = os.environ.get("PR_HEAD_SHA", "").strip()
 base_ref = os.environ.get("PR_BASE_REF", "").strip()
 changed_files_file = os.environ.get("CHANGED_FILES_FILE", "").strip()
 changed_files = None
+changed_ranges = None
 scope_note = "Automated CodeQL summary for this PR (generated from analysis SARIF)."
+
+from diff_scope import collect_diff_ranges, result_intersects_changed_lines
+
+
+def _set_file_scope(files):
+    global changed_files, scope_note
+    changed_files = files
+    scope_note = "Automated CodeQL summary for files changed in this PR (filtered from analysis SARIF)."
+
+
+def _set_line_scope(files, ranges):
+    global changed_files, changed_ranges, scope_note
+    changed_files = files
+    changed_ranges = ranges
+    scope_note = "Automated CodeQL summary for lines changed in this PR (filtered from analysis SARIF)."
+
 
 if changed_files_file:
     try:
         with open(changed_files_file, "r", encoding="utf-8") as f:
-            changed_files = set()
+            files = set()
             for line in f:
                 line = line.strip().replace("\\", "/")
                 while line.startswith("./"):
                     line = line[2:]
                 if line:
-                    changed_files.add(line)
-        scope_note = "Automated CodeQL summary for files changed in this PR (generated from analysis SARIF)."
+                    files.add(line)
+        ranges = collect_diff_ranges(base_sha, head_sha, base_ref=base_ref)
+        if ranges is not None:
+            _set_line_scope(files, ranges)
+        else:
+            _set_file_scope(files)
     except Exception:
         changed_files = None
+        changed_ranges = None
 elif base_sha and head_sha:
     try:
-        if base_ref:
-            subprocess.run(["git", "fetch", "origin", base_ref, "--depth=1"], check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        subprocess.run(["git", "fetch", "origin", base_sha, "--depth=1"], check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        subprocess.run(["git", "fetch", "origin", head_sha, "--depth=1"], check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        diff = subprocess.run(
-            ["git", "diff", "--name-only", f"{base_sha}...{head_sha}"],
-            check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
-        )
-        if diff.returncode == 0:
-            changed_files = set()
-            for line in (diff.stdout or "").splitlines():
-                line = line.strip().replace("\\", "/")
-                while line.startswith("./"):
-                    line = line[2:]
-                if line:
-                    changed_files.add(line)
-            scope_note = "Automated CodeQL summary for files changed in this PR (filtered from analysis SARIF)."
-        else:
-            diff2 = subprocess.run(
-                ["git", "diff", "--name-only", base_sha, head_sha],
+        ranges = collect_diff_ranges(base_sha, head_sha, base_ref=base_ref)
+        if ranges is not None:
+            files = set(ranges.keys())
+            # Include changed files even when diff hunks have no new-line ranges,
+            # so file-level fallback can still be conservative for them.
+            diff = subprocess.run(
+                ["git", "diff", "--name-only", f"{base_sha}...{head_sha}"],
                 check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
             )
-            if diff2.returncode == 0:
-                changed_files = set()
-                for line in (diff2.stdout or "").splitlines():
+            if diff.returncode != 0:
+                diff = subprocess.run(
+                    ["git", "diff", "--name-only", base_sha, head_sha],
+                    check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+                )
+            if diff.returncode == 0:
+                for line in (diff.stdout or "").splitlines():
                     line = line.strip().replace("\\", "/")
+                    while line.startswith("./"):
+                        line = line[2:]
                     if line:
-                        changed_files.add(line)
-                scope_note = "Automated CodeQL summary for files changed in this PR (filtered from analysis SARIF)."
+                        files.add(line)
+            _set_line_scope(files, ranges)
+        else:
+            if base_ref:
+                subprocess.run(["git", "fetch", "origin", base_ref, "--depth=1"], check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            subprocess.run(["git", "fetch", "origin", base_sha, "--depth=1"], check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            subprocess.run(["git", "fetch", "origin", head_sha, "--depth=1"], check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            diff = subprocess.run(
+                ["git", "diff", "--name-only", f"{base_sha}...{head_sha}"],
+                check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+            )
+            if diff.returncode == 0:
+                files = set()
+                for line in (diff.stdout or "").splitlines():
+                    line = line.strip().replace("\\", "/")
+                    while line.startswith("./"):
+                        line = line[2:]
+                    if line:
+                        files.add(line)
+                _set_file_scope(files)
+            else:
+                diff2 = subprocess.run(
+                    ["git", "diff", "--name-only", base_sha, head_sha],
+                    check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+                )
+                if diff2.returncode == 0:
+                    files = set()
+                    for line in (diff2.stdout or "").splitlines():
+                        line = line.strip().replace("\\", "/")
+                        if line:
+                            files.add(line)
+                    _set_file_scope(files)
     except Exception:
         changed_files = None
+        changed_ranges = None
 
 
 RENDERED_TEMPLATE_PREFIX = "codeql-rendered/templates/"
@@ -119,21 +165,7 @@ def notification_detail(n):
 
 
 def result_in_changed_files(result, changed):
-    if changed is None:
-        return True
-    for loc in (result.get("locations") or []):
-        phys = (loc or {}).get("physicalLocation") or {}
-        art = phys.get("artifactLocation") or {}
-        uri = normalize_uri(art.get("uri", ""))
-        if uri in changed:
-            return True
-    for loc in (result.get("relatedLocations") or []):
-        phys = (loc or {}).get("physicalLocation") or {}
-        art = phys.get("artifactLocation") or {}
-        uri = normalize_uri(art.get("uri", ""))
-        if uri in changed:
-            return True
-    return False
+    return result_intersects_changed_lines(result, changed, changed_ranges, normalize_uri)
 
 
 def empty_info(read_error=False):
