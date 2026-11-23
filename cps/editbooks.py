@@ -446,7 +446,6 @@ def edit_book_param(param, vals, multi=False):
                     continue
                 return _("Parameter not found"), 400
             book.last_modified = datetime.now(timezone.utc)
-            kobo_sync_status.remove_synced_book(book.id, all=True)
 
             calibre_db.session.commit()
             # revert change for sort if automatic fields link is deactivated
@@ -585,7 +584,6 @@ def merge_list_book():
                                                         to_name))
                             to_file.append(element.format)
                     to_book.last_modified = datetime.now(timezone.utc)
-                    kobo_sync_status.remove_synced_book(to_book.id, all=True)
                     calibre_db.set_metadata_dirty(to_book.id)
                     calibre_db.session.commit()
                     check_delete_book([from_book.id], "", True)
@@ -623,7 +621,6 @@ def table_xchange_author_title():
                 edit_error = helper.update_dir_structure(edited_books_id, config.get_book_path(), input_authors[0])
             if modify_date:
                 book.last_modified = datetime.now(timezone.utc)
-                kobo_sync_status.remove_synced_book(book.id, all=True)
                 calibre_db.set_metadata_dirty(book.id)
             try:
                 calibre_db.session.commit()
@@ -750,7 +747,6 @@ def do_edit_book(book_id, upload_formats=None):
 
         if modify_date:
             book.last_modified = datetime.now(timezone.utc)
-            kobo_sync_status.remove_synced_book(book.id, all=True)
             calibre_db.set_metadata_dirty(book.id)
 
         calibre_db.session.merge(book)
@@ -1521,7 +1517,6 @@ def upload_book_formats(requested_files, book, book_id, no_cover=True):
                 try:
                     existing_format.uncompressed_size = file_size
                     book.last_modified = datetime.now(timezone.utc)
-                    kobo_sync_status.remove_synced_book(book.id, all=True)
                     calibre_db.set_metadata_dirty(book.id)
                     calibre_db.session.commit()
                     calibre_db.create_functions(config)
@@ -1537,7 +1532,6 @@ def upload_book_formats(requested_files, book, book_id, no_cover=True):
                     db_format = db.Data(book_id, file_ext.upper(), file_size, file_name)
                     calibre_db.session.add(db_format)
                     book.last_modified = datetime.now(timezone.utc)
-                    kobo_sync_status.remove_synced_book(book.id, all=True)
                     calibre_db.set_metadata_dirty(book.id)
                     calibre_db.session.commit()
                     calibre_db.create_functions(config)

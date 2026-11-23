@@ -9,6 +9,19 @@ import sys
 import types
 
 
+# SyncToken imports jsonschema for header validation. It is optional in the
+# application environment, so provide a no-op validator when it is unavailable.
+try:
+    import jsonschema  # noqa: F401
+except ImportError:
+    jsonschema = types.ModuleType("jsonschema")
+    jsonschema.validate = lambda *args, **kwargs: None
+    exceptions = types.ModuleType("jsonschema.exceptions")
+    exceptions.ValidationError = Exception
+    jsonschema.exceptions = exceptions
+    sys.modules["jsonschema"] = jsonschema
+    sys.modules["jsonschema.exceptions"] = exceptions
+
 if "cps.gdriveutils" not in sys.modules:
     gdriveutils = types.ModuleType("cps.gdriveutils")
     gdriveutils.getFileFromEbooksFolder = lambda *args, **kwargs: None

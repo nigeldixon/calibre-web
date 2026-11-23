@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from sqlalchemy.sql.expression import column
 
 from cps import kobo
+from cps.services import SyncToken as SyncTokenService
 
 
 def _unwrap(func):
@@ -15,6 +16,54 @@ def _unwrap(func):
         seen.add(func)
         func = func.__wrapped__
     return func
+
+
+class RecordingQuery:
+    """Query stand-in that records filters and returns a fixed page."""
+
+    def __init__(self, rows=(), count=0, filters=None, orders=None):
+        self.rows = list(rows)
+        self._count = count
+        self.filters = filters if filters is not None else []
+        self.orders = orders if orders is not None else []
+
+    def query(self, *args):
+        return self
+
+    def join(self, *args):
+        return self
+
+    def outerjoin(self, *args):
+        return self
+
+    def filter(self, *args):
+        self.filters.extend(args)
+        return self
+
+    def order_by(self, *args):
+        self.orders.extend(args)
+        return self
+
+    def distinct(self):
+        return self
+
+    def limit(self, count):
+        return self
+
+    def all(self):
+        return list(self.rows)
+
+    def count(self):
+        return self._count
+
+    def first(self):
+        return None
+
+    def one_or_none(self):
+        return None
+
+    def __iter__(self):
+        return iter(self.rows)
 
 
 def test_get_book_format_binary_version_uses_file_mtime_and_size(monkeypatch, tmp_path):
@@ -152,6 +201,7 @@ def test_selected_shelf_sync_includes_books_changed_since_sync_token(monkeypatch
     token = SimpleNamespace(
         books_last_modified=datetime(2024, 1, 1),
         books_last_created=datetime(2024, 1, 1),
+        books_last_id=-1,
         reading_state_last_modified=datetime(2024, 1, 1),
     )
     monkeypatch.setattr(
@@ -174,46 +224,8 @@ def test_selected_shelf_sync_includes_books_changed_since_sync_token(monkeypatch
     )
 
     filters = []
-
-    class FakeQuery:
-        def query(self, *args):
-            return self
-
-        def join(self, *args):
-            return self
-
-        def outerjoin(self, *args):
-            return self
-
-        def filter(self, *args):
-            filters.extend(args)
-            return self
-
-        def order_by(self, *args):
-            return self
-
-        def distinct(self):
-            return self
-
-        def limit(self, count):
-            return self
-
-        def all(self):
-            return []
-
-        def count(self):
-            return 0
-
-        def first(self):
-            return None
-
-        def one_or_none(self):
-            return None
-
-        def __iter__(self):
-            return iter(())
-
-    query = FakeQuery()
+    orders = []
+    query = RecordingQuery(filters=filters, orders=orders)
     session = SimpleNamespace(query=lambda *args, **kwargs: query)
     monkeypatch.setattr(kobo, "calibre_db", SimpleNamespace(
         reconnect_db=lambda *args, **kwargs: None,
@@ -263,3 +275,137 @@ def test_selected_shelf_sync_includes_books_changed_since_sync_token(monkeypatch
     version_filters = [str(expression) for expression in filters if "books.last_modified" in str(expression)]
     assert version_filters, "expected a date filter covering book modifications"
     assert any("shelf.date_added" in expression for expression in version_filters)
+    assert all("synced.book_id" not in str(expression) for expression in filters)
+    assert any("books.id" in str(expression) for expression in orders)
+
+
+def test_book_change_filter_uses_id_as_timestamp_tie_breaker():
+    token = SimpleNamespace(
+        books_last_modified=datetime(2024, 1, 1),
+        books_last_id=7,
+    )
+
+    paged = str(kobo.book_change_filter(token, column("books.last_modified")))
+    assert ">=" in paged
+    assert "books.id" in paged
+
+    token.books_last_id = -1
+    initial = str(kobo.book_change_filter(token, column("books.last_modified")))
+    assert "books.id" not in initial
+    assert "> :" in initial
+
+
+def test_sync_token_round_trips_book_cursor():
+    token = SyncTokenService.SyncToken(
+        raw_kobo_store_token="raw-store-token",
+        books_last_created=datetime(2024, 1, 1),
+        books_last_modified=datetime(2024, 1, 2, 3, 4, 5),
+        books_last_id=17,
+    )
+    header = SyncTokenService.SyncToken.SYNC_TOKEN_HEADER
+
+    restored = SyncTokenService.SyncToken.from_headers({header: token.build_sync_token()})
+    assert restored.books_last_id == 17
+    assert restored.books_last_modified == token.books_last_modified
+    assert "17" in str(token)
+
+    token.books_last_id = "not-an-id"
+    malformed = SyncTokenService.SyncToken.from_headers({header: token.build_sync_token()})
+    assert malformed.books_last_id == -1
+
+
+def test_whole_library_sync_uses_token_cursor_not_synced_ledger(monkeypatch, app):
+    app.wsgi_app.is_proxied = True
+    token = SimpleNamespace(
+        books_last_modified=datetime(2024, 1, 1),
+        books_last_created=datetime(2024, 1, 1),
+        books_last_id=4,
+        reading_state_last_modified=datetime(2024, 1, 1),
+    )
+    monkeypatch.setattr(
+        kobo,
+        "SyncToken",
+        SimpleNamespace(SyncToken=SimpleNamespace(from_headers=lambda headers: token)),
+    )
+    monkeypatch.setattr(kobo, "current_user", SimpleNamespace(
+        role_download=lambda: True,
+        id=7,
+        kobo_only_shelves_sync=False,
+        name="tester",
+    ))
+    monkeypatch.setattr(kobo.config, "config_kepubifypath", False, raising=False)
+    monkeypatch.setattr(kobo, "get_download_url_for_book", lambda *args, **kwargs: "download-url")
+    monkeypatch.setattr(kobo, "get_or_create_reading_state", lambda book_id: SimpleNamespace(last_modified=datetime.min))
+    monkeypatch.setattr(kobo, "create_book_entitlement", lambda book, archived: {})
+    monkeypatch.setattr(kobo, "get_metadata", lambda book: {})
+    monkeypatch.setattr(kobo, "sync_shelves", lambda *args, **kwargs: None)
+    monkeypatch.setattr(kobo.kobo_sync_status, "add_synced_books", lambda book_id: None)
+    monkeypatch.setattr(
+        kobo,
+        "generate_sync_response",
+        lambda sync_token, results, set_cont=False: "sync-response",
+    )
+
+    book = SimpleNamespace(
+        id=12,
+        uuid="book-uuid",
+        timestamp=datetime(2024, 1, 2),
+        last_modified=datetime(2024, 1, 3),
+        data=[SimpleNamespace(format="EPUB")],
+    )
+    row = SimpleNamespace(Books=book, is_archived=False)
+    filters = []
+    orders = []
+    query = RecordingQuery(rows=[row], filters=filters, orders=orders)
+    reading_state_model = SimpleNamespace(
+        book_id=column("reading.book_id"),
+        user_id=column("reading.user_id"),
+        last_modified=column("reading.last_modified"),
+    )
+    reading_query = RecordingQuery()
+
+    def session_query(*args, **kwargs):
+        if args and args[0] is reading_state_model:
+            return reading_query
+        return query
+
+    session = SimpleNamespace(query=session_query)
+    monkeypatch.setattr(kobo, "calibre_db", SimpleNamespace(
+        reconnect_db=lambda *args, **kwargs: None,
+        session=session,
+        common_filters=lambda **kwargs: column("common_filter"),
+    ))
+    monkeypatch.setattr(kobo, "db", SimpleNamespace(
+        Books=SimpleNamespace(
+            id=column("books.id"),
+            timestamp=column("books.timestamp"),
+            last_modified=column("books.last_modified"),
+            data=column("books.data"),
+        ),
+        Data=SimpleNamespace(format=column("books.format")),
+    ))
+    monkeypatch.setattr(kobo, "ub", SimpleNamespace(
+        app_DB_path="app.db",
+        session=session,
+        KoboSyncedBooks=SimpleNamespace(
+            book_id=column("synced.book_id"),
+            user_id=column("synced.user_id"),
+        ),
+        ArchivedBook=SimpleNamespace(
+            book_id=column("archived.book_id"),
+            user_id=column("archived.user_id"),
+            last_modified=column("archived.last_modified"),
+            is_archived=column("archived.is_archived"),
+        ),
+        KoboReadingState=reading_state_model,
+    ))
+
+    with app.test_request_context("/kobo/token/v1/library/sync"):
+        result = _unwrap(kobo.HandleSyncRequest)()
+
+    assert result == "sync-response"
+    assert token.books_last_id == 12
+    assert any("books.last_modified" in str(expression) for expression in filters)
+    assert any("books.id" in str(expression) for expression in filters)
+    assert all("synced.book_id" not in str(expression) for expression in filters)
+    assert any("books.last_modified" in str(expression) for expression in orders)

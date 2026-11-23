@@ -16,7 +16,11 @@ def _unwrap(func):
     return func
 
 
-def test_edit_book_param_invalidates_sync_for_edited_book(monkeypatch, app):
+def _assert_no_sync_invalidation(calls):
+    assert not any(isinstance(call, tuple) and call[0] == "remove" for call in calls)
+
+
+def test_edit_book_param_marks_edited_book_changed_for_sync(monkeypatch, app):
     calls = []
     book = SimpleNamespace(id=42, tags=[], last_modified=None)
     monkeypatch.setattr(editbooks, "calibre_db", SimpleNamespace(
@@ -35,7 +39,7 @@ def test_edit_book_param_invalidates_sync_for_edited_book(monkeypatch, app):
         result = _unwrap(editbooks.edit_book_param)("tags", {"pk": [42], "value": "fantasy"})
 
     assert result["success"] is True
-    assert ("remove", (42,), {"all": True}) in calls
+    _assert_no_sync_invalidation(calls)
     assert "commit" in calls
     assert book.last_modified.tzinfo is not None
 
@@ -89,11 +93,11 @@ def test_merge_list_book_marks_target_changed_for_sync(monkeypatch, app, tmp_pat
     assert ("dirty", 1) in calls
     assert "commit" in calls
     assert ("delete", [2]) in calls
-    assert ("remove", (1,), {"all": True}) in calls
+    _assert_no_sync_invalidation(calls)
     assert to_book.last_modified.tzinfo is not None
 
 
-def test_table_xchange_author_title_invalidates_sync_for_book(monkeypatch, app):
+def test_table_xchange_author_title_marks_book_changed_for_sync(monkeypatch, app):
     calls = []
     book = SimpleNamespace(id=8, title="Old Title", authors=[], last_modified=None)
     monkeypatch.setattr(editbooks, "calibre_db", SimpleNamespace(
@@ -117,13 +121,13 @@ def test_table_xchange_author_title_invalidates_sync_for_book(monkeypatch, app):
         response = _unwrap(editbooks.table_xchange_author_title)()
 
     assert response.status_code == 200
-    assert ("remove", (8,), {"all": True}) in calls
+    _assert_no_sync_invalidation(calls)
     assert ("dirty", 8) in calls
     assert "commit" in calls
     assert book.last_modified.tzinfo is not None
 
 
-def test_do_edit_book_invalidates_sync_with_book_id_not_edited_books_id(monkeypatch, app):
+def test_do_edit_book_marks_actual_book_changed_for_sync(monkeypatch, app):
     calls = []
     book = SimpleNamespace(id=17, has_cover=0, title="Book", path="Author/Book", identifiers=[])
     monkeypatch.setattr(editbooks, "calibre_db", SimpleNamespace(
@@ -159,7 +163,7 @@ def test_do_edit_book_invalidates_sync_with_book_id_not_edited_books_id(monkeypa
         result = editbooks.do_edit_book(17)
 
     assert result == "rendered"
-    assert ("remove", (17,), {"all": True}) in calls
+    _assert_no_sync_invalidation(calls)
     assert ("dirty", 17) in calls
     assert book.last_modified.tzinfo is not None
 
@@ -191,7 +195,7 @@ def _patch_upload_dependencies(monkeypatch, calls):
     ))
 
 
-def test_upload_book_formats_updates_existing_format_and_invalidates_sync(monkeypatch, app, tmp_path):
+def test_upload_book_formats_updates_existing_format_and_marks_book_changed(monkeypatch, app, tmp_path):
     calls = []
     existing_format = SimpleNamespace(uncompressed_size=1)
     monkeypatch.setattr(editbooks, "calibre_db", SimpleNamespace(
@@ -213,7 +217,7 @@ def test_upload_book_formats_updates_existing_format_and_invalidates_sync(monkey
 
     assert error is False
     assert existing_format.uncompressed_size == 8
-    assert ("remove", (23,), {"all": True}) in calls
+    _assert_no_sync_invalidation(calls)
     assert ("dirty", 23) in calls
     assert "commit" in calls
     assert not any(call[0] == "add" for call in calls if isinstance(call, tuple))
@@ -221,7 +225,7 @@ def test_upload_book_formats_updates_existing_format_and_invalidates_sync(monkey
     assert to_save == {}
 
 
-def test_upload_book_formats_adds_new_format_and_invalidates_sync(monkeypatch, app, tmp_path):
+def test_upload_book_formats_adds_new_format_and_marks_book_changed(monkeypatch, app, tmp_path):
     calls = []
     created = []
 
@@ -249,7 +253,7 @@ def test_upload_book_formats_adds_new_format_and_invalidates_sync(monkeypatch, a
 
     assert error is False
     assert created == [(24, "EPUB", 8, "Book")]
-    assert ("remove", (24,), {"all": True}) in calls
+    _assert_no_sync_invalidation(calls)
     assert ("dirty", 24) in calls
     assert "commit" in calls
     assert book.last_modified.tzinfo is not None
@@ -279,5 +283,5 @@ def test_upload_book_formats_rolls_back_when_replacing_format_fails(monkeypatch,
         _, error = editbooks.upload_book_formats([_UploadedFormat()], book, book.id)
 
     assert error is True
-    assert ("remove", (25,), {"all": True}) in calls
+    _assert_no_sync_invalidation(calls)
     assert "rollback" in calls

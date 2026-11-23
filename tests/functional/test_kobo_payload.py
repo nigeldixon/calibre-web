@@ -370,6 +370,7 @@ def test_kobo_sync_payload_includes_book_changed_in_selected_shelf(monkeypatch, 
     sync_token = SimpleNamespace(
         books_last_modified=datetime(2024, 1, 1),
         books_last_created=datetime(2024, 1, 1),
+        books_last_id=-1,
         reading_state_last_modified=datetime(2024, 1, 1),
         to_headers=lambda headers: headers.update({"x-kobo-sync-test": "applied"}),
     )
