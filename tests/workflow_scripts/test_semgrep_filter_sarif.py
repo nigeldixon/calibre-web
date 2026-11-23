@@ -132,7 +132,8 @@ def test_base_ref_fetch_and_two_dot_diff_fallback(tmp_path, run_quality_script, 
     assert proc.returncode == 0
     scope = scope_of(results)
     assert scope["reason"] == "pr_changed_files"
-    assert scope["changed_count"] == 3
+    assert scope["scope_kind"] == "files"
+    assert scope["changed_count"] == 2
     assert scope["findings"]["total"] == 1
     commands = log.read_text(encoding="utf-8")
     assert "fetch origin refs/heads/develop --depth=1" in commands
@@ -369,3 +370,92 @@ def test_changed_file_filtering_uses_git_diff_and_normalizes_paths(tmp_path, run
     kept = filtered_of(results)["runs"][0]["results"]
     assert len(kept) == 1
     assert kept[0]["locations"][0]["physicalLocation"]["artifactLocation"]["uri"] == "cps/a.py"
+
+
+def finding_at(uri, line):
+    return {
+        "level": "warning",
+        "message": {"text": f"finding in {uri}:{line}"},
+        "locations": [{
+            "physicalLocation": {
+                "artifactLocation": {"uri": uri},
+                "region": {"startLine": line},
+            }
+        }],
+    }
+
+
+def test_changed_line_filtering_drops_findings_outside_diff_hunks(tmp_path, run_quality_script, write_json):
+    results = prepare(tmp_path, "")
+    write_json(results / "semgrep.raw.sarif", make_sarif(results=[
+        finding_at("cps/a.py", 10),
+        finding_at("cps/a.py", 99),
+        finding_at("cps/b.py", 10),
+    ]))
+    bin_dir = write_fake_git(
+        tmp_path / "bin",
+        'if [ "$1" = "diff" ]; then\n'
+        '  if [ "$2" = "--unified=0" ]; then\n'
+        '    printf "%s\\n" "diff --git a/cps/a.py b/cps/a.py" "--- a/cps/a.py" "+++ b/cps/a.py" "@@ -10,1 +10,1 @@" "+x"\n'
+        '  else\n'
+        '    printf "%s\\n" "cps/a.py"\n'
+        '  fi\n'
+        "fi\n"
+        "exit 0\n",
+    )
+
+    proc = run_quality_script(
+        "semgrep_filter_sarif.py",
+        tmp_path,
+        env={
+            "EVENT_NAME": "push",
+            "PR_BASE_SHA": "a" * 40,
+            "PR_HEAD_SHA": "b" * 40,
+            "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
+        },
+    )
+
+    assert proc.returncode == 0
+    scope = scope_of(results)
+    assert scope["reason"] == "pr_changed_lines"
+    assert scope["scope_kind"] == "lines"
+    assert scope["changed_count"] == 1
+    assert scope["total_all"] == 3
+    assert scope["findings"]["total"] == 1
+    kept = filtered_of(results)["runs"][0]["results"]
+    assert len(kept) == 1
+    assert kept[0]["locations"][0]["physicalLocation"]["region"]["startLine"] == 10
+
+
+def test_diff_without_hunks_falls_back_to_changed_files(tmp_path, run_quality_script, write_json):
+    results = prepare(tmp_path, "")
+    write_json(results / "semgrep.raw.sarif", make_sarif(results=[finding_at("cps/a.py", 99)]))
+    bin_dir = write_fake_git(
+        tmp_path / "bin",
+        'if [ "$1" = "diff" ]; then\n'
+        '  if [ "$2" = "--unified=0" ]; then\n'
+        '    printf "%s\\n" "diff --git a/cps/a.py b/cps/a.py" "+++ b/cps/a.py"\n'
+        '  else\n'
+        '    printf "%s\\n" "cps/a.py"\n'
+        '  fi\n'
+        "fi\n"
+        "exit 0\n",
+    )
+
+    proc = run_quality_script(
+        "semgrep_filter_sarif.py",
+        tmp_path,
+        env={
+            "EVENT_NAME": "push",
+            "PR_BASE_SHA": "a" * 40,
+            "PR_HEAD_SHA": "b" * 40,
+            "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
+        },
+    )
+
+    assert proc.returncode == 0
+    scope = scope_of(results)
+    assert scope["reason"] == "pr_changed_files"
+    assert scope["scope_kind"] == "files"
+    assert scope["changed_count"] == 1
+    assert scope["findings"]["total"] == 1

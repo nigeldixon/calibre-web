@@ -255,6 +255,40 @@ def test_legacy_scope_reasons_change_the_description(tmp_path, run_quality_scrip
         assert expected in proc.stdout
 
 
+def test_legacy_path_reports_line_scope_from_filter_artifact(tmp_path, run_quality_script, write_json):
+    results = tmp_path / "semgrep-results"
+    results.mkdir()
+    write_json(
+        results / "semgrep.sarif",
+        {"version": "2.1.0", "runs": [{"tool": {"driver": {"name": "semgrep"}}, "results": []}]},
+    )
+    write_json(
+        results / "scope.json",
+        {
+            "scoped": True,
+            "reason": "pr_changed_lines",
+            "scope_kind": "lines",
+            "changed_count": 2,
+            "base": "a" * 40,
+            "head": "b" * 40,
+            "scan_ok": True,
+            "scan_exit": 0,
+            "total_all": 121,
+            "warnings": 0,
+            "warning_detail": {},
+            "exec_errors": 0,
+        },
+    )
+
+    proc = run_quality_script("semgrep_pr_comment.py", tmp_path, env={"ANALYZE_RESULT": "success"})
+
+    out = proc.stdout
+    assert proc.returncode == 0
+    assert "Automated Semgrep summary for lines changed in this PR (filtered SARIF)." in out
+    assert "**Whole-solution issues:** 121 · **In changed files:** 0" in out
+    assert "_Scope: 2 changed file(s) in this PR (`aaaaaaa...bbbbbbb`)._" in out
+
+
 def test_legacy_path_missing_scope_file_is_an_error(tmp_path, run_quality_script, write_json):
     results = tmp_path / "semgrep-results"
     results.mkdir()
