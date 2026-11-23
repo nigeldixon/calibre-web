@@ -252,6 +252,16 @@ jobs:
           if-no-files-found: warn
           retention-days: 5
 
+      - name: Require application coverage when application files changed
+        # Keep this after report generation/upload so a missing-coverage gate
+        # cannot suppress the PR panel or failure-comment sync.
+        if: always() && steps.find_pr.outputs.number != ''
+        shell: bash
+        env:
+          CHANGED_FILES_JSON: changed-files.json
+          COVERAGE_XML_PATH: coverage.xml
+        run: python .github/scripts/check_application_coverage.py
+
       - name: Fail if any test suite failed
         if: always()
         shell: bash

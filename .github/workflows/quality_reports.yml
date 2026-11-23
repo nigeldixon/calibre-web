@@ -359,8 +359,9 @@ jobs:
         run: python "$GITHUB_WORKSPACE/.github/scripts/test_failure_comments.py"
 
       - name: Regenerate coverage report
-        # A successful download may legitimately have no coverage.xml when the
-        # repo has no tests, so only gate on the download outcome here.
+        # A successful download may have no coverage.xml; the generator now
+        # flags that as unacceptable when application files changed. The fork
+        # PR's own Tests run carries the corresponding pass/fail gate.
         if: >-
           steps.runs.outputs.tests_artifacts == 'true' &&
           steps.download_tests.outcome == 'success' &&
