@@ -5,6 +5,8 @@ import os
 import re
 from defusedxml import ElementTree as SafeET
 
+from application_changes import application_changed_files, normalize_path
+from application_changes import load_changed_files as _load_changed_files
 from report_constants import load_constants
 
 C = load_constants()
@@ -51,19 +53,6 @@ def bar(p, width=20):
 
 def badge(pct_i, color):
     return f"![coverage](https://img.shields.io/badge/coverage-{pct_i}%25-{color})"
-
-
-def normalize_path(path):
-    path = (path or "").replace("\\", "/")
-    while path.startswith("./"):
-        path = path[2:]
-    marker_prefix = "/calibre-web/"
-    if marker_prefix in path:
-        # CI workspace paths can contain the repository name twice
-        # (/home/runner/work/calibre-web/calibre-web/...). Strip at the last
-        # occurrence so the result matches GitHub's changed-file names.
-        path = path.rsplit(marker_prefix, 1)[1]
-    return path
 
 
 def coverage_by_file(path):
@@ -116,14 +105,7 @@ def added_lines_from_patch(patch):
 
 
 def load_changed_files(path):
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-    except Exception:
-        return []
-    if isinstance(data, dict):
-        data = data.get("files", [])
-    return data if isinstance(data, list) else []
+    return _load_changed_files(path) or []
 
 
 def coverage_total(path):
@@ -372,7 +354,19 @@ def coverage_section():
     out = ["#### Patch coverage", ""]
 
     if not os.path.exists(coverage_xml_path):
-        out += ["No application coverage data was generated for this run."]
+        app_files = application_changed_files(changed_json_path) if changed_json_path else None
+        out += ["❌ No application coverage data was generated for this run." if app_files
+                else "No application coverage data was generated for this run."]
+        if app_files:
+            out += ["", "Application files changed in this PR:"]
+            out += [f"- `{filename}`" for filename in app_files[:20]]
+            remaining = len(app_files) - 20
+            if remaining > 0:
+                out += [f"- ... and {remaining} more"]
+        elif app_files is None:
+            out += ["", "Application changes could not be determined from the available data."]
+        else:
+            out += ["", "No application files changed in this PR."]
         out += coverage_extras()
         return out
 
