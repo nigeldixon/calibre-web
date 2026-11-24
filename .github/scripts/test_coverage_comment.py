@@ -32,6 +32,12 @@ DEFAULT_SUITES = [
     ("functional_tests", "HTTP functional"),
 ]
 
+WORKFLOW_CHANGE_PREFIXES = (
+    ".github/workflows/",
+    ".github/scripts/",
+    "tests/workflow_scripts/",
+)
+
 
 def pct_to_color(p):
     if p >= 90:
@@ -106,6 +112,28 @@ def added_lines_from_patch(patch):
 
 def load_changed_files(path):
     return _load_changed_files(path) or []
+
+
+def is_workflow_change(filename):
+    filename = normalize_path(filename)
+    return any(filename.startswith(prefix) for prefix in WORKFLOW_CHANGE_PREFIXES)
+
+
+def workflow_changed_files(path):
+    """Return workflow-related paths, or None when changed files are unknown."""
+    if not path:
+        return None
+    files = _load_changed_files(path)
+    if files is None:
+        return None
+    changed = set()
+    for item in files:
+        if not isinstance(item, dict):
+            continue
+        filename = normalize_path(item.get("filename", ""))
+        if is_workflow_change(filename):
+            changed.add(filename)
+    return sorted(changed)
 
 
 def coverage_total(path):
@@ -278,7 +306,23 @@ def coverage_summary_line():
 
 def coverage_extras():
     line = coverage_summary_line()
-    return ["", line] if line else []
+    if not line:
+        return []
+
+    workflow_files = workflow_changed_files(changed_json_path)
+    # Unknown changed-file data stays expanded: it would be unsafe to hide
+    # coverage for a workflow change we cannot rule out. A known clean list
+    # collapses the line so unrelated PRs only see it on demand.
+    if workflow_files == []:
+        return [
+            "",
+            "<details><summary>Workflow script coverage</summary>",
+            "",
+            line,
+            "",
+            "</details>",
+        ]
+    return ["", line]
 
 
 def load_test_results():

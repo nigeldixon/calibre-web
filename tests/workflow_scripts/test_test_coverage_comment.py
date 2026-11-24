@@ -330,6 +330,108 @@ def test_coverage_summary_line_uses_only_the_most_severe_marker(
     )
 
 
+def test_workflow_changed_files_covers_workflow_scripts_and_tests(
+    load_quality_script, tmp_path, write_json
+):
+    script = load_helpers(load_quality_script, tmp_path)
+    workflow_changed_files = script["workflow_changed_files"]
+
+    assert workflow_changed_files("") is None
+    assert workflow_changed_files(str(tmp_path / "missing.json")) is None
+
+    changed = write_json(
+        tmp_path / "changed-files.json",
+        [
+            {"filename": "cps/a.py", "status": "modified"},
+            {"filename": "README.md", "status": "modified"},
+            {
+                "filename": "/home/runner/work/calibre-web/calibre-web/.github/workflows/test.yml",
+                "status": "modified",
+            },
+            {"filename": ".github/scripts/new.py", "status": "added"},
+            {
+                "filename": "tests/workflow_scripts/js/report_body.test.js",
+                "status": "modified",
+            },
+            {"filename": "tests/workflow_scripts/removed.py", "status": "removed"},
+        ],
+    )
+
+    assert workflow_changed_files(str(changed)) == [
+        ".github/scripts/new.py",
+        ".github/workflows/test.yml",
+        "tests/workflow_scripts/js/report_body.test.js",
+        "tests/workflow_scripts/removed.py",
+    ]
+
+
+def test_workflow_coverage_collapses_when_no_workflow_files_changed(
+    tmp_path, run_quality_script, write_json
+):
+    (tmp_path / "coverage-workflow-scripts-term.txt").write_text(
+        "TOTAL 100 30 20 11 45%\n", encoding="utf-8"
+    )
+    changed = write_json(
+        tmp_path / "changed-files.json",
+        [{"filename": "cps/a.py", "status": "modified", "patch": "@@ -1 +1 @@\n+edit"}],
+    )
+
+    proc = run_quality_script(
+        "test_coverage_comment.py",
+        tmp_path,
+        env={
+            "COVERAGE_XML_PATH": str(tmp_path / "missing.xml"),
+            "CHANGED_FILES_JSON": str(changed),
+        },
+    )
+
+    assert proc.returncode == 0
+    assert "\n".join([
+        "<details><summary>Workflow script coverage</summary>",
+        "",
+        "**Workflow script coverage — ❌ Low coverage:** "
+        "Python `70/100 statements (70%) · 9/20 branches (45%)`",
+        "",
+        "</details>",
+    ]) in proc.stdout
+
+
+@pytest.mark.parametrize(
+    "filename",
+    [
+        ".github/workflows/test.yml",
+        ".github/scripts/test_coverage_comment.py",
+        "tests/workflow_scripts/test_test_coverage_comment.py",
+    ],
+)
+def test_workflow_coverage_stays_visible_when_workflow_files_changed(
+    filename, tmp_path, run_quality_script, write_json
+):
+    (tmp_path / "coverage-workflow-scripts-term.txt").write_text(
+        "TOTAL 100 30 20 11 45%\n", encoding="utf-8"
+    )
+    changed = write_json(
+        tmp_path / "changed-files.json",
+        [{"filename": filename, "status": "modified"}],
+    )
+
+    proc = run_quality_script(
+        "test_coverage_comment.py",
+        tmp_path,
+        env={
+            "COVERAGE_XML_PATH": str(tmp_path / "missing.xml"),
+            "CHANGED_FILES_JSON": str(changed),
+        },
+    )
+
+    assert proc.returncode == 0
+    assert (
+        "**Workflow script coverage — ❌ Low coverage:** "
+        "Python `70/100 statements (70%) · 9/20 branches (45%)`"
+    ) in proc.stdout
+    assert "<details><summary>Workflow script coverage</summary>" not in proc.stdout
+
+
 def test_patch_coverage_report_uses_normalized_paths(tmp_path, run_quality_script, write_json):
     coverage_xml = tmp_path / "coverage.xml"
     coverage_xml.write_text(
@@ -391,10 +493,14 @@ def test_patch_coverage_report_uses_normalized_paths(tmp_path, run_quality_scrip
     out = proc.stdout
     assert proc.returncode == 0
     assert "**Full analysis:** [Workflow run](https://example.test/run/1)" in out
-    assert (
+    assert "\n".join([
+        "<details><summary>Workflow script coverage</summary>",
+        "",
         "**Workflow script coverage — ❌ Low coverage:** "
-        "Python `241/673 statements (36%)` · Shell `10/10 lines (100%) · 2/2 inferred branches (100%)`"
-    ) in out
+        "Python `241/673 statements (36%)` · Shell `10/10 lines (100%) · 2/2 inferred branches (100%)`",
+        "",
+        "</details>",
+    ]) in out
     assert "**Diff lines:** 3 &nbsp;|&nbsp; **Missing:** 2 &nbsp;|&nbsp; **Covered:** 1" in out
     assert "<details><summary>Patch coverage details</summary>" in out
     assert "- `cps/a.py`: 1/2 covered; missing lines 12" in out
@@ -514,6 +620,7 @@ def test_missing_coverage_xml_still_reports_workflow_coverage(
         "<small>Workflow script coverage: "
         "Python `80/100 statements (80%)` · Shell `10/10 lines (100%) · 2/2 inferred branches (100%)`</small>"
     ) in proc.stdout
+    assert "<details><summary>Workflow script coverage</summary>" not in proc.stdout
 
     empty = load_quality_script(
         "test_coverage_comment.py", tmp_path,
