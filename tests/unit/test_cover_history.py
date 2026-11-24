@@ -476,3 +476,52 @@ def test_restore_cover_version_returns_false_when_snapshot_raises(monkeypatch, t
     monkeypatch.setattr(cover_history, "snapshot_cover", boom)
     assert cover_history.restore_cover_version(str(book_dir), vf.name) is False
     assert (book_dir / "cover.jpg").read_bytes() == b"current"
+
+
+def test_delete_cover_version_rejects_target_resolving_to_history_dir(monkeypatch, tmp_path):
+    import os
+    from cps import cover_history
+
+    book_dir = tmp_path / "book"
+    book_dir.mkdir()
+    hdir = book_dir / ".cover_history"
+    hdir.mkdir()
+    name = "cover_20240101T010101000000Z.jpg"
+    (hdir / name).write_bytes(b"old")
+
+    real_realpath = os.path.realpath
+
+    def fake_realpath(path):
+        p = os.fspath(path)
+        if p.endswith(os.path.join(".cover_history", name)) or p.endswith(os.sep + name):
+            return real_realpath(str(hdir))
+        return real_realpath(path)
+
+    monkeypatch.setattr("cps.cover_history.os.path.realpath", fake_realpath)
+    assert cover_history.delete_cover_version(str(book_dir), name) is False
+    assert (hdir / name).exists()
+
+
+def test_restore_cover_version_rejects_source_resolving_to_history_dir(monkeypatch, tmp_path):
+    import os
+    from cps import cover_history
+
+    book_dir = tmp_path / "book"
+    book_dir.mkdir()
+    (book_dir / "cover.jpg").write_bytes(b"current")
+    hdir = book_dir / ".cover_history"
+    hdir.mkdir()
+    name = "cover_20240101T010101000000Z.jpg"
+    (hdir / name).write_bytes(b"old")
+
+    real_realpath = os.path.realpath
+
+    def fake_realpath(path):
+        p = os.fspath(path)
+        if p.endswith(os.path.join(".cover_history", name)) or p.endswith(os.sep + name):
+            return real_realpath(str(hdir))
+        return real_realpath(path)
+
+    monkeypatch.setattr("cps.cover_history.os.path.realpath", fake_realpath)
+    assert cover_history.restore_cover_version(str(book_dir), name) is False
+    assert (book_dir / "cover.jpg").read_bytes() == b"current"

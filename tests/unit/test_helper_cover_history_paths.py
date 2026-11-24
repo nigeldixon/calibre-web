@@ -196,3 +196,142 @@ def test_move_files_on_change_merge_ignores_rmdir_oserror_during_cleanup(tmp_pat
     assert (dst / ".cover_history" / "cover_old.jpg").exists()
     # cleanup loop ignored first rmdir error for src; src may still exist in that case
     assert raised_once["v"] is True
+
+
+def test_move_files_on_change_merge_skips_dir_on_commonpath_value_error(tmp_path, monkeypatch):
+    from cps import helper
+
+    calibre = tmp_path / "library"
+    src = calibre / "Author" / "Book (1)"
+    dst = calibre / "Author" / "Book (2)"
+    (src / "sub").mkdir(parents=True)
+    (src / "sub" / "file.txt").write_bytes(b"data")
+    dst.mkdir(parents=True)
+
+    localbook = SimpleNamespace(id=1, path="Author/Book (1)")
+    monkeypatch.setattr(helper, "_", lambda s, *a, **k: s)
+    monkeypatch.setattr(helper.log, "info", lambda *a, **k: None)
+    monkeypatch.setattr(helper.log, "debug", lambda *a, **k: None)
+    monkeypatch.setattr(helper.log, "error", lambda *a, **k: None)
+
+    real_commonpath = os.path.commonpath
+
+    def fake_commonpath(paths):
+        try:
+            p2 = os.fspath(paths[1])
+        except Exception:
+            p2 = ""
+        if "sub" in os.path.basename(os.path.normpath(p2)):
+            raise ValueError("mixed")
+        return real_commonpath(paths)
+
+    monkeypatch.setattr(helper.os.path, "commonpath", fake_commonpath)
+
+    result = helper.move_files_on_change(
+        str(calibre), "Author", "Book (2)", localbook, None, None, str(src)
+    )
+    assert result is False
+    # unsafe subdir skipped, file not moved there
+    assert not (dst / "sub" / "file.txt").exists()
+
+
+def test_move_files_on_change_merge_skips_file_on_commonpath_value_error(tmp_path, monkeypatch):
+    from cps import helper
+
+    calibre = tmp_path / "library"
+    src = calibre / "Author" / "Book (1)"
+    dst = calibre / "Author" / "Book (2)"
+    src.mkdir(parents=True)
+    (src / "file.txt").write_bytes(b"data")
+    dst.mkdir(parents=True)
+
+    localbook = SimpleNamespace(id=1, path="Author/Book (1)")
+    monkeypatch.setattr(helper, "_", lambda s, *a, **k: s)
+    monkeypatch.setattr(helper.log, "info", lambda *a, **k: None)
+    monkeypatch.setattr(helper.log, "debug", lambda *a, **k: None)
+    monkeypatch.setattr(helper.log, "error", lambda *a, **k: None)
+
+    real_commonpath = os.path.commonpath
+
+    def fake_commonpath(paths):
+        try:
+            p2 = os.fspath(paths[1])
+        except Exception:
+            p2 = ""
+        if os.path.basename(os.path.normpath(p2)) == "file.txt":
+            raise ValueError("mixed")
+        return real_commonpath(paths)
+
+    monkeypatch.setattr(helper.os.path, "commonpath", fake_commonpath)
+
+    result = helper.move_files_on_change(
+        str(calibre), "Author", "Book (2)", localbook, None, None, str(src)
+    )
+    assert result is False
+    assert not (dst / "file.txt").exists()
+
+
+def test_move_files_on_change_merge_skips_dir_when_realpath_escapes_prefix(tmp_path, monkeypatch):
+    from cps import helper
+
+    calibre = tmp_path / "library"
+    src = calibre / "Author" / "Book (1)"
+    dst = calibre / "Author" / "Book (2)"
+    (src / "sub").mkdir(parents=True)
+    (src / "sub" / "file.txt").write_bytes(b"data")
+    dst.mkdir(parents=True)
+
+    localbook = SimpleNamespace(id=1, path="Author/Book (1)")
+    monkeypatch.setattr(helper, "_", lambda s, *a, **k: s)
+    monkeypatch.setattr(helper.log, "info", lambda *a, **k: None)
+    monkeypatch.setattr(helper.log, "debug", lambda *a, **k: None)
+    monkeypatch.setattr(helper.log, "error", lambda *a, **k: None)
+
+    real_realpath = os.path.realpath
+
+    def fake_realpath(path):
+        p = os.fspath(path)
+        if os.path.normpath(p).endswith(os.path.normpath(os.path.join("Book (1)", "sub"))):
+            return real_realpath(str(dst))
+        return real_realpath(path)
+
+    monkeypatch.setattr(helper.os.path, "realpath", fake_realpath)
+
+    result = helper.move_files_on_change(
+        str(calibre), "Author", "Book (2)", localbook, None, None, str(src)
+    )
+    assert result is False
+    assert not (dst / "sub" / "file.txt").exists()
+
+
+def test_move_files_on_change_merge_skips_file_when_realpath_escapes_prefix(tmp_path, monkeypatch):
+    from cps import helper
+
+    calibre = tmp_path / "library"
+    src = calibre / "Author" / "Book (1)"
+    dst = calibre / "Author" / "Book (2)"
+    src.mkdir(parents=True)
+    (src / "file.txt").write_bytes(b"data")
+    dst.mkdir(parents=True)
+
+    localbook = SimpleNamespace(id=1, path="Author/Book (1)")
+    monkeypatch.setattr(helper, "_", lambda s, *a, **k: s)
+    monkeypatch.setattr(helper.log, "info", lambda *a, **k: None)
+    monkeypatch.setattr(helper.log, "debug", lambda *a, **k: None)
+    monkeypatch.setattr(helper.log, "error", lambda *a, **k: None)
+
+    real_realpath = os.path.realpath
+
+    def fake_realpath(path):
+        p = os.fspath(path)
+        if os.path.basename(os.path.normpath(p)) == "file.txt" and "Book (2)" in p:
+            return real_realpath(str(dst))
+        return real_realpath(path)
+
+    monkeypatch.setattr(helper.os.path, "realpath", fake_realpath)
+
+    result = helper.move_files_on_change(
+        str(calibre), "Author", "Book (2)", localbook, None, None, str(src)
+    )
+    assert result is False
+    assert not (dst / "file.txt").exists()
