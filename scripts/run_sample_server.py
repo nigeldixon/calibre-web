@@ -6,6 +6,7 @@ The sample library (Dracula, public domain) lives in tests/fixtures/library.
 """
 import argparse
 import os
+import re
 import shutil
 import signal
 import socket
@@ -25,6 +26,11 @@ def main():
     ap.add_argument("--port", type=int, default=8083, help="Port to listen on")
     ap.add_argument("--settings", default=str(ROOT / "app.db"), help="Base settings db to copy")
     args = ap.parse_args()
+
+    host = args.host
+    if not re.fullmatch(r"[A-Za-z0-9._:-]+", host):
+        print(f"Invalid host: {host!r}", file=sys.stderr)
+        return 2
 
     if not FIXTURE_LIBRARY.exists():
         print(f"Fixture library not found: {FIXTURE_LIBRARY}", file=sys.stderr)
@@ -51,8 +57,8 @@ def main():
         finally:
             conn.close()
 
-        cmd = [sys.executable, str(ROOT / "cps.py"), "-p", str(settings_db), "-i", args.host]
-        print(f"Starting Calibre-Web with sample library on http://{args.host}:{args.port}")
+        cmd = [sys.executable, str(ROOT / "cps.py"), "-p", str(settings_db), "-i", host]
+        print(f"Starting Calibre-Web with sample library on http://{host}:{args.port}")
         print(f"Sample data: {library_dir} (temporary copy)")
         proc = subprocess.Popen(cmd, cwd=str(ROOT))
 
