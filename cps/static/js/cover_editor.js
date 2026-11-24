@@ -333,11 +333,16 @@
                     if (applied) return;
                     applied = true;
                     $image.off('.covereditorapply');
-                    $image.off('.covereditorapplied').one('ready.covereditorapplied', function () {
-                        setStatus('', false);
-                        showStatusOverlay($modal.data('crop-applied') || 'Crop applied', false, 1800);
-                    });
-                    initCropper();
+                    try {
+                        $image.off('.covereditorapplied').one('ready.covereditorapplied', function () {
+                            setStatus('', false);
+                            showStatusOverlay($modal.data('crop-applied') || 'Crop applied', false, 1800);
+                        });
+                        initCropper();
+                    } catch (e) {
+                        $image.off('.covereditorapply .covereditorapplied');
+                        setStatus($modal.data('crop-failed') || 'Could not crop image', true);
+                    }
                 };
                 $image.one('load.covereditorapply', initApplied);
                 $image.one('error.covereditorapply', function () {
