@@ -350,12 +350,14 @@ lines += [
 ]
 
 if error_details:
-    lines += ["", f"**❌ Analysis errors ({analysis_errors})**", ""]
+    lines += ["", f'<details><summary>❌ Analysis errors ({analysis_errors})</summary>', ""]
     lines += error_details
+    lines += ["", "</details>"]
 
 if warning_details:
-    lines += ["", f"**⚠️ Analysis warnings ({analysis_warnings})**", ""]
+    lines += ["", f'<details><summary>⚠️ Analysis warnings ({analysis_warnings})</summary>', ""]
     lines += warning_details
+    lines += ["", "</details>"]
 
 if any(v.get("read_error") for v in by_lang.values()):
     lines += ["", "❌ A CodeQL SARIF file could not be parsed; the analysis is marked as failed."]
