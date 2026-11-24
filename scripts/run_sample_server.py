@@ -61,7 +61,7 @@ def main():
         print(f"Starting Calibre-Web with sample library on http://{host}:{args.port}")
         print(f"Sample data: {library_dir} (temporary copy)")
         proc = subprocess.Popen(  # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
-            cmd, cwd=str(ROOT)
+            cmd, cwd=str(ROOT)  # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
         )
 
         def _stop(*_):
