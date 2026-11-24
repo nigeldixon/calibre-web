@@ -424,7 +424,7 @@ def test_workflow_coverage_stays_visible_when_workflow_definitions_changed(
         "**Workflow script coverage — ❌ Low coverage:** "
         "Python `70/100 statements (70%) · 9/20 branches (45%)`"
     ) in proc.stdout
-    assert "<details><summary>Workflow script coverage</summary>" not in proc.stdout
+    assert "<details open><summary>Workflow script coverage</summary>" not in proc.stdout
 
 
 def test_patch_coverage_report_uses_normalized_paths(tmp_path, run_quality_script, write_json):
@@ -489,7 +489,7 @@ def test_patch_coverage_report_uses_normalized_paths(tmp_path, run_quality_scrip
     assert proc.returncode == 0
     assert "**Full analysis:** [Workflow run](https://example.test/run/1)" in out
     assert "\n".join([
-        "<details><summary>Workflow script coverage</summary>",
+        "<details open><summary>Workflow script coverage</summary>",
         "",
         "**Workflow script coverage — ❌ Low coverage:** "
         "Python `241/673 statements (36%)` · Shell `10/10 lines (100%) · 2/2 inferred branches (100%)`",
@@ -497,7 +497,7 @@ def test_patch_coverage_report_uses_normalized_paths(tmp_path, run_quality_scrip
         "</details>",
     ]) in out
     assert "**Diff lines:** 3 &nbsp;|&nbsp; **Missing:** 2 &nbsp;|&nbsp; **Covered:** 1" in out
-    assert "<details><summary>Patch coverage details</summary>" in out
+    assert "<details open><summary>Patch coverage details</summary>" in out
     assert "- `cps/a.py`: 1/2 covered; missing lines 12" in out
     assert "- `cps/unknown.py`: 0/1 covered; missing lines 1" in out
     assert "removed.py" not in out
@@ -557,7 +557,7 @@ def test_test_panel_renders_suite_table_and_failure_details(
     assert "| ✅ | Unit (in-process) | `12 passed in 1.50s` | 0 |" in out
     assert "| ⚪ | Playwright E2E | `no results` | 0 |" in out
     assert "| ⚪ | HTTP functional | `no results` | 0 |" in out
-    assert "<details><summary>❌ Workflow script tests failures (1)</summary>" in out
+    assert "<details open><summary>❌ Workflow script tests failures (1)</summary>" in out
     assert "- `tests/workflow_scripts/test_x.py::test_a` — AssertionError: bad" in out
     assert "**Analysis errors:**" not in out
     assert "#### Patch coverage" in out
@@ -615,7 +615,7 @@ def test_missing_coverage_xml_still_reports_workflow_coverage(
         "<small>Workflow script coverage: "
         "Python `80/100 statements (80%)` · Shell `10/10 lines (100%) · 2/2 inferred branches (100%)`</small>"
     ) in proc.stdout
-    assert "<details><summary>Workflow script coverage</summary>" not in proc.stdout
+    assert "<details open><summary>Workflow script coverage</summary>" not in proc.stdout
 
     empty = load_quality_script(
         "test_coverage_comment.py", tmp_path,

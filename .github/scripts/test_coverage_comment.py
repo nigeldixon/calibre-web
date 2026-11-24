@@ -313,7 +313,7 @@ def coverage_extras():
     if workflow_files == []:
         return [
             "",
-            "<details><summary>Workflow script coverage</summary>",
+            "<details open><summary>Workflow script coverage</summary>",
             "",
             line,
             "",
@@ -382,7 +382,7 @@ def failure_details(suites):
         failures = suite["failures"]
         if not failures:
             continue
-        lines += ["", f"<details><summary>❌ {suite['name']} failures ({len(failures)})</summary>", ""]
+        lines += ["", f"<details open><summary>❌ {suite['name']} failures ({len(failures)})</summary>", ""]
         for failure in failures:
             message = str(failure.get("message", "")).replace("\n", " ").strip()
             suffix = f" — {message}" if message else ""
@@ -462,7 +462,7 @@ def coverage_section():
                     details.append(f"- `{filename}`: {file_covered}/{file_total} covered; missing lines {', '.join(map(str, missing[:20]))}")
                 else:
                     details.append(f"- `{filename}`: {file_covered}/{file_total} covered")
-            out += ["", "<details><summary>Patch coverage details</summary>", ""] + details + ["", "</details>"]
+            out += ["", "<details open><summary>Patch coverage details</summary>", ""] + details + ["", "</details>"]
         else:
             out += ["", "_Patch coverage could not be computed for this run._"]
     else:

@@ -350,12 +350,12 @@ lines += [
 ]
 
 if error_details:
-    lines += ["", f'<details><summary>❌ Analysis errors ({analysis_errors})</summary>', ""]
+    lines += ["", f'<details open><summary>❌ Analysis errors ({analysis_errors})</summary>', ""]
     lines += error_details
     lines += ["", "</details>"]
 
 if warning_details:
-    lines += ["", f'<details><summary>⚠️ Analysis warnings ({analysis_warnings})</summary>', ""]
+    lines += ["", f'<details open><summary>⚠️ Analysis warnings ({analysis_warnings})</summary>', ""]
     lines += warning_details
     lines += ["", "</details>"]
 
