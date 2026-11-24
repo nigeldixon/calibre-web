@@ -28,15 +28,17 @@ def main():
     args = ap.parse_args()
 
     # Map to a fixed literal to break taint flow for subprocess args.
-    allowed_hosts = {
-        "127.0.0.1": "127.0.0.1",
-        "localhost": "localhost",
-        "0.0.0.0": "0.0.0.0",
-        "::1": "::1",
-    }
-    host = allowed_hosts.get(args.host)
-    if host is None:
-        print(f"Invalid host: {args.host!r}; allowed: {', '.join(allowed_hosts)}", file=sys.stderr)
+    raw_host = args.host
+    if raw_host == "127.0.0.1":
+        host = "127.0.0.1"
+    elif raw_host == "localhost":
+        host = "localhost"
+    elif raw_host == "0.0.0.0":
+        host = "0.0.0.0"
+    elif raw_host == "::1":
+        host = "::1"
+    else:
+        print(f"Invalid host: {raw_host!r}; allowed: 127.0.0.1, localhost, 0.0.0.0, ::1", file=sys.stderr)
         return 2
 
     if not FIXTURE_LIBRARY.exists():
