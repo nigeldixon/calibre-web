@@ -258,12 +258,9 @@ if warnings:
     details = [f'- {v} × {k}' for k, v in (scope.get('warning_detail') or {}).items()]
     lines += [
         '',
-        f'<details><summary>⚠️ Analysis warnings ({warnings})</summary>',
+        f'**⚠️ Analysis warnings ({warnings})**',
         '',
-    ] + details + [
-        '',
-        '</details>',
-    ]
+    ] + details
 
 if scope.get('scoped'):
     base = (scope.get('base') or '')[:7]

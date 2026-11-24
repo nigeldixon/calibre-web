@@ -311,14 +311,7 @@ def coverage_extras():
     # workflow-definition changes collapses the line so unrelated PRs only
     # see it on demand.
     if workflow_files == []:
-        return [
-            "",
-            "<details><summary>Workflow script coverage</summary>",
-            "",
-            line,
-            "",
-            "</details>",
-        ]
+        return ["", line]
     return ["", line]
 
 
@@ -462,7 +455,8 @@ def coverage_section():
                     details.append(f"- `{filename}`: {file_covered}/{file_total} covered; missing lines {', '.join(map(str, missing[:20]))}")
                 else:
                     details.append(f"- `{filename}`: {file_covered}/{file_total} covered")
-            out += ["", "<details><summary>Patch coverage details</summary>", ""] + details + ["", "</details>"]
+            if details:
+                out += ["", "**Patch coverage details**", ""] + details
         else:
             out += ["", "_Patch coverage could not be computed for this run._"]
     else:

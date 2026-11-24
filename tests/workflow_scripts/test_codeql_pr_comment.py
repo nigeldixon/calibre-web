@@ -92,10 +92,10 @@ def test_partial_run_counts_missing_language_and_keeps_details_in_sync(
     assert "**Analysis errors:** 2 · **Analysis warnings:** 2" in out
     assert "| ⚪ | `javascript-typescript` | - | - | - | - |" in out
     assert "| ⚠️ | `python` | 1 | 1 | 0 | 0 |" in out
-    assert "<details><summary>❌ Analysis errors (2)</summary>" in out
+    assert "**❌ Analysis errors (2)**" in out
     assert "- `cps/a.py` — E1: scan aborted" in out
     assert "- No SARIF artifact was produced for `javascript-typescript`." in out
-    assert "<details><summary>⚠️ Analysis warnings (2)</summary>" in out
+    assert "**⚠️ Analysis warnings (2)**" in out
     assert "- `cps/a.py` — W1: timeout" in out
     assert "- warning: no location" in out
     assert "❌ CodeQL analyze failed for: `python`." in out
@@ -708,7 +708,7 @@ def test_non_string_notification_descriptor_id_is_reported_not_rejected(
 
     assert proc.returncode == 0
     assert "**Analysis errors:** 0 · **Analysis warnings:** 1" in proc.stdout
-    assert "<details><summary>⚠️ Analysis warnings (1)</summary>" in proc.stdout
+    assert "**⚠️ Analysis warnings (1)**" in proc.stdout
     assert "- 7: non-fatal notice" in proc.stdout
     assert "SARIF contains invalid run data" not in proc.stdout
     assert "could not be parsed" not in proc.stdout
