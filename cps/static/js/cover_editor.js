@@ -129,6 +129,7 @@
                 cropper.destroy();
                 cropper = null;
             }
+            $image.removeClass('cropper-hidden cropper-hide');
         }
 
         function setDragMode(mode) {
@@ -325,8 +326,13 @@
                     return;
                 }
                 destroyCropper();
-                $image.off('.covereditorapply');
+                $image.removeClass('cropper-hidden cropper-hide').css({visibility: '', display: 'block'});
+                $image.off('.covereditorapply .covereditorapplied');
+                var applied = false;
                 var initApplied = function () {
+                    if (applied) return;
+                    applied = true;
+                    $image.off('.covereditorapply');
                     $image.off('.covereditorapplied').one('ready.covereditorapplied', function () {
                         setStatus('', false);
                         showStatusOverlay($modal.data('crop-applied') || 'Crop applied', false, 1800);
@@ -334,10 +340,13 @@
                     initCropper();
                 };
                 $image.one('load.covereditorapply', initApplied);
+                $image.one('error.covereditorapply', function () {
+                    $image.off('.covereditorapply .covereditorapplied');
+                    setStatus($modal.data('crop-failed') || 'Could not crop image', true);
+                });
                 $image.attr('src', dataUrl);
                 if ($image[0].complete && $image[0].naturalWidth) {
-                    // Cached/data-URL images may not reliably fire load; initialize once ready.
-                    $image.off('load.covereditorapply');
+                    // Data URLs may be ready immediately.
                     setTimeout(initApplied, 0);
                 }
             } catch (e) {
