@@ -313,7 +313,7 @@ def coverage_extras():
     if workflow_files == []:
         return [
             "",
-            '<details><summary id="quality-workflow-script-coverage">Workflow script coverage</summary>',
+            "<details><summary>Workflow script coverage</summary>",
             "",
             line,
             "",
@@ -382,7 +382,7 @@ def failure_details(suites):
         failures = suite["failures"]
         if not failures:
             continue
-        lines += ["", f"<a id=\"quality-failures-{suite['name'].lower().replace(' ','-')}-anchor\"></a>", f"<details><summary id=\"quality-failures-{suite['name'].lower().replace(' ','-')}\"><a href=\"#quality-failures-{suite['name'].lower().replace(' ','-')}-anchor\">❌ {suite['name']} failures ({len(failures)})</a></summary>", ""]
+        lines += ["", f"<details><summary>❌ {suite['name']} failures ({len(failures)})</summary>", ""]
         for failure in failures:
             message = str(failure.get("message", "")).replace("\n", " ").strip()
             suffix = f" — {message}" if message else ""
@@ -462,7 +462,7 @@ def coverage_section():
                     details.append(f"- `{filename}`: {file_covered}/{file_total} covered; missing lines {', '.join(map(str, missing[:20]))}")
                 else:
                     details.append(f"- `{filename}`: {file_covered}/{file_total} covered")
-            out += ["", '<details><summary id="quality-patch-coverage-details">Patch coverage details</summary>', ""] + details + ["", "</details>"]
+            out += ["", "<details><summary>Patch coverage details</summary>", ""] + details + ["", "</details>"]
         else:
             out += ["", "_Patch coverage could not be computed for this run._"]
     else:

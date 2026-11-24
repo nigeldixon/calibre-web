@@ -258,8 +258,7 @@ if warnings:
     details = [f'- {v} × {k}' for k, v in (scope.get('warning_detail') or {}).items()]
     lines += [
         '',
-        '<a id="quality-semgrep-warnings-anchor"></a>',
-        f'<details><summary id="quality-semgrep-warnings">⚠️ Analysis warnings ({warnings})</summary>',
+        f'<details><summary>⚠️ Analysis warnings ({warnings})</summary>',
         '',
     ] + details + [
         '',

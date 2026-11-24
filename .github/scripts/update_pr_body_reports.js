@@ -4,7 +4,6 @@ const SECTION_START = C.sectionStart;
 const SECTION_END = C.sectionEnd;
 const SECTION_HEADER = C.sectionHeader;
 const LEGACY_SECTION_HEADER = C.legacySectionHeader;
-const SECTION_FOOTER = '\n&nbsp;\n';
 const SUMMARY_MARKER = C.summaryMarker;
 const REPORT_HEADINGS = C.headings;
 const ISSUES_LABEL = C.labels.issues;
@@ -195,12 +194,11 @@ function canonicalizeSection(body) {
     // stale report body. Keep the PR's own text before that header only.
     const headerAt = qualityHeaderIndex(body);
     const prefix = headerAt === -1 ? body : body.slice(0, headerAt);
-    return stripQualityMarkers(prefix).replace(/\s*$/, '') + SECTION_HEADER + SECTION_START + SECTION_FOOTER + SECTION_END + '\n';
+    return stripQualityMarkers(prefix).replace(/\s*$/, '') + SECTION_HEADER + SECTION_START + '\n' + SECTION_END + '\n';
   }
   const cleanedBody = stripPriorSections(body, originalBounds.start);
   const { start, end } = sectionBounds(cleanedBody);
-  let section = dedupeReportMarkers(cleanedBody.slice(start + SECTION_START.length, end));
-  section = section.replace(/\n&nbsp;\s*$/, '').replace(/\s*$/, '') + SECTION_FOOTER;
+  const section = dedupeReportMarkers(cleanedBody.slice(start + SECTION_START.length, end));
   const before = stripQualityMarkers(cleanedBody.slice(0, start)).replace(/\s*$/, '');
   const after = stripQualityMarkers(cleanedBody.slice(end + SECTION_END.length)).replace(/^\s*/, '');
   return before + SECTION_HEADER + SECTION_START + section + SECTION_END + (after ? '\n' + after : '\n');
@@ -237,9 +235,8 @@ function upsertReport(body, marker, content) {
     section = section.replace(/\s*$/, '') + '\n\n' + content + '\n';
   }
 
-  // Normalize spacing before section end marker; keep a footer so the last
-  // details block is not at the very bottom of the PR body (GH app scroll jump).
-  section = section.replace(/\n&nbsp;\s*$/, '').replace(/\s*$/, '') + SECTION_FOOTER;
+  // Normalize spacing before section end marker
+  section = section.replace(/\s*$/, '\n');
   return before + section + after;
 }
 
