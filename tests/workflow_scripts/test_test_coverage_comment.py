@@ -330,7 +330,7 @@ def test_coverage_summary_line_uses_only_the_most_severe_marker(
     )
 
 
-def test_workflow_changed_files_covers_workflow_scripts_and_tests(
+def test_workflow_changed_files_uses_workflow_definition_paths_only(
     load_quality_script, tmp_path, write_json
 ):
     script = load_helpers(load_quality_script, tmp_path)
@@ -342,6 +342,7 @@ def test_workflow_changed_files_covers_workflow_scripts_and_tests(
     changed = write_json(
         tmp_path / "changed-files.json",
         [
+            "not-a-file-entry",
             {"filename": "cps/a.py", "status": "modified"},
             {"filename": "README.md", "status": "modified"},
             {
@@ -357,15 +358,10 @@ def test_workflow_changed_files_covers_workflow_scripts_and_tests(
         ],
     )
 
-    assert workflow_changed_files(str(changed)) == [
-        ".github/scripts/new.py",
-        ".github/workflows/test.yml",
-        "tests/workflow_scripts/js/report_body.test.js",
-        "tests/workflow_scripts/removed.py",
-    ]
+    assert workflow_changed_files(str(changed)) == [".github/workflows/test.yml"]
 
 
-def test_workflow_coverage_collapses_when_no_workflow_files_changed(
+def test_workflow_coverage_collapses_without_workflow_definition_changes(
     tmp_path, run_quality_script, write_json
 ):
     (tmp_path / "coverage-workflow-scripts-term.txt").write_text(
@@ -373,7 +369,11 @@ def test_workflow_coverage_collapses_when_no_workflow_files_changed(
     )
     changed = write_json(
         tmp_path / "changed-files.json",
-        [{"filename": "cps/a.py", "status": "modified", "patch": "@@ -1 +1 @@\n+edit"}],
+        [
+            {"filename": "cps/a.py", "status": "modified", "patch": "@@ -1 +1 @@\n+edit"},
+            {"filename": ".github/scripts/test_coverage_comment.py", "status": "modified"},
+            {"filename": "tests/workflow_scripts/test_test_coverage_comment.py", "status": "modified"},
+        ],
     )
 
     proc = run_quality_script(
@@ -400,11 +400,10 @@ def test_workflow_coverage_collapses_when_no_workflow_files_changed(
     "filename",
     [
         ".github/workflows/test.yml",
-        ".github/scripts/test_coverage_comment.py",
-        "tests/workflow_scripts/test_test_coverage_comment.py",
+        ".github/workflows/quality_reports.yml",
     ],
 )
-def test_workflow_coverage_stays_visible_when_workflow_files_changed(
+def test_workflow_coverage_stays_visible_when_workflow_definitions_changed(
     filename, tmp_path, run_quality_script, write_json
 ):
     (tmp_path / "coverage-workflow-scripts-term.txt").write_text(

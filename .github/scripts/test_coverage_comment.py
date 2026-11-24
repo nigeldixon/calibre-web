@@ -32,11 +32,7 @@ DEFAULT_SUITES = [
     ("functional_tests", "HTTP functional"),
 ]
 
-WORKFLOW_CHANGE_PREFIXES = (
-    ".github/workflows/",
-    ".github/scripts/",
-    "tests/workflow_scripts/",
-)
+WORKFLOW_CHANGE_PREFIXES = (".github/workflows/",)
 
 
 def pct_to_color(p):
@@ -311,8 +307,9 @@ def coverage_extras():
 
     workflow_files = workflow_changed_files(changed_json_path)
     # Unknown changed-file data stays expanded: it would be unsafe to hide
-    # coverage for a workflow change we cannot rule out. A known clean list
-    # collapses the line so unrelated PRs only see it on demand.
+    # coverage for a workflow change we cannot rule out. A known list without
+    # workflow-definition changes collapses the line so unrelated PRs only
+    # see it on demand.
     if workflow_files == []:
         return [
             "",
