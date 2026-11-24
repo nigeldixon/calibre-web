@@ -18,7 +18,7 @@
 #  along with this program. If not, see <http://www.gnu.org/licenses/>.
 
 import base64
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import os
 import uuid
 import zipfile
@@ -227,15 +227,11 @@ def HandleSyncRequest():
             helper.convert_book_format(book.Books.id, config.get_book_path(), 'EPUB', 'KEPUB', current_user.name)
 
         kobo_reading_state = get_or_create_reading_state(book.Books.id)
+        metadata = get_metadata(book.Books)
         entitlement = {
             "BookEntitlement": create_book_entitlement(book.Books, archived=(book.is_archived==True)),
-            "BookMetadata": get_metadata(book.Books),
+            "BookMetadata": metadata,
         }
-
-        if kobo_reading_state.last_modified > sync_token.reading_state_last_modified:
-            entitlement["ReadingState"] = get_kobo_reading_state_response(book.Books, kobo_reading_state)
-            new_reading_state_last_modified = max(new_reading_state_last_modified, kobo_reading_state.last_modified)
-            reading_states_in_new_entitlements.append(book.Books.id)
 
         ts_created = book.Books.timestamp.replace(tzinfo=None)
 
@@ -244,10 +240,36 @@ def HandleSyncRequest():
         except AttributeError:
             pass
 
-        if ts_created > sync_token.books_last_created:
-            sync_results.append({"NewEntitlement": entitlement})
+        is_new = ts_created > sync_token.books_last_created
+        archive_timestamp = getattr(book, "last_modified", None)
+        archive_changed = bool(
+            archive_timestamp and _naive_utc(archive_timestamp) > sync_token.books_last_modified
+        )
+        binary_changed = book_binary_changed_with_edit(book.Books)
+        metadata_only = not is_new and not archive_changed and not binary_changed
+        reading_state_changed = kobo_reading_state.last_modified > sync_token.reading_state_last_modified
+
+        if metadata_only:
+            # ChangedEntitlement invalidates the downloaded file on the device
+            # without updating its metadata. A metadata-only edit must use
+            # ChangedProductMetadata instead, so the book stays downloaded.
+            sync_results.append({
+                "ChangedProductMetadata": {"BookMetadata": _metadata_for_changed_product(metadata)}
+            })
+            log.debug("Kobo: metadata-only update for book id %s", book.Books.id)
         else:
-            sync_results.append({"ChangedEntitlement": entitlement})
+            if reading_state_changed:
+                entitlement["ReadingState"] = get_kobo_reading_state_response(book.Books, kobo_reading_state)
+                new_reading_state_last_modified = max(new_reading_state_last_modified, kobo_reading_state.last_modified)
+                reading_states_in_new_entitlements.append(book.Books.id)
+
+            if is_new:
+                sync_results.append({"NewEntitlement": entitlement})
+            else:
+                sync_results.append({"ChangedEntitlement": entitlement})
+
+        # Reading state for a metadata-only update is emitted separately below;
+        # a ChangedProductMetadata command must not carry it.
 
         effective_last_modified = book.Books.last_modified or book.Books.timestamp
         if effective_last_modified:
@@ -371,13 +393,89 @@ def HandleMetadataRequest(book_uuid):
     return response
 
 
+def _book_format_path(book, book_data):
+    return os.path.join(config.get_book_path(), book.path,
+                        book_data.name + "." + book_data.format.lower())
+
+
 def get_book_format_binary_version(book, book_data):
     try:
-        path = os.path.join(config.get_book_path(), book.path, book_data.name + "." + book_data.format.lower())
-        st = os.stat(path)
+        st = os.stat(_book_format_path(book, book_data))
         return "{}-{}".format(st.st_mtime_ns, st.st_size)
     except Exception:
         return str(book_data.uncompressed_size or 0)
+
+
+def _naive_utc(timestamp):
+    if timestamp is None or timestamp.tzinfo is None:
+        return timestamp
+    return timestamp.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def get_book_binary_change_time(book):
+    """Return when a Kobo-readable book file last changed, or None if unknown."""
+    formats = [data for data in (getattr(book, "data", None) or [])
+               if data.format in KOBO_FORMATS]
+    candidates = [data for data in formats if data.format == "KEPUB"] or formats
+    latest = None
+    for book_data in candidates:
+        try:
+            st = os.stat(_book_format_path(book, book_data))
+        except (OSError, TypeError, AttributeError):
+            # No reliable file evidence: the caller must fail closed.
+            return None
+        changed = datetime.fromtimestamp(st.st_mtime, timezone.utc).replace(tzinfo=None)
+        latest = changed if latest is None else max(latest, changed)
+    return latest
+
+
+def book_binary_changed_since(book, sync_timestamp):
+    binary_change = get_book_binary_change_time(book)
+    if binary_change is None:
+        return True
+    return binary_change > _naive_utc(sync_timestamp)
+
+
+def book_binary_changed_with_edit(book):
+    """Did the edit that stamped ``last_modified`` also rewrite the book file?"""
+    binary_change = get_book_binary_change_time(book)
+    effective_last_modified = _naive_utc(book.last_modified or book.timestamp)
+    if binary_change is None or effective_last_modified is None:
+        return True
+    # File writes and the last_modified stamp happen in the same transaction,
+    # so the file mtime can be a moment before the database timestamp.
+    return binary_change >= effective_last_modified - timedelta(seconds=5)
+
+
+def get_cover_image_id(book):
+    book_uuid = str(book.uuid)
+    if getattr(config, "config_use_google_drive", False):
+        return book_uuid
+    try:
+        cover_path = os.path.join(config.get_book_path(), book.path, "cover.jpg")
+        st = os.stat(cover_path)
+        return "{}__cover{}-{}".format(book_uuid, st.st_mtime_ns, st.st_size)
+    except (OSError, TypeError, AttributeError):
+        return book_uuid
+
+
+def normalize_cover_image_id(cover_uuid):
+    """Strip the cache-busting suffix before looking up a local cover."""
+    if "__cover" not in cover_uuid:
+        return cover_uuid
+    return cover_uuid.rsplit("__cover", 1)[0]
+
+
+def _metadata_for_changed_product(metadata):
+    """Build the payload nickel expects for a ChangedProductMetadata command."""
+    changed = dict(metadata)
+    roles = changed.get("ContributorRoles")
+    if roles:
+        changed["ContributorRoles"] = [
+            dict(role, Role="Author") if isinstance(role, dict) else role
+            for role in roles
+        ]
+    return changed
 
 
 def get_download_url_for_book(book_id, book_format, version=None):
@@ -507,7 +605,7 @@ def get_metadata(book):
     metadata = {
         "Categories": ["00000000-0000-0000-0000-000000000001", ],
         # "Contributors": get_author(book),
-        "CoverImageId": book_uuid,
+        "CoverImageId": get_cover_image_id(book),
         "CrossRevisionId": book_uuid,
         "CurrentDisplayPrice": {"CurrencyCode": "USD", "TotalAmount": 0},
         "CurrentLoveDisplayPrice": {"TotalAmount": 0},
@@ -970,7 +1068,9 @@ def HandleCoverImageRequest(book_uuid, width, height, Quality, isGreyscale):
     except ValueError:
         log.error("Requested height %s of book %s is invalid" % (book_uuid, height))
         resolution = COVER_THUMBNAIL_SMALL
-    book_cover = helper.get_book_cover_with_uuid(book_uuid, resolution=resolution)
+    book_cover = helper.get_book_cover_with_uuid(
+        normalize_cover_image_id(book_uuid), resolution=resolution
+    )
     if book_cover:
         log.debug("Serving local cover image of book %s" % book_uuid)
         return book_cover
