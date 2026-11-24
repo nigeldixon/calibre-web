@@ -357,7 +357,7 @@ def test_trusted_path_filters_findings_and_reports_exec_errors(tmp_path, run_qua
     assert "| ⚠️ | 2 | 1 | 1 | 0 |" in out
     assert "**Whole-solution issues:** 3 · **In changed files:** 2" in out
     assert "**Analysis errors:** 1 · **Analysis warnings:** 1" in out
-    assert "<details><summary id="quality-semgrep-warnings"><a href="#quality-semgrep-warnings-anchor">⚠️ Analysis warnings (1)</a></summary>" in out
+    assert "<details><summary id="quality-semgrep-warnings">⚠️ Analysis warnings (1)</summary>" in out
     assert "- 1 × W1" in out
     assert "❌ Semgrep scan failed (exit 0, 1 error-level notification(s))" in out
     assert "**Full analysis:** [Workflow run](https://example.test/run/1)" in out

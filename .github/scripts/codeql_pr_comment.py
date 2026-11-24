@@ -350,12 +350,12 @@ lines += [
 ]
 
 if error_details:
-    lines += ["", '<a id="quality-codeql-errors-anchor"></a>', f'<details><summary id="quality-codeql-errors"><a href="#quality-codeql-errors-anchor">❌ Analysis errors ({analysis_errors})</a></summary>', ""]
+    lines += ["", '<a id="quality-codeql-errors-anchor"></a>', f'<details><summary id="quality-codeql-errors">❌ Analysis errors ({analysis_errors})</summary>', ""]
     lines += error_details
     lines += ["", "</details>"]
 
 if warning_details:
-    lines += ["", '<a id="quality-codeql-warnings-anchor"></a>', f'<details><summary id="quality-codeql-warnings"><a href="#quality-codeql-warnings-anchor">⚠️ Analysis warnings ({analysis_warnings})</a></summary>', ""]
+    lines += ["", '<a id="quality-codeql-warnings-anchor"></a>', f'<details><summary id="quality-codeql-warnings">⚠️ Analysis warnings ({analysis_warnings})</summary>', ""]
     lines += warning_details
     lines += ["", "</details>"]
 
