@@ -367,16 +367,19 @@ def delete_book_file(book, calibrepath, book_format=None):
         else:
             if os.path.isdir(path):
                 try:
-                    for root, folders, files in os.walk(path):
+                    for root, folders, files in os.walk(path, topdown=False):
                         for f in files:
                             os.unlink(os.path.join(root, f))
-                        if len(folders):
-                            log.warning("Deleting book {} failed, path {} has subfolders: {}".format(book.id,
-                                        book.path, folders))
-                            return True, _("Deleting bookfolder for book %(id)s failed, path has subfolders: %(path)s",
-                                           id=book.id,
-                                           path=book.path)
-                    shutil.rmtree(path)
+                        for d in folders:
+                            try:
+                                os.rmdir(os.path.join(root, d))
+                            except OSError:
+                                pass
+                    try:
+                        shutil.rmtree(path)
+                    except OSError:
+                        if os.path.exists(path):
+                            raise
                 except (IOError, OSError) as ex:
                     log.error("Deleting book %s failed: %s", book.id, ex)
                     return False, _("Deleting book %(id)s failed: %(message)s", id=book.id, message=ex)
@@ -551,13 +554,53 @@ def move_files_on_change(calibre_path, new_author_dir, new_titledir, localbook, 
                 shutil.move(path, new_path)
             else:  # path is valid copy only files to new location (merge)
                 log.info("Moving title: %s into existing: %s", path, new_path)
+                new_path_real = os.path.realpath(new_path)
                 # Take all files and subfolder from old path (strange command)
                 for dir_name, __, file_list in os.walk(path):
+                    rel_dir = dir_name[len(path):].lstrip(os.sep)
+                    if os.path.altsep:
+                        rel_dir = rel_dir.lstrip(os.path.altsep)
+                    if rel_dir:
+                        target_dir_real = os.path.realpath(os.path.join(new_path_real, rel_dir))
+                        try:
+                            if os.path.commonpath([new_path_real, target_dir_real]) != new_path_real:
+                                log.error("Skipping unsafe merge directory outside destination: %s", target_dir_real)
+                                continue
+                        except ValueError:
+                            log.error("Skipping unsafe merge directory: %s", target_dir_real)
+                            continue
+                        if not target_dir_real.startswith(new_path_real + os.sep):
+                            log.error("Skipping unsafe merge directory outside destination: %s", target_dir_real)
+                            continue
+                        os.makedirs(target_dir_real, exist_ok=True)
+                    else:
+                        target_dir_real = new_path_real
                     for file in file_list:
-                        shutil.move(os.path.join(dir_name, file), os.path.join(new_path + dir_name[len(path):], file))
-            if not os.listdir(os.path.split(path)[0]):
+                        src_file = os.path.join(dir_name, file)
+                        safe_file = os.path.basename(file)
+                        dest_file_real = os.path.realpath(os.path.join(target_dir_real, safe_file))
+                        try:
+                            if os.path.commonpath([new_path_real, dest_file_real]) != new_path_real:
+                                log.error("Skipping unsafe merge file outside destination: %s", dest_file_real)
+                                continue
+                        except ValueError:
+                            log.error("Skipping unsafe merge file: %s", dest_file_real)
+                            continue
+                        if not dest_file_real.startswith(new_path_real + os.sep):
+                            log.error("Skipping unsafe merge file outside destination: %s", dest_file_real)
+                            continue
+                        shutil.move(src_file, dest_file_real)
+                # remove remaining empty directories from old path (including history subdirs)
+                for dir_name, dir_list, file_list in os.walk(path, topdown=False):
+                    try:
+                        os.rmdir(dir_name)
+                    except OSError:
+                        pass
+            # if source book dir was fully removed/moved, try to remove empty author dir
+            if not os.path.exists(path):
                 try:
-                    shutil.rmtree(os.path.split(path)[0])
+                    if not os.listdir(os.path.split(path)[0]):
+                        shutil.rmtree(os.path.split(path)[0])
                 except (IOError, OSError) as ex:
                     log.error("Deleting authorpath for book %s failed: %s", localbook.id, ex)
         # change location in database to new author/title path

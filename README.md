@@ -108,7 +108,7 @@ Calibre-Web is a web app that offers a clean and intuitive interface for browsin
    ```
    Move it out of the Calibre-Web folder to avoid overwriting during updates.
 4. **Configure Calibre Database**: In the admin interface, set the `Location of Calibre database` to the path of the folder containing your Calibre library (where `metadata.db` is located) and click "Save".
-5. **Google Drive Integration**: For hosting your Calibre library on Google Drive, refer to the [Google Drive integration guide](https://github.com/janeczku/calibre-web/wiki/G-Drive-Setup#using-google-drive-integration).
+5. **Google Drive Integration**: For hosting your Calibre library on Google Drive, refer to the [Google Drive integration guide](https://github.com/janeczku/calibre-web/wiki/G-Drive-Setup#using-google-drive-integration). **Note:** The built-in cover editor (crop, adjustments, and saved cover versions) is currently not available when using Google Drive integration; standard cover upload/replace remains available.
 6. **Admin Configuration**: Configure your instance via the admin page, referring to the [Basic Configuration](https://github.com/janeczku/calibre-web/wiki/Configuration#basic-configuration) and [UI Configuration](https://github.com/janeczku/calibre-web/wiki/Configuration#ui-configuration) guides.
 
 ## Requirements
