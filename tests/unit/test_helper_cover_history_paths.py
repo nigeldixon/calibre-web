@@ -291,7 +291,7 @@ def test_move_files_on_change_merge_skips_dir_when_realpath_escapes_prefix(tmp_p
 
     def fake_realpath(path):
         p = os.fspath(path)
-        if os.path.normpath(p).endswith(os.path.normpath(os.path.join("Book (1)", "sub"))):
+        if os.path.normpath(p).endswith(os.path.normpath(os.path.join("Book (2)", "sub"))):
             return real_realpath(str(dst))
         return real_realpath(path)
 

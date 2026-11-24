@@ -27,13 +27,17 @@ def main():
     ap.add_argument("--settings", default=str(ROOT / "app.db"), help="Base settings db to copy")
     args = ap.parse_args()
 
-    # Rebuild host from an allowlisted character set to avoid passing
-    # tainted CLI data into subprocess arguments.
-    raw_host = args.host
-    if not re.fullmatch(r"[A-Za-z0-9._:-]+", raw_host):
-        print(f"Invalid host: {raw_host!r}", file=sys.stderr)
+    # Map to a fixed literal to break taint flow for subprocess args.
+    allowed_hosts = {
+        "127.0.0.1": "127.0.0.1",
+        "localhost": "localhost",
+        "0.0.0.0": "0.0.0.0",
+        "::1": "::1",
+    }
+    host = allowed_hosts.get(args.host)
+    if host is None:
+        print(f"Invalid host: {args.host!r}; allowed: {', '.join(allowed_hosts)}", file=sys.stderr)
         return 2
-    host = "".join(c for c in raw_host if c in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._:-")
 
     if not FIXTURE_LIBRARY.exists():
         print(f"Fixture library not found: {FIXTURE_LIBRARY}", file=sys.stderr)
