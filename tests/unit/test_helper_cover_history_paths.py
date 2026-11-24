@@ -335,3 +335,100 @@ def test_move_files_on_change_merge_skips_file_when_realpath_escapes_prefix(tmp_
     )
     assert result is False
     assert not (dst / "file.txt").exists()
+
+
+def test_move_files_on_change_merge_handles_altsep_rel_dir(tmp_path, monkeypatch):
+    from cps import helper
+
+    calibre = tmp_path / "library"
+    src = calibre / "Author" / "Book (1)"
+    dst = calibre / "Author" / "Book (2)"
+    (src / "sub").mkdir(parents=True)
+    (src / "sub" / "file.txt").write_bytes(b"data")
+    dst.mkdir(parents=True)
+
+    localbook = SimpleNamespace(id=1, path="Author/Book (1)")
+    monkeypatch.setattr(helper, "_", lambda s, *a, **k: s)
+    monkeypatch.setattr(helper.log, "info", lambda *a, **k: None)
+    monkeypatch.setattr(helper.log, "debug", lambda *a, **k: None)
+    monkeypatch.setattr(helper.log, "error", lambda *a, **k: None)
+    # Exercise altsep stripping branch on platforms where altsep is None.
+    monkeypatch.setattr(helper.os.path, "altsep", os.sep)
+
+    result = helper.move_files_on_change(
+        str(calibre), "Author", "Book (2)", localbook, None, None, str(src)
+    )
+    assert result is False
+    assert (dst / "sub" / "file.txt").read_bytes() == b"data"
+
+
+def test_move_files_on_change_merge_skips_dir_when_commonpath_differs(tmp_path, monkeypatch):
+    from cps import helper
+
+    calibre = tmp_path / "library"
+    src = calibre / "Author" / "Book (1)"
+    dst = calibre / "Author" / "Book (2)"
+    (src / "sub").mkdir(parents=True)
+    (src / "sub" / "file.txt").write_bytes(b"data")
+    dst.mkdir(parents=True)
+
+    localbook = SimpleNamespace(id=1, path="Author/Book (1)")
+    monkeypatch.setattr(helper, "_", lambda s, *a, **k: s)
+    monkeypatch.setattr(helper.log, "info", lambda *a, **k: None)
+    monkeypatch.setattr(helper.log, "debug", lambda *a, **k: None)
+    monkeypatch.setattr(helper.log, "error", lambda *a, **k: None)
+
+    real_commonpath = os.path.commonpath
+
+    def fake_commonpath(paths):
+        try:
+            p2 = os.fspath(paths[1])
+        except Exception:
+            p2 = ""
+        if os.path.basename(os.path.normpath(p2)) == "sub":
+            return os.path.realpath(str(calibre))
+        return real_commonpath(paths)
+
+    monkeypatch.setattr(helper.os.path, "commonpath", fake_commonpath)
+
+    result = helper.move_files_on_change(
+        str(calibre), "Author", "Book (2)", localbook, None, None, str(src)
+    )
+    assert result is False
+    assert not (dst / "sub" / "file.txt").exists()
+
+
+def test_move_files_on_change_merge_skips_file_when_commonpath_differs(tmp_path, monkeypatch):
+    from cps import helper
+
+    calibre = tmp_path / "library"
+    src = calibre / "Author" / "Book (1)"
+    dst = calibre / "Author" / "Book (2)"
+    src.mkdir(parents=True)
+    (src / "file.txt").write_bytes(b"data")
+    dst.mkdir(parents=True)
+
+    localbook = SimpleNamespace(id=1, path="Author/Book (1)")
+    monkeypatch.setattr(helper, "_", lambda s, *a, **k: s)
+    monkeypatch.setattr(helper.log, "info", lambda *a, **k: None)
+    monkeypatch.setattr(helper.log, "debug", lambda *a, **k: None)
+    monkeypatch.setattr(helper.log, "error", lambda *a, **k: None)
+
+    real_commonpath = os.path.commonpath
+
+    def fake_commonpath(paths):
+        try:
+            p2 = os.fspath(paths[1])
+        except Exception:
+            p2 = ""
+        if os.path.basename(os.path.normpath(p2)) == "file.txt":
+            return os.path.realpath(str(calibre))
+        return real_commonpath(paths)
+
+    monkeypatch.setattr(helper.os.path, "commonpath", fake_commonpath)
+
+    result = helper.move_files_on_change(
+        str(calibre), "Author", "Book (2)", localbook, None, None, str(src)
+    )
+    assert result is False
+    assert not (dst / "file.txt").exists()
