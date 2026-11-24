@@ -382,7 +382,7 @@ def failure_details(suites):
         failures = suite["failures"]
         if not failures:
             continue
-        lines += ["", f"<a id=\"quality-failures-{suite['name'].lower().replace(' ','-')}-anchor\"></a>", f"<details><summary id=\"quality-failures-{suite['name'].lower().replace(' ','-')}\">❌ {suite['name']} failures ({len(failures)})</summary>", ""]
+        lines += ["", f"<a id=\"quality-failures-{suite['name'].lower().replace(' ','-')}-anchor\"></a>", f"<details><summary id=\"quality-failures-{suite['name'].lower().replace(' ','-')}\"><a href=\"#quality-failures-{suite['name'].lower().replace(' ','-')}-anchor\">❌ {suite['name']} failures ({len(failures)})</a></summary>", ""]
         for failure in failures:
             message = str(failure.get("message", "")).replace("\n", " ").strip()
             suffix = f" — {message}" if message else ""

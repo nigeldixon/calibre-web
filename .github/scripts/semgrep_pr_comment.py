@@ -259,7 +259,7 @@ if warnings:
     lines += [
         '',
         '<a id="quality-semgrep-warnings-anchor"></a>',
-        f'<details><summary id="quality-semgrep-warnings">⚠️ Analysis warnings ({warnings})</summary>',
+        f'<details><summary id="quality-semgrep-warnings"><a href="#quality-semgrep-warnings-anchor">⚠️ Analysis warnings ({warnings})</a></summary>',
         '',
     ] + details + [
         '',
