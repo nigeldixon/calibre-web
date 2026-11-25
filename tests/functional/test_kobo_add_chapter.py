@@ -6,9 +6,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from flask import Flask, g
 from flask_babel import Babel
 from lxml import etree
+from sqlalchemy.exc import IntegrityError
 
 from cps import kobo, kobo_auth, web
 from cps.kobo import kobo as kobo_blueprint
@@ -194,6 +196,9 @@ def _install_fakes(monkeypatch, store, library, book, db_state):
     def commit():
         db_state["commits"] += 1
 
+    def rollback():
+        db_state["rollbacks"] += 1
+
     def set_metadata_dirty(book_id):
         db_state["dirty"].append(book_id)
 
@@ -202,7 +207,7 @@ def _install_fakes(monkeypatch, store, library, book, db_state):
         get_book_by_uuid=lambda book_uuid: book,
         session=SimpleNamespace(
             commit=commit,
-            rollback=lambda: None,
+            rollback=rollback,
             query=lambda *args, **kwargs: SimpleNamespace(
                 join=lambda *join_args, **join_kwargs: empty_join),
         ),
@@ -229,7 +234,7 @@ def _prepare(monkeypatch, tmp_path):
             name="book", format="EPUB", uncompressed_size=999)],
     )
     store = TokenStore()
-    db_state = {"commits": 0, "dirty": []}
+    db_state = {"commits": 0, "rollbacks": 0, "dirty": []}
     _install_fakes(monkeypatch, store, library, book, db_state)
     application = _make_app()
     with application.test_request_context("/kobo_auth/generate_auth_token/7"):
@@ -355,3 +360,158 @@ def test_chapter_post_rejects_unknown_location(monkeypatch, tmp_path):
     with zipfile.ZipFile(path) as epub:
         original = epub.read("OEBPS/toc.ncx").decode("utf-8")
     assert "Bad" not in original
+
+
+def test_chapter_post_json_reports_safe_location_error(monkeypatch, tmp_path):
+    application, token, _, _, _ = _prepare(monkeypatch, tmp_path)
+    client = application.test_client()
+
+    response = client.post(
+        f"/kobo/{token}/chapters/chapter-book-uuid",
+        headers={"Accept": "application/json"},
+        data={"name": "Bad", "location_custom": "../secret.xhtml"},
+    )
+
+    assert response.status_code == 400
+    payload = json.loads(response.get_data(as_text=True))
+    assert payload["success"] is False
+    assert payload["error"] == "That location is not a valid relative chapter path."
+
+
+def test_chapter_form_get_can_return_json(monkeypatch, tmp_path):
+    application, token, _, _, _ = _prepare(monkeypatch, tmp_path)
+    client = application.test_client()
+
+    response = client.get(
+        f"/kobo/{token}/chapters/chapter-book-uuid"
+        "?name=Page+3&location=OEBPS%2Fchapter1.xhtml%23kobo.1.1",
+        headers={"Accept": "application/json"},
+    )
+
+    assert response.status_code == 200
+    payload = json.loads(response.get_data(as_text=True))
+    assert payload["success"] is True
+    assert payload["name"] == "Page 3"
+    assert payload["location"] == "chapter1.xhtml"
+    assert [item["value"] for item in payload["candidates"]] == ["chapter1.xhtml"]
+
+
+def test_chapter_form_get_keeps_invalid_prefill_for_editing(monkeypatch, tmp_path):
+    application, token, _, _, _ = _prepare(monkeypatch, tmp_path)
+    client = application.test_client()
+
+    response = client.get(
+        f"/kobo/{token}/chapters/chapter-book-uuid"
+        "?name=Page+3&location=..%2Fsecret.xhtml")
+
+    assert response.status_code == 200
+    body = response.get_data(as_text=True)
+    assert 'value="../secret.xhtml"' in body
+    assert '<option value="chapter1.xhtml" selected>' not in body
+
+
+@pytest.mark.parametrize("data, error", [
+    ({"name": "", "location": "chapter1.xhtml"}, "Enter a chapter name"),
+    ({"name": "No location"}, "Choose or enter a chapter location."),
+    ({"name": "Ghost", "location": "chapter2.xhtml"},
+     "not a chapter in this book"),
+])
+def test_chapter_post_validates_form_input(monkeypatch, tmp_path, data, error):
+    application, token, _, _, db_state = _prepare(monkeypatch, tmp_path)
+    client = application.test_client()
+
+    response = client.post(
+        f"/kobo/{token}/chapters/chapter-book-uuid", data=data)
+
+    assert response.status_code == 400
+    assert error in response.get_data(as_text=True)
+    assert db_state["commits"] == 0
+
+
+def test_chapter_post_form_error_can_return_json(monkeypatch, tmp_path):
+    application, token, _, _, _ = _prepare(monkeypatch, tmp_path)
+    client = application.test_client()
+
+    response = client.post(
+        f"/kobo/{token}/chapters/chapter-book-uuid",
+        headers={"Accept": "application/json"},
+        data={"name": "", "location": "chapter1.xhtml"},
+    )
+
+    assert response.status_code == 400
+    payload = json.loads(response.get_data(as_text=True))
+    assert payload["success"] is False
+    assert payload["error"] == "Enter a chapter name (200 characters or fewer)."
+
+
+def test_chapter_form_reports_missing_book(monkeypatch, tmp_path):
+    application, token, _, _, _ = _prepare(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        kobo.calibre_db, "get_book_by_uuid", lambda book_uuid: None)
+    client = application.test_client()
+
+    response = client.get(f"/kobo/{token}/chapters/chapter-book-uuid")
+
+    assert response.status_code == 404
+    assert "Book not found in this library." in response.get_data(as_text=True)
+
+
+def test_chapter_form_reports_book_without_epub_format(monkeypatch, tmp_path):
+    application, token, _, book, _ = _prepare(monkeypatch, tmp_path)
+    book.data = []
+    client = application.test_client()
+
+    response = client.get(f"/kobo/{token}/chapters/chapter-book-uuid")
+
+    assert response.status_code == 400
+    assert "This book has no EPUB or KEPUB format." in response.get_data(as_text=True)
+
+
+def test_chapter_form_reports_unreadable_book(monkeypatch, tmp_path):
+    application, token, _, book, _ = _prepare(monkeypatch, tmp_path)
+    book.path = "Missing/Author"
+    client = application.test_client()
+
+    response = client.get(f"/kobo/{token}/chapters/chapter-book-uuid")
+
+    assert response.status_code == 400
+    assert "The book file could not be read." in response.get_data(as_text=True)
+
+
+def test_chapter_post_reports_rewrite_failure(monkeypatch, tmp_path):
+    application, token, _, _, db_state = _prepare(monkeypatch, tmp_path)
+
+    def fail_rewrite(path, name, target):
+        raise RuntimeError("zip failure")
+
+    monkeypatch.setattr(kobo.epub_chapters, "rewrite_epub_toc", fail_rewrite)
+    client = application.test_client()
+
+    response = client.post(
+        f"/kobo/{token}/chapters/chapter-book-uuid",
+        data={"name": "Page 1", "location": "chapter1.xhtml"},
+    )
+
+    assert response.status_code == 500
+    assert "The book could not be updated." in response.get_data(as_text=True)
+    assert db_state["commits"] == 0
+
+
+def test_chapter_post_reports_database_failure(monkeypatch, tmp_path):
+    application, token, _, _, db_state = _prepare(monkeypatch, tmp_path)
+
+    def fail_commit():
+        raise IntegrityError("UPDATE", {}, Exception("db failure"))
+
+    monkeypatch.setattr(kobo.calibre_db.session, "commit", fail_commit)
+    client = application.test_client()
+
+    response = client.post(
+        f"/kobo/{token}/chapters/chapter-book-uuid",
+        data={"name": "Page 1", "location": "chapter1.xhtml"},
+    )
+
+    assert response.status_code == 500
+    assert "the database could not be updated" in response.get_data(as_text=True)
+    assert db_state["rollbacks"] == 1
+    assert db_state["commits"] == 0
