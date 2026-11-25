@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% if ok %}Chapter saved{% else %}Chapter not saved{% endif %}</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: #f4f4f4;
+      color: #262626;
+      font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+      font-size: 16px;
+      line-height: 1.45;
+    }
+    body { padding: 14px; }
+    .shell {
+      max-width: 620px;
+      margin: 0 auto;
+      background: #fff;
+      border: 1px solid #cfcfcf;
+      border-radius: 4px;
+      box-shadow: 0 1px 2px rgba(0,0,0,.08);
+    }
+    .header {
+      padding: 14px 16px;
+      border-bottom: 1px solid #dedede;
+      background: #e9e9e9;
+      font-weight: 600;
+      font-size: 18px;
+    }
+    .content { padding: 16px; }
+    .message {
+      margin: 0 0 16px;
+      padding: 12px 14px;
+      background: #f2f7f2;
+      border-left: 3px solid #4a7a4a;
+    }
+    .message.error {
+      background: #fdeaea;
+      border-left-color: #a33;
+    }
+    dl { margin: 12px 0 0; }
+    dt { font-weight: 600; color: #444; margin-top: 8px; }
+    dd { margin: 2px 0 0; color: #222; word-break: break-all; }
+    .actions {
+      margin-top: 20px;
+      padding-top: 14px;
+      border-top: 1px solid #dedede;
+    }
+    a.button {
+      display: inline-block;
+      min-width: 130px;
+      min-height: 44px;
+      padding: 10px 18px;
+      border: 1px solid #555;
+      border-radius: 3px;
+      background: #f7f7f7;
+      color: #222;
+      font-weight: 600;
+      text-align: center;
+      text-decoration: none;
+      line-height: 24px;
+    }
+    a.button:active { background: #e6e6e6; }
+    .note { margin: 14px 0 0; color: #666; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <div class="header">{% if ok %}Chapter saved{% else %}Chapter not saved{% endif %}</div>
+    <div class="content">
+      <div class="message{% if not ok %} error{% endif %}">{{ message }}</div>
+
+      {% if ok %}
+        <dl>
+          <dt>Chapter</dt>
+          <dd>{{ name }}</dd>
+          <dt>Location</dt>
+          <dd>{{ location }}</dd>
+          <dt>Updated formats</dt>
+          <dd>{{ formats|join(', ') }}</dd>
+        </dl>
+        <p class="note">Close this window, then use Sync on the device to download the updated book.</p>
+      {% endif %}
+
+      <div class="actions">
+        <a class="button" href="{{ back_url }}">Back to form</a>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

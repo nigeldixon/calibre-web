@@ -35,17 +35,20 @@ from flask import (
     current_app,
     url_for,
     redirect,
+    render_template,
     abort
 )
 from .cw_login import current_user
 from werkzeug.datastructures import Headers
 from sqlalchemy import func
 from sqlalchemy.sql.expression import and_, or_
-from sqlalchemy.exc import StatementError
+from sqlalchemy.exc import IntegrityError, OperationalError, StatementError
+from sqlalchemy.orm.exc import StaleDataError
 
 from . import config, logger, kobo_auth, db, calibre_db, helper, shelf as shelf_lib, ub, csrf, kobo_sync_status
 from . import isoLanguages, limiter
 from .epub import get_epub_layout
+from . import epub_chapters
 from .constants import COVER_THUMBNAIL_SMALL, COVER_THUMBNAIL_MEDIUM, COVER_THUMBNAIL_LARGE, BASE_DIR
 from .helper import get_download_link
 from .services import SyncToken as SyncToken
@@ -396,6 +399,188 @@ def HandleMetadataRequest(book_uuid):
 def _book_format_path(book, book_data):
     return os.path.join(config.get_book_path(), book.path,
                         book_data.name + "." + book_data.format.lower())
+
+
+def _wants_chapter_json():
+    return 'application/json' in request.headers.get('Accept', '').lower()
+
+
+def _chapter_form_url(book_uuid):
+    return url_for(
+        "kobo.HandleChapterForm",
+        auth_token=get_auth_token(),
+        book_uuid=book_uuid,
+    )
+
+
+def _chapter_form_response(book_uuid, candidates, name, selected_location,
+                           custom_location, book_title="", error=None, status=200):
+    if _wants_chapter_json():
+        payload = {
+            "success": error is None,
+            "book_uuid": book_uuid,
+            "candidates": candidates,
+        }
+        if error:
+            payload["error"] = error
+        else:
+            payload["name"] = name
+            payload["location"] = selected_location or custom_location
+        return make_response(jsonify(payload), status)
+
+    return make_response(render_template(
+        "kobo_chapter_form.html",
+        book_uuid=book_uuid,
+        candidates=candidates,
+        name=name or "",
+        selected_location=selected_location or "",
+        custom_location=custom_location or "",
+        book_title=book_title,
+        error=error,
+        form_action=_chapter_form_url(book_uuid),
+    ), status)
+
+
+def _chapter_result_response(book_uuid, ok, message, status=200, **extra):
+    if _wants_chapter_json():
+        payload = {"success": ok, "message": message, "book_uuid": book_uuid}
+        payload.update(extra)
+        return make_response(jsonify(payload), status)
+
+    return make_response(render_template(
+        "kobo_chapter_result.html",
+        ok=ok,
+        message=message,
+        back_url=_chapter_form_url(book_uuid),
+        **extra
+    ), status)
+
+
+@csrf.exempt
+@kobo.route("/chapters/<book_uuid>", methods=["GET", "POST"])
+@requires_kobo_auth
+@download_required
+def HandleChapterForm(book_uuid):
+    """Show and process the Kobo chapter-mark form for one Calibre book."""
+    book = calibre_db.get_book_by_uuid(book_uuid)
+    if not book:
+        return _chapter_result_response(
+            book_uuid, False, "Book not found in this library.", 404)
+
+    book_formats = [
+        data for data in book.data if data.format in ("EPUB", "KEPUB")]
+    if not book_formats:
+        return _chapter_result_response(
+            book_uuid, False, "This book has no EPUB or KEPUB format.", 400)
+
+    reference_format = next(
+        (data for data in book_formats if data.format == "KEPUB"), book_formats[0])
+    reference_path = _book_format_path(book, reference_format)
+    try:
+        structure = epub_chapters.read_epub_structure(reference_path)
+    except Exception as exc:
+        log.error("Kobo chapter form: cannot inspect %s: %s", reference_path, exc)
+        return _chapter_result_response(
+            book_uuid, False, "The book file could not be read.", 400)
+
+    candidates = [{
+        "value": candidate["href"],
+        "label": candidate["label"],
+    } for candidate in structure.candidates]
+
+    if request.method == "GET":
+        name = request.args.get("name", "").strip()
+        raw_location = request.args.get("location", "").strip()
+        selected_location = ""
+        custom_location = ""
+        if raw_location:
+            try:
+                target = epub_chapters.normalize_location(
+                    raw_location, structure.opf_dir)
+                custom_location = epub_chapters.target_to_string(target)
+                target_path = epub_chapters.archive_target_path(
+                    structure.opf_dir, target)
+                if any(item["path"] == target_path
+                       for item in structure.candidates):
+                    selected_location = target.href
+            except epub_chapters.ChapterLocationError:
+                custom_location = raw_location[:1000]
+        return _chapter_form_response(
+            book_uuid, candidates, name, selected_location, custom_location,
+            book_title=book.title)
+
+    name = request.form.get("name", "").strip()
+    if not name or len(name) > 200:
+        return _chapter_form_response(
+            book_uuid, candidates, name[:200], "", "",
+            book_title=book.title,
+            error="Enter a chapter name (200 characters or fewer).",
+            status=400)
+
+    raw_location = (request.form.get("location_custom", "").strip()
+                    or request.form.get("location", "").strip())
+    if not raw_location or len(raw_location) > 1000:
+        return _chapter_form_response(
+            book_uuid, candidates, name, "", raw_location[:1000],
+            book_title=book.title,
+            error="Choose or enter a chapter location.",
+            status=400)
+
+    try:
+        target = epub_chapters.normalize_location(
+            raw_location, structure.opf_dir)
+    except epub_chapters.ChapterLocationError as exc:
+        return _chapter_form_response(
+            book_uuid, candidates, name, "", raw_location[:1000],
+            book_title=book.title, error=str(exc), status=400)
+
+    target_path = epub_chapters.archive_target_path(structure.opf_dir, target)
+    if not any(item["path"] == target_path for item in structure.candidates):
+        return _chapter_form_response(
+            book_uuid, candidates, name, "", raw_location[:1000],
+            book_title=book.title,
+            error="That location is not a chapter in this book.",
+            status=400)
+
+    rewritten = []
+    try:
+        for book_format in book_formats:
+            path = _book_format_path(book, book_format)
+            members = epub_chapters.rewrite_epub_toc(
+                path, name, target)
+            book_format.uncompressed_size = os.path.getsize(path)
+            rewritten.append({
+                "format": book_format.format,
+                "members": members,
+            })
+    except Exception as exc:
+        log.error("Kobo chapter save failed for %s: %s", book_uuid, exc)
+        return _chapter_result_response(
+            book_uuid, False, "The book could not be updated.", 500)
+
+    try:
+        book.last_modified = datetime.now(timezone.utc)
+        calibre_db.set_metadata_dirty(book.id)
+        calibre_db.session.commit()
+        calibre_db.create_functions(config)
+    except (IntegrityError, OperationalError, StaleDataError) as exc:
+        calibre_db.session.rollback()
+        log.error_or_exception("Database error while saving chapter: {}".format(exc))
+        return _chapter_result_response(
+            book_uuid, False, "The book file changed but the database could not be updated.", 500)
+
+    location = epub_chapters.target_to_string(target)
+    log.info(
+        "Kobo chapter %r added to book %s at %s", name, book_uuid, location)
+    return _chapter_result_response(
+        book_uuid,
+        True,
+        "Chapter mark saved. The book will update on your next device sync.",
+        name=name,
+        location=location,
+        formats=[item["format"] for item in rewritten],
+        rewritten=rewritten,
+    )
 
 
 def get_book_format_binary_version(book, book_data):
