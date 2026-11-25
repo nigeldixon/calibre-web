@@ -350,7 +350,7 @@ def test_chapter_post_rejects_unknown_location(monkeypatch, tmp_path):
     )
 
     assert response.status_code == 400
-    assert "leave the book root" in response.get_data(as_text=True)
+    assert "not a valid relative chapter path" in response.get_data(as_text=True)
     assert db_state["commits"] == 0
     with zipfile.ZipFile(path) as epub:
         original = epub.read("OEBPS/toc.ncx").decode("utf-8")

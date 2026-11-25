@@ -529,10 +529,12 @@ def HandleChapterForm(book_uuid):
     try:
         target = epub_chapters.normalize_location(
             raw_location, structure.opf_dir)
-    except epub_chapters.ChapterLocationError as exc:
+    except epub_chapters.ChapterLocationError:
         return _chapter_form_response(
             book_uuid, candidates, name, "", raw_location[:1000],
-            book_title=book.title, error=str(exc), status=400)
+            book_title=book.title,
+            error="That location is not a valid relative chapter path.",
+            status=400)
 
     target_path = epub_chapters.archive_target_path(structure.opf_dir, target)
     if not any(item["path"] == target_path for item in structure.candidates):
