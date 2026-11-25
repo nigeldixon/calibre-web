@@ -7,9 +7,11 @@
 #
 # Install to: /mnt/onboard/.adds/calibre-web-chapters/add_chapter.sh
 
-ADDON_DIR="/mnt/onboard/.adds/calibre-web-chapters"
-CONF="/mnt/onboard/.kobo/Kobo/Kobo eReader.conf"
-DB="/mnt/onboard/.kobo/KoboReader.sqlite"
+# The overrides exist only for host-side tests; on the device the standard
+# Kobo paths are used.
+ADDON_DIR="${KOBO_ADDON_DIR:-/mnt/onboard/.adds/calibre-web-chapters}"
+CONF="${KOBO_EREADER_CONF:-/mnt/onboard/.kobo/Kobo/Kobo eReader.conf}"
+DB="${KOBO_READER_DB:-/mnt/onboard/.kobo/KoboReader.sqlite}"
 LOG="$ADDON_DIR/last-error.log"
 DEBUG_LOG="$ADDON_DIR/debug.txt"
 

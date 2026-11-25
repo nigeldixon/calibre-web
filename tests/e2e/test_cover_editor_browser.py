@@ -7,7 +7,10 @@ import subprocess
 import sys
 import tempfile
 import time
+import xml.etree.ElementTree as ET
+import zipfile
 from pathlib import Path
+from urllib.parse import urlencode
 
 import pytest
 import requests
@@ -20,6 +23,7 @@ BOOK_ID = int(os.environ.get("CALIBRE_WEB_TEST_BOOK_ID", "2"))
 BOOK_REL_PATH = os.environ.get("CALIBRE_WEB_TEST_BOOK_REL", "Bram Stoker/Dracula (2)")
 USERNAME = os.environ.get("CALIBRE_WEB_USERNAME", "admin")
 PASSWORD = os.environ.get("CALIBRE_WEB_PASSWORD", "admin123")
+USER_ID = int(os.environ.get("CALIBRE_WEB_TEST_USER_ID", "1"))
 
 
 def _find_free_port():
@@ -105,6 +109,7 @@ def live_server(tmp_path_factory):
     try:
         yield {
             "base_url": base_url,
+            "library_dir": library_dir,
             "book_dir": library_dir / BOOK_REL_PATH,
             "cover_path": library_dir / BOOK_REL_PATH / "cover.jpg",
             "history_dir": library_dir / BOOK_REL_PATH / ".cover_history",
@@ -269,3 +274,124 @@ def test_restore_and_delete_history_version(page: Page, live_server):
     assert count_before_delete >= 1
     items.first.locator(".cover-history-delete").click()
     expect(items).to_have_count(count_before_delete - 1, timeout=15000)
+
+
+def kobo_token(page: Page, base_url: str) -> str:
+    page.goto(base_url + f"/kobo_auth/generate_auth_token/{USER_ID}")
+    expect(page.locator(".well")).to_be_visible(timeout=10000)
+    match = re.search(r"\b[0-9a-f]{32}\b", page.locator(".well").inner_text())
+    assert match, "Kobo auth token was not shown in the setup page"
+    return match.group(0)
+
+
+def book_uuid(live_server) -> str:
+    conn = sqlite3.connect(str(live_server["library_dir"] / "metadata.db"))
+    try:
+        row = conn.execute(
+            "SELECT uuid FROM books WHERE id = ?", (BOOK_ID,)).fetchone()
+    finally:
+        conn.close()
+    assert row and row[0], f"No UUID found for book {BOOK_ID}"
+    return row[0]
+
+
+def open_chapter_form(page: Page, base_url: str, token: str,
+                      uuid: str, **params) -> None:
+    url = f"{base_url}/kobo/{token}/chapters/{uuid}"
+    if params:
+        url += "?" + urlencode(params)
+    page.goto(url)
+    expect(page.locator(".header")).to_have_text(
+        "Add chapter mark", timeout=10000)
+
+
+def ncx_labels(epub_path: Path):
+    with zipfile.ZipFile(epub_path) as epub:
+        root = ET.fromstring(epub.read("OEBPS/toc.ncx"))
+    ns = {"ncx": "http://www.daisy.org/z3986/2005/ncx/"}
+    return [
+        element.text for element in root.findall(
+            ".//ncx:navPoint/ncx:navLabel/ncx:text", ns)
+    ]
+
+
+def test_kobo_chapter_form_saves_toc_entry(page: Page, live_server):
+    login(page, live_server["base_url"])
+    token = kobo_token(page, live_server["base_url"])
+    uuid = book_uuid(live_server)
+    epub_path = live_server["book_dir"] / "Dracula - Bram Stoker.epub"
+    original_epub = epub_path.read_bytes()
+    db_path = live_server["library_dir"] / "metadata.db"
+    conn = sqlite3.connect(str(db_path))
+    try:
+        original_modified = conn.execute(
+            "SELECT last_modified FROM books WHERE id = ?", (BOOK_ID,)
+        ).fetchone()[0]
+    finally:
+        conn.close()
+
+    try:
+        open_chapter_form(
+            page, live_server["base_url"], token, uuid,
+            name="Page 3", location="OEBPS/chapter1.xhtml#kobo.1.1")
+
+        expect(page.locator("#name")).to_have_value("Page 3")
+        expect(page.locator("#location")).to_have_value("chapter1.xhtml")
+        expect(page.locator("#location_custom")).to_have_value("chapter1.xhtml")
+
+        page.locator("#name").fill("Playwright chapter")
+        page.get_by_role("button", name="Save chapter").click()
+
+        expect(page.locator(".header")).to_have_text(
+            "Chapter saved", timeout=15000)
+        expect(page.locator(".message")).to_contain_text("Chapter mark saved")
+        expect(page.locator("dl")).to_contain_text("Playwright chapter")
+        expect(page.locator("dl")).to_contain_text("EPUB")
+
+        labels = ncx_labels(epub_path)
+        assert "Playwright chapter" in labels
+        assert labels[-1] == "Playwright chapter"
+
+        conn = sqlite3.connect(str(db_path))
+        try:
+            size = conn.execute(
+                "SELECT uncompressed_size FROM data "
+                "WHERE book = ? AND format = 'EPUB'", (BOOK_ID,)
+            ).fetchone()[0]
+            modified = conn.execute(
+                "SELECT last_modified FROM books WHERE id = ?", (BOOK_ID,)
+            ).fetchone()[0]
+            dirty = conn.execute(
+                "SELECT COUNT(*) FROM metadata_dirtied WHERE book = ?",
+                (BOOK_ID,),
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        assert size == epub_path.stat().st_size
+        assert modified != original_modified
+        assert dirty >= 1
+    finally:
+        epub_path.write_bytes(original_epub)
+
+
+def test_kobo_chapter_form_rejects_unsafe_location(page: Page, live_server):
+    login(page, live_server["base_url"])
+    token = kobo_token(page, live_server["base_url"])
+    uuid = book_uuid(live_server)
+    epub_path = live_server["book_dir"] / "Dracula - Bram Stoker.epub"
+    original_epub = epub_path.read_bytes()
+
+    try:
+        open_chapter_form(page, live_server["base_url"], token, uuid)
+        page.locator("#name").fill("Unsafe chapter")
+        page.locator("#location_custom").fill("../secret.xhtml")
+        page.get_by_role("button", name="Save chapter").click()
+
+        expect(page.locator(".header")).to_have_text(
+            "Add chapter mark", timeout=15000)
+        expect(page.locator(".error")).to_contain_text(
+            "not a valid relative chapter path")
+        expect(page.locator("#location_custom")).to_have_value("../secret.xhtml")
+        assert epub_path.read_bytes() == original_epub
+    finally:
+        epub_path.write_bytes(original_epub)

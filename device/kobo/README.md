@@ -68,6 +68,18 @@ cat /mnt/onboard/.adds/calibre-web-chapters/debug.txt
 
 Errors are appended to `last-error.log` in the same folder and also shown as a toast.
 
+## Host-side tests
+
+The launcher logic can be exercised on a development machine with stub `sqlite3` and `qndb` executables on `PATH`. Three environment variables redirect the device paths for those tests:
+
+| Variable | Device default |
+|---|---|
+| `KOBO_ADDON_DIR` | `/mnt/onboard/.adds/calibre-web-chapters` |
+| `KOBO_EREADER_CONF` | `/mnt/onboard/.kobo/Kobo/Kobo eReader.conf` |
+| `KOBO_READER_DB` | `/mnt/onboard/.kobo/KoboReader.sqlite` |
+
+These overrides are test-only; NickelMenu invokes the script without them, so the standard Kobo paths are used on the device. See `tests/unit/test_kobo_device_launcher.py` for the config-parsing, database, URL-building and error-path coverage.
+
 ## Fixed-book shortcut (optional)
 
 If you want a menu item pinned to one book (useful for repeat testing), add a line like this to any file in `.adds/nm/`:
