@@ -420,12 +420,14 @@ def _rewrite_zip(epub_path, replacements):
         raise
 
 
-def rewrite_epub_toc(epub_path, name, target):
+def rewrite_epub_toc(epub_path, name, target, structure=None):
     """Append ``name`` to every TOC representation found in ``epub_path``.
 
-    Returns the list of ZIP members that were rewritten.
+    ``structure`` can be supplied by a caller that has already inspected the
+    file, so validation and rewriting use the same manifest view. Returns the
+    list of ZIP members that were rewritten.
     """
-    structure = read_epub_structure(epub_path)
+    structure = structure if structure is not None else read_epub_structure(epub_path)
     replacements = {}
     target_path = archive_target_path(structure.opf_dir, target)
 

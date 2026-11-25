@@ -122,7 +122,7 @@ def _make_app():
     return application
 
 
-def _write_epub(path):
+def _write_epub(path, chapter_href="chapter1.xhtml"):
     path.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(path, "w") as epub:
         mimetype = zipfile.ZipInfo("mimetype")
@@ -147,17 +147,46 @@ def _write_epub(path):
     <dc:title>Chapter Book</dc:title>
   </metadata>
   <manifest>
-    <item id="chap1" href="chapter1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="chap1" href="{chapter_href}" media-type="application/xhtml+xml"/>
     <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
     <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
   </manifest>
   <spine toc="ncx"><itemref idref="chap1"/></spine>
 </package>
-""",
+""".format(chapter_href=chapter_href),
         )
-        epub.writestr("OEBPS/nav.xhtml", NAV)
+        nav = NAV.replace("chapter1.xhtml", chapter_href)
+        epub.writestr("OEBPS/nav.xhtml", nav)
         epub.writestr("OEBPS/toc.ncx", NCX)
-        epub.writestr("OEBPS/chapter1.xhtml", CHAPTER)
+        epub.writestr("OEBPS/{}".format(chapter_href), CHAPTER)
+
+
+def _add_second_chapter(path):
+    with zipfile.ZipFile(path) as source:
+        members = [(info, source.read(info.filename)) for info in source.infolist()]
+    with zipfile.ZipFile(path, "w") as destination:
+        for info, data in members:
+            if info.filename == "OEBPS/content.opf":
+                data = data.decode()
+                data = data.replace(
+                    '<item id="nav"',
+                    '<item id="chap2" href="chapter2.xhtml" media-type="application/xhtml+xml"/>\n'
+                    '    <item id="nav"')
+                data = data.replace(
+                    '<itemref idref="chap1"/>',
+                    '<itemref idref="chap1"/><itemref idref="chap2"/>')
+                data = data.encode()
+            destination.writestr(info, data)
+        destination.writestr("OEBPS/chapter2.xhtml", CHAPTER)
+
+
+def _last_ncx_src(path):
+    with zipfile.ZipFile(path) as epub:
+        ncx = etree.fromstring(
+            epub.read("OEBPS/toc.ncx"), parser=kobo.epub_chapters._safe_parser)
+    return ncx.xpath(
+        '//ncx:navPoint[last()]/ncx:content/@src',
+        namespaces=kobo.epub_chapters.NCX_NSMAP)[0]
 
 
 def _install_fakes(monkeypatch, store, library, book, db_state):
@@ -187,6 +216,9 @@ def _install_fakes(monkeypatch, store, library, book, db_state):
     )
     monkeypatch.setattr(
         web, "current_user", SimpleNamespace(role_download=lambda: True))
+    monkeypatch.setattr(
+        kobo, "current_user", SimpleNamespace(
+            role_edit=lambda: True, role_admin=lambda: False))
     monkeypatch.setattr(
         kobo_auth,
         "render_title_template",
@@ -270,6 +302,54 @@ def test_chapter_form_get_prefills_detected_location(monkeypatch, tmp_path):
     assert '<option value="chapter1.xhtml" selected>' in body
     assert 'id="location_custom" name="location_custom"' in body
     assert 'value="chapter1.xhtml"' in body
+    assert 'name="initial_location" value="chapter1.xhtml"' in body
+    assert 'name="initial_location_custom" value="chapter1.xhtml"' in body
+
+
+def test_changed_dropdown_overrides_prefilled_custom_location(monkeypatch, tmp_path):
+    application, token, path, _, _ = _prepare(monkeypatch, tmp_path)
+    _add_second_chapter(path)
+    client = application.test_client()
+
+    get_response = client.get(
+        f"/kobo/{token}/chapters/chapter-book-uuid"
+        "?name=Page+1&location=OEBPS%2Fchapter1.xhtml")
+    assert get_response.status_code == 200
+
+    response = client.post(
+        f"/kobo/{token}/chapters/chapter-book-uuid",
+        data={
+            "name": "Selected chapter",
+            "location": "chapter2.xhtml",
+            "location_custom": "chapter1.xhtml",
+            "initial_location": "chapter1.xhtml",
+            "initial_location_custom": "chapter1.xhtml",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "chapter2.xhtml" in response.get_data(as_text=True)
+    assert _last_ncx_src(path) == "chapter2.xhtml"
+
+
+def test_edited_custom_location_still_overrides_dropdown(monkeypatch, tmp_path):
+    application, token, path, _, _ = _prepare(monkeypatch, tmp_path)
+    _add_second_chapter(path)
+    client = application.test_client()
+
+    response = client.post(
+        f"/kobo/{token}/chapters/chapter-book-uuid",
+        data={
+            "name": "Custom location",
+            "location": "chapter1.xhtml",
+            "location_custom": "chapter2.xhtml",
+            "initial_location": "chapter1.xhtml",
+            "initial_location_custom": "chapter1.xhtml",
+        },
+    )
+
+    assert response.status_code == 200
+    assert _last_ncx_src(path) == "chapter2.xhtml"
 
 
 def test_chapter_post_rewrites_toc_and_marks_binary_change(monkeypatch, tmp_path):
@@ -503,7 +583,8 @@ def test_chapter_post_reports_rewrite_failure(monkeypatch, tmp_path):
 
 
 def test_chapter_post_reports_database_failure(monkeypatch, tmp_path):
-    application, token, _, _, db_state = _prepare(monkeypatch, tmp_path)
+    application, token, path, _, db_state = _prepare(monkeypatch, tmp_path)
+    original = path.read_bytes()
 
     def fail_commit():
         raise IntegrityError("UPDATE", {}, Exception("db failure"))
@@ -520,3 +601,109 @@ def test_chapter_post_reports_database_failure(monkeypatch, tmp_path):
     assert "the database could not be updated" in response.get_data(as_text=True)
     assert db_state["rollbacks"] == 1
     assert db_state["commits"] == 0
+    assert path.read_bytes() == original
+    assert list(tmp_path.glob("**/.kobo-chapter-backup-*")) == []
+
+
+def test_chapter_form_requires_edit_rights(monkeypatch, tmp_path):
+    application, token, path, _, db_state = _prepare(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        kobo, "current_user", SimpleNamespace(
+            role_edit=lambda: False, role_admin=lambda: False))
+    original = path.read_bytes()
+    client = application.test_client()
+
+    response = client.post(
+        f"/kobo/{token}/chapters/chapter-book-uuid",
+        data={"name": "Page 1", "location": "chapter1.xhtml"},
+    )
+
+    assert response.status_code == 403
+    assert path.read_bytes() == original
+    assert db_state["commits"] == 0
+
+
+def test_chapter_post_rejects_location_missing_from_other_format(monkeypatch, tmp_path):
+    application, token, epub_path, book, db_state = _prepare(monkeypatch, tmp_path)
+    kepub_path = epub_path.with_suffix(".kepub")
+    _write_epub(epub_path, chapter_href="page1.xhtml")
+    _write_epub(kepub_path)
+    book.data.append(SimpleNamespace(
+        name="book", format="KEPUB", uncompressed_size=999))
+    original_epub = epub_path.read_bytes()
+    original_kepub = kepub_path.read_bytes()
+    client = application.test_client()
+
+    response = client.post(
+        f"/kobo/{token}/chapters/chapter-book-uuid",
+        data={"name": "Both formats", "location": "chapter1.xhtml"},
+    )
+
+    assert response.status_code == 400
+    assert "not a chapter in the EPUB format" in response.get_data(as_text=True)
+    assert epub_path.read_bytes() == original_epub
+    assert kepub_path.read_bytes() == original_kepub
+    assert db_state["commits"] == 0
+
+
+def test_restorable_files_logs_restore_failure(monkeypatch, tmp_path):
+    path = tmp_path / "book.epub"
+    path.write_bytes(b"original")
+
+    def fail_replace(source, destination):
+        raise OSError("cannot restore")
+
+    monkeypatch.setattr(kobo.os, "replace", fail_replace)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        with kobo._restorable_files([path]):
+            raise RuntimeError("boom")
+
+    assert path.read_bytes() == b"original"
+
+
+def test_restorable_files_ignores_cleanup_failure(monkeypatch, tmp_path):
+    path = tmp_path / "book.epub"
+    path.write_bytes(b"original")
+
+    def fail_unlink(backup_path):
+        raise OSError("cannot unlink")
+
+    monkeypatch.setattr(kobo.os, "unlink", fail_unlink)
+
+    with kobo._restorable_files([path]):
+        pass
+
+    assert path.read_bytes() == b"original"
+
+
+def test_chapter_post_restores_formats_after_later_failure(monkeypatch, tmp_path):
+    application, token, epub_path, book, db_state = _prepare(monkeypatch, tmp_path)
+    kepub_path = epub_path.with_suffix(".kepub")
+    kepub_path.write_bytes(epub_path.read_bytes())
+    book.data.append(SimpleNamespace(
+        name="book", format="KEPUB", uncompressed_size=999))
+    originals = {path: path.read_bytes() for path in (epub_path, kepub_path)}
+    original_rewrite = kobo.epub_chapters.rewrite_epub_toc
+    calls = []
+
+    def rewrite_then_fail(path, name, target, structure=None):
+        calls.append(path)
+        if len(calls) == 2:
+            raise RuntimeError("zip failure")
+        return original_rewrite(path, name, target, structure=structure)
+
+    monkeypatch.setattr(kobo.epub_chapters, "rewrite_epub_toc", rewrite_then_fail)
+    client = application.test_client()
+
+    response = client.post(
+        f"/kobo/{token}/chapters/chapter-book-uuid",
+        data={"name": "Both formats", "location": "chapter1.xhtml"},
+    )
+
+    assert response.status_code == 500
+    assert "The book could not be updated." in response.get_data(as_text=True)
+    assert len(calls) == 2
+    assert all(path.read_bytes() == data for path, data in originals.items())
+    assert db_state["commits"] == 0
+    assert list(tmp_path.glob("**/.kobo-chapter-backup-*")) == []

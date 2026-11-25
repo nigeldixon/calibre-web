@@ -178,9 +178,10 @@ def test_rewrite_updates_both_tocs_and_preserves_zip_layout(tmp_path):
     epub_path = tmp_path / "book.epub"
     _write_epub(epub_path)
     target = epub_chapters.normalize_location("chapter1.xhtml#page3", "OEBPS")
+    structure = epub_chapters.read_epub_structure(str(epub_path))
 
     rewritten = epub_chapters.rewrite_epub_toc(
-        str(epub_path), "Comic page 3", target)
+        str(epub_path), "Comic page 3", target, structure=structure)
 
     assert rewritten == ["OEBPS/nav.xhtml", "OEBPS/toc.ncx"]
 

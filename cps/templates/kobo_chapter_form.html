@@ -119,6 +119,9 @@
       {% endif %}
 
       <form method="post" action="{{ form_action }}">
+        <input type="hidden" name="initial_location" value="{{ initial_location }}">
+        <input type="hidden" name="initial_location_custom" value="{{ initial_custom_location }}">
+
         <label for="name">Chapter name</label>
         <input id="name" name="name" type="text" maxlength="200"
                value="{{ name }}" placeholder="e.g. Page 12" required>
@@ -141,7 +144,7 @@
         <label for="location_custom">Or type a location</label>
         <input id="location_custom" name="location_custom" type="text" maxlength="1000"
                value="{{ custom_location }}" placeholder="OEBPS/chapter1.xhtml#page12">
-        <p class="hint">Paths are relative to the book's OPF folder. This overrides the selection above.</p>
+        <p class="hint">Paths are relative to the book's OPF folder. Edit this to override the selection above.</p>
 
         <div class="actions">
           <button type="submit">Save chapter</button>

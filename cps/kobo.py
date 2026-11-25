@@ -18,8 +18,11 @@
 #  along with this program. If not, see <http://www.gnu.org/licenses/>.
 
 import base64
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 import os
+import shutil
+import tempfile
 import uuid
 import zipfile
 from time import gmtime, strftime
@@ -66,6 +69,43 @@ kobo_auth.disable_failed_auth_redirect_for_blueprint(kobo)
 kobo_auth.register_url_value_preprocessor(kobo)
 
 log = logger.create()
+
+
+class ChapterDatabaseError(Exception):
+    """The chapter files changed but the database update failed."""
+
+
+@contextmanager
+def _restorable_files(paths):
+    """Restore ``paths`` from copies if the caller raises before success."""
+    created = []
+    restorable = []
+    try:
+        for path in paths:
+            directory = os.path.dirname(os.path.abspath(path)) or '.'
+            handle, backup_path = tempfile.mkstemp(
+                prefix='.kobo-chapter-backup-',
+                suffix=os.path.splitext(path)[1],
+                dir=directory)
+            os.close(handle)
+            created.append(backup_path)
+            shutil.copy2(path, backup_path)
+            restorable.append((path, backup_path))
+        yield
+    except Exception:
+        for path, backup_path in restorable:
+            try:
+                if os.path.exists(backup_path):
+                    os.replace(backup_path, path)
+            except OSError as exc:
+                log.error("Kobo chapter restore failed for %s: %s", path, exc)
+        raise
+    finally:
+        for backup_path in created:
+            try:
+                os.unlink(backup_path)
+            except OSError:
+                pass
 
 
 def get_store_url_for_current_request():
@@ -414,7 +454,8 @@ def _chapter_form_url(book_uuid):
 
 
 def _chapter_form_response(book_uuid, candidates, name, selected_location,
-                           custom_location, book_title="", error=None, status=200):
+                           custom_location, book_title="", error=None, status=200,
+                           initial_location="", initial_custom_location=""):
     if _wants_chapter_json():
         payload = {
             "success": error is None,
@@ -438,6 +479,8 @@ def _chapter_form_response(book_uuid, candidates, name, selected_location,
         book_title=book_title,
         error=error,
         form_action=_chapter_form_url(book_uuid),
+        initial_location=initial_location or "",
+        initial_custom_location=initial_custom_location or "",
     ), status)
 
 
@@ -456,12 +499,20 @@ def _chapter_result_response(book_uuid, ok, message, status=200, **extra):
     ), status)
 
 
+def _chapter_target_exists(structure, target):
+    target_path = epub_chapters.archive_target_path(structure.opf_dir, target)
+    return any(item["path"] == target_path for item in structure.candidates)
+
+
 @csrf.exempt
 @kobo.route("/chapters/<book_uuid>", methods=["GET", "POST"])
 @requires_kobo_auth
 @download_required
 def HandleChapterForm(book_uuid):
     """Show and process the Kobo chapter-mark form for one Calibre book."""
+    if not (current_user.role_edit() or current_user.role_admin()):
+        abort(403)
+
     book = calibre_db.get_book_by_uuid(book_uuid)
     if not book:
         return _chapter_result_response(
@@ -473,16 +524,26 @@ def HandleChapterForm(book_uuid):
         return _chapter_result_response(
             book_uuid, False, "This book has no EPUB or KEPUB format.", 400)
 
-    reference_format = next(
-        (data for data in book_formats if data.format == "KEPUB"), book_formats[0])
-    reference_path = _book_format_path(book, reference_format)
-    try:
-        structure = epub_chapters.read_epub_structure(reference_path)
-    except Exception as exc:
-        log.error("Kobo chapter form: cannot inspect %s: %s", reference_path, exc)
-        return _chapter_result_response(
-            book_uuid, False, "The book file could not be read.", 400)
+    format_entries = []
+    for book_format in book_formats:
+        path = _book_format_path(book, book_format)
+        try:
+            structure = epub_chapters.read_epub_structure(path)
+        except Exception as exc:
+            log.error("Kobo chapter form: cannot inspect %s: %s", path, exc)
+            return _chapter_result_response(
+                book_uuid, False, "The book file could not be read.", 400)
+        format_entries.append({
+            "data": book_format,
+            "format": book_format.format,
+            "path": path,
+            "structure": structure,
+        })
 
+    reference = next(
+        (entry for entry in format_entries if entry["format"] == "KEPUB"),
+        format_entries[0])
+    structure = reference["structure"]
     candidates = [{
         "value": candidate["href"],
         "label": candidate["label"],
@@ -498,33 +559,46 @@ def HandleChapterForm(book_uuid):
                 target = epub_chapters.normalize_location(
                     raw_location, structure.opf_dir)
                 custom_location = epub_chapters.target_to_string(target)
-                target_path = epub_chapters.archive_target_path(
-                    structure.opf_dir, target)
-                if any(item["path"] == target_path
-                       for item in structure.candidates):
+                if _chapter_target_exists(structure, target):
                     selected_location = target.href
             except epub_chapters.ChapterLocationError:
                 custom_location = raw_location[:1000]
         return _chapter_form_response(
             book_uuid, candidates, name, selected_location, custom_location,
-            book_title=book.title)
+            book_title=book.title,
+            initial_location=selected_location,
+            initial_custom_location=custom_location)
 
     name = request.form.get("name", "").strip()
+    selected_location = request.form.get("location", "").strip()
+    custom_location = request.form.get("location_custom", "").strip()
+    initial_location = request.form.get("initial_location", "").strip()
+    initial_custom_location = request.form.get("initial_location_custom", "").strip()
     if not name or len(name) > 200:
         return _chapter_form_response(
             book_uuid, candidates, name[:200], "", "",
             book_title=book.title,
             error="Enter a chapter name (200 characters or fewer).",
-            status=400)
+            status=400,
+            initial_location=initial_location,
+            initial_custom_location=initial_custom_location)
 
-    raw_location = (request.form.get("location_custom", "").strip()
-                    or request.form.get("location", "").strip())
+    # A prefilled free-text value must not beat a dropdown selection the user
+    # actually changed. Only an edited free-text value is an override.
+    if custom_location and custom_location != initial_custom_location:
+        raw_location = custom_location
+    elif selected_location and selected_location != initial_location:
+        raw_location = selected_location
+    else:
+        raw_location = custom_location or selected_location
     if not raw_location or len(raw_location) > 1000:
         return _chapter_form_response(
             book_uuid, candidates, name, "", raw_location[:1000],
             book_title=book.title,
             error="Choose or enter a chapter location.",
-            status=400)
+            status=400,
+            initial_location=initial_location,
+            initial_custom_location=initial_custom_location)
 
     try:
         target = epub_chapters.normalize_location(
@@ -534,44 +608,54 @@ def HandleChapterForm(book_uuid):
             book_uuid, candidates, name, "", raw_location[:1000],
             book_title=book.title,
             error="That location is not a valid relative chapter path.",
-            status=400)
+            status=400,
+            initial_location=initial_location,
+            initial_custom_location=initial_custom_location)
 
-    target_path = epub_chapters.archive_target_path(structure.opf_dir, target)
-    if not any(item["path"] == target_path for item in structure.candidates):
-        return _chapter_form_response(
-            book_uuid, candidates, name, "", raw_location[:1000],
-            book_title=book.title,
-            error="That location is not a chapter in this book.",
-            status=400)
+    for entry in format_entries:
+        if not _chapter_target_exists(entry["structure"], target):
+            error = "That location is not a chapter in this book."
+            if len(format_entries) > 1:
+                error = "That location is not a chapter in the {} format.".format(
+                    entry["format"])
+            return _chapter_form_response(
+                book_uuid, candidates, name, "", raw_location[:1000],
+                book_title=book.title, error=error, status=400,
+                initial_location=initial_location,
+                initial_custom_location=initial_custom_location)
 
     rewritten = []
     try:
-        for book_format in book_formats:
-            path = _book_format_path(book, book_format)
-            members = epub_chapters.rewrite_epub_toc(
-                path, name, target)
-            book_format.uncompressed_size = os.path.getsize(path)
-            rewritten.append({
-                "format": book_format.format,
-                "members": members,
-            })
+        with _restorable_files([entry["path"] for entry in format_entries]):
+            for entry in format_entries:
+                members = epub_chapters.rewrite_epub_toc(
+                    entry["path"], name, target, structure=entry["structure"])
+                entry["data"].uncompressed_size = os.path.getsize(entry["path"])
+                rewritten.append({
+                    "format": entry["format"],
+                    "members": members,
+                })
+
+            try:
+                # Register Calibre's SQLite helpers before flushing the book
+                # update; otherwise a fresh process can fail with
+                # "no such function: title_sort".
+                calibre_db.create_functions(config)
+                book.last_modified = datetime.now(timezone.utc)
+                calibre_db.set_metadata_dirty(book.id)
+                calibre_db.session.commit()
+            except (IntegrityError, OperationalError, StaleDataError) as exc:
+                calibre_db.session.rollback()
+                raise ChapterDatabaseError(str(exc)) from exc
+    except ChapterDatabaseError as exc:
+        log.error_or_exception("Database error while saving chapter: {}".format(exc))
+        return _chapter_result_response(
+            book_uuid, False,
+            "The book file changed but the database could not be updated.", 500)
     except Exception as exc:
         log.error("Kobo chapter save failed for %s: %s", book_uuid, exc)
         return _chapter_result_response(
             book_uuid, False, "The book could not be updated.", 500)
-
-    try:
-        # Register Calibre's SQLite helpers before flushing the book update;
-        # otherwise a fresh process can fail with "no such function: title_sort".
-        calibre_db.create_functions(config)
-        book.last_modified = datetime.now(timezone.utc)
-        calibre_db.set_metadata_dirty(book.id)
-        calibre_db.session.commit()
-    except (IntegrityError, OperationalError, StaleDataError) as exc:
-        calibre_db.session.rollback()
-        log.error_or_exception("Database error while saving chapter: {}".format(exc))
-        return _chapter_result_response(
-            book_uuid, False, "The book file changed but the database could not be updated.", 500)
 
     location = epub_chapters.target_to_string(target)
     log.info(
