@@ -66,7 +66,8 @@ def live_server(tmp_path_factory):
     try:
         cur = conn.cursor()
         cur.execute(
-            "UPDATE settings SET config_calibre_dir=?, config_port=? WHERE id=1",
+            "UPDATE settings SET config_calibre_dir=?, config_port=?, "
+            "config_kobo_sync=1 WHERE id=1",
             (str(library_dir), port),
         )
         conn.commit()

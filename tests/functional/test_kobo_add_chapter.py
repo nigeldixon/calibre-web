@@ -195,12 +195,16 @@ def _install_fakes(monkeypatch, store, library, book, db_state):
 
     def commit():
         db_state["commits"] += 1
+        db_state["events"].append("commit")
 
     def rollback():
         db_state["rollbacks"] += 1
 
     def set_metadata_dirty(book_id):
         db_state["dirty"].append(book_id)
+
+    def create_functions(config):
+        db_state["events"].append("functions")
 
     empty_join = SimpleNamespace(all=lambda: [])
     fake_calibre_db = SimpleNamespace(
@@ -212,7 +216,7 @@ def _install_fakes(monkeypatch, store, library, book, db_state):
                 join=lambda *join_args, **join_kwargs: empty_join),
         ),
         set_metadata_dirty=set_metadata_dirty,
-        create_functions=lambda config: None,
+        create_functions=create_functions,
     )
     monkeypatch.setattr(kobo, "calibre_db", fake_calibre_db)
     monkeypatch.setattr(kobo_auth, "calibre_db", fake_calibre_db)
@@ -234,7 +238,7 @@ def _prepare(monkeypatch, tmp_path):
             name="book", format="EPUB", uncompressed_size=999)],
     )
     store = TokenStore()
-    db_state = {"commits": 0, "rollbacks": 0, "dirty": []}
+    db_state = {"commits": 0, "rollbacks": 0, "dirty": [], "events": []}
     _install_fakes(monkeypatch, store, library, book, db_state)
     application = _make_app()
     with application.test_request_context("/kobo_auth/generate_auth_token/7"):
@@ -295,6 +299,7 @@ def test_chapter_post_rewrites_toc_and_marks_binary_change(monkeypatch, tmp_path
     assert book.last_modified > datetime(2020, 1, 1, tzinfo=timezone.utc)
     assert db_state["dirty"] == [23]
     assert db_state["commits"] == 1
+    assert db_state["events"] == ["functions", "commit"]
     assert kobo.book_binary_changed_with_edit(book) is True
 
 

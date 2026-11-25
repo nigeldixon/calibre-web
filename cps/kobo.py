@@ -561,10 +561,12 @@ def HandleChapterForm(book_uuid):
             book_uuid, False, "The book could not be updated.", 500)
 
     try:
+        # Register Calibre's SQLite helpers before flushing the book update;
+        # otherwise a fresh process can fail with "no such function: title_sort".
+        calibre_db.create_functions(config)
         book.last_modified = datetime.now(timezone.utc)
         calibre_db.set_metadata_dirty(book.id)
         calibre_db.session.commit()
-        calibre_db.create_functions(config)
     except (IntegrityError, OperationalError, StaleDataError) as exc:
         calibre_db.session.rollback()
         log.error_or_exception("Database error while saving chapter: {}".format(exc))
