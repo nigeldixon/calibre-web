@@ -1,13 +1,17 @@
 """Host-side tests for the Kobo/NickelMenu chapter launcher.
 
 The real launcher reads Kobo config/database files and calls NickelDBus. These
-tests redirect those paths to a temporary directory and put stub ``sqlite3``
-and ``qndb`` executables on PATH, so the config parsing, URL construction and
-error paths can be exercised without a device.
+tests redirect those paths to a temporary directory and put stub ``sqlite3``,
+``python`` and ``qndb`` executables on PATH, so the config parsing, URL
+construction, database reader selection and error paths can be exercised
+without a device.
 """
 import os
 import shutil
+import sqlite3
+import struct
 import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -16,6 +20,7 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 LAUNCHER = REPO_ROOT / "device" / "kobo" / "add_chapter.sh"
 NICKELMENU_CONFIG = REPO_ROOT / "device" / "kobo" / "nickelmenu-config"
+BUNDLED_SQLITE = REPO_ROOT / "device" / "kobo" / "sqlite3-armv7"
 
 DEFAULT_ENDPOINT = "http://192.168.1.10:8083/kobo/testtoken/v1/library/1"
 DEFAULT_BASE = "http://192.168.1.10:8083/kobo/testtoken"
@@ -48,6 +53,7 @@ def device(tmp_path):
     bin_dir.mkdir()
     qndb_log = tmp_path / "qndb.log"
     sqlite_log = tmp_path / "sqlite.log"
+    python_log = tmp_path / "python.log"
 
     write_stub(
         bin_dir / "sqlite3",
@@ -57,6 +63,19 @@ def device(tmp_path):
                 'printf "%s\\n" "$2" >> "$KOBO_SQLITE_LOG"',
                 'printf "%s\\n%s\\n%s\\n" "$FAKE_UUID" "$FAKE_TITLE" "$FAKE_LOCATION"',
                 'exit "${SQLITE_EXIT_CODE:-0}"',
+            ]
+        )
+        + "\n",
+    )
+    write_stub(
+        bin_dir / "python",
+        "\n".join(
+            [
+                'printf "%s\\n" "-- python --" >> "$KOBO_PYTHON_LOG"',
+                'for arg in "$@"; do',
+                '    printf "%s\\n" "$arg" >> "$KOBO_PYTHON_LOG"',
+                "done",
+                'printf "%s\\n%s\\n%s\\n" "$FAKE_UUID" "$FAKE_TITLE" "$FAKE_LOCATION"',
             ]
         )
         + "\n",
@@ -84,6 +103,7 @@ def device(tmp_path):
             "KOBO_READER_DB": str(db),
             "KOBO_QNDB_LOG": str(qndb_log),
             "KOBO_SQLITE_LOG": str(sqlite_log),
+            "KOBO_PYTHON_LOG": str(python_log),
             "KOBO_TEST_DB": str(db),
             "FAKE_UUID": DEFAULT_UUID,
             "FAKE_TITLE": "Dracula",
@@ -98,6 +118,7 @@ def device(tmp_path):
         bin_dir=bin_dir,
         qndb_log=qndb_log,
         sqlite_log=sqlite_log,
+        python_log=python_log,
     )
 
 
@@ -174,11 +195,115 @@ def test_launcher_reads_current_book_from_kobo_database(device):
     assert calls[0][0] == str(device.db)
     query = calls[0][1]
     assert "ContentType=6" in query
-    assert "COALESCE(BookTitle,'')" in query
+    assert "COALESCE(NULLIF(Title,''),NULLIF(BookTitle,''),'')" in query
     assert "COALESCE(ChapterIDBookmarked,'')" in query
     assert "CASE WHEN ReadStatus=1 THEN 0 ELSE 1 END" in query
     assert "COALESCE(DateLastRead,'') DESC" in query
     assert "LIMIT 1;" in query
+
+
+def test_launcher_prefers_bundled_sqlite_binary(device):
+    bundled = device.addon / "sqlite3-armv7"
+    write_stub(
+        bundled,
+        "\n".join(
+            [
+                'printf "bundled\\n" >> "$KOBO_SQLITE_LOG"',
+                'printf "%s\\n%s\\n%s\\n" "$FAKE_UUID" "$FAKE_TITLE" "$FAKE_LOCATION"',
+            ]
+        )
+        + "\n",
+    )
+
+    result = run_launcher(device)
+
+    assert result.returncode == 0, result.stderr
+    assert "bundled" in device.sqlite_log.read_text(encoding="utf-8")
+
+
+def test_launcher_falls_back_to_python_sqlite3(device):
+    (device.bin_dir / "sqlite3").unlink()
+    for name in ("sh", "date", "mkdir", "sed", "head", "tr", "od", "rm"):
+        source = shutil.which(name, path="/usr/bin:/bin")
+        assert source is not None, f"missing host command: {name}"
+        (device.bin_dir / name).symlink_to(source)
+    device.env["PATH"] = str(device.bin_dir)
+
+    result = run_launcher(device)
+
+    assert result.returncode == 0, result.stderr
+    python_log = device.python_log.read_text(encoding="utf-8")
+    assert "-- python --" in python_log
+    assert str(device.db) in python_log
+    assert "ContentType=6" in python_log
+    assert qndb_calls(device)[0][:3] == ["-m", "bwmOpenBrowser", "true"]
+
+
+def test_launcher_skips_unusable_bundled_sqlite(device):
+    write_stub(device.addon / "sqlite3-armv7", "exit 126\n")
+    (device.bin_dir / "sqlite3").unlink()
+    for name in ("sh", "date", "mkdir", "sed", "head", "tr", "od", "rm"):
+        source = shutil.which(name, path="/usr/bin:/bin")
+        assert source is not None, f"missing host command: {name}"
+        (device.bin_dir / name).symlink_to(source)
+    device.env["PATH"] = str(device.bin_dir)
+
+    result = run_launcher(device)
+
+    assert result.returncode == 0, result.stderr
+    assert "-- python --" in device.python_log.read_text(encoding="utf-8")
+
+
+def test_query_uses_book_title_and_prefers_currently_read_book(device):
+    device.db.unlink()
+    with sqlite3.connect(device.db) as connection:
+        connection.execute(
+            "CREATE TABLE content ("
+            "ContentID TEXT, Title TEXT, BookTitle TEXT, "
+            "ChapterIDBookmarked TEXT, ContentType INTEGER, "
+            "ReadStatus INTEGER, DateLastRead TEXT)"
+        )
+        connection.executemany(
+            "INSERT INTO content VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [
+                (DEFAULT_UUID, "Dracula", "", "chapter1.xhtml", 6, 1, "2024-01-01"),
+                (
+                    "11111111-1111-1111-1111-111111111111",
+                    "Finished book",
+                    "",
+                    "chapter9.xhtml",
+                    6,
+                    2,
+                    "2024-02-01",
+                ),
+                ("chapter-row", "Chapter title", "Dracula", "chapter2.xhtml", 9, 1, "2024-03-01"),
+            ],
+        )
+
+    (device.bin_dir / "sqlite3").unlink()
+    (device.bin_dir / "python").unlink()
+    for name in ("sh", "date", "mkdir", "sed", "head", "tr", "od", "rm"):
+        source = shutil.which(name, path="/usr/bin:/bin")
+        assert source is not None, f"missing host command: {name}"
+        (device.bin_dir / name).symlink_to(source)
+    (device.bin_dir / "python").symlink_to(sys.executable)
+    device.env["PATH"] = str(device.bin_dir)
+
+    result = run_launcher(device, "--debug")
+
+    assert result.returncode == 0, result.stderr
+    debug_text = (device.addon / "debug.txt").read_text(encoding="utf-8")
+    assert f"uuid:     {DEFAULT_UUID}" in debug_text
+    assert "title:    Dracula" in debug_text
+    assert "location: chapter1.xhtml" in debug_text
+
+
+def test_bundled_sqlite_binary_is_32_bit_arm(device):
+    data = BUNDLED_SQLITE.read_bytes()
+
+    assert data.startswith(b"\x7fELF\x01\x01\x01")
+    assert struct.unpack_from("<H", data, 18)[0] == 40  # EM_ARM
+    assert os.access(BUNDLED_SQLITE, os.X_OK)
 
 
 def test_debug_mode_writes_parsed_values_without_opening_browser(device):
@@ -186,6 +311,9 @@ def test_debug_mode_writes_parsed_values_without_opening_browser(device):
 
     assert result.returncode == 0, result.stderr
     debug_text = (device.addon / "debug.txt").read_text(encoding="utf-8")
+    debug_lines = debug_text.splitlines()
+    assert debug_lines[0].startswith("arch:     ") and debug_lines[0].split(":", 1)[1].strip()
+    assert debug_lines[1].startswith("reader:   ") and debug_lines[1].split(":", 1)[1].strip()
     assert f"endpoint: {DEFAULT_ENDPOINT}" in debug_text
     assert f"base:     {DEFAULT_BASE}" in debug_text
     assert f"uuid:     {DEFAULT_UUID}" in debug_text
