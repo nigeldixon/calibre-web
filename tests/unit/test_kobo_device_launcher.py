@@ -104,6 +104,7 @@ def device(tmp_path):
             "KOBO_QNDB_LOG": str(qndb_log),
             "KOBO_SQLITE_LOG": str(sqlite_log),
             "KOBO_PYTHON_LOG": str(python_log),
+            "KOBO_SQLITE_SYSTEM_PATHS": "",
             "KOBO_TEST_DB": str(db),
             "FAKE_UUID": DEFAULT_UUID,
             "FAKE_TITLE": "Dracula",
@@ -231,7 +232,7 @@ def test_launcher_falls_back_to_python_sqlite3(device):
 
     result = run_launcher(device)
 
-    assert result.returncode == 0, result.stderr
+    assert result.returncode == 0, error_log(device) or result.stderr
     python_log = device.python_log.read_text(encoding="utf-8")
     assert "-- python --" in python_log
     assert str(device.db) in python_log
@@ -250,7 +251,7 @@ def test_launcher_skips_unusable_bundled_sqlite(device):
 
     result = run_launcher(device)
 
-    assert result.returncode == 0, result.stderr
+    assert result.returncode == 0, error_log(device) or result.stderr
     assert "-- python --" in device.python_log.read_text(encoding="utf-8")
 
 

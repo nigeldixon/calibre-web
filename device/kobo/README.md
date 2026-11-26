@@ -81,6 +81,7 @@ The launcher logic can be exercised on a development machine with stub `sqlite3`
 | `KOBO_EREADER_CONF` | `/mnt/onboard/.kobo/Kobo/Kobo eReader.conf` |
 | `KOBO_READER_DB` | `/mnt/onboard/.kobo/KoboReader.sqlite` |
 | `KOBO_SQLITE` | bundled `sqlite3-armv7`, then any system `sqlite3` |
+| `KOBO_SQLITE_SYSTEM_PATHS` | `/usr/bin/sqlite3 /usr/local/bin/sqlite3` |
 
 These overrides are test-only; NickelMenu invokes the script without them, so the standard Kobo paths are used on the device. See `tests/unit/test_kobo_device_launcher.py` for the config-parsing, database, URL-building and error-path coverage.
 

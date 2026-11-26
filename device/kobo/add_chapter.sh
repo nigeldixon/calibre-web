@@ -12,6 +12,7 @@
 ADDON_DIR="${KOBO_ADDON_DIR:-/mnt/onboard/.adds/calibre-web-chapters}"
 CONF="${KOBO_EREADER_CONF:-/mnt/onboard/.kobo/Kobo/Kobo eReader.conf}"
 DB="${KOBO_READER_DB:-/mnt/onboard/.kobo/KoboReader.sqlite}"
+SYSTEM_SQLITE_PATHS=${KOBO_SQLITE_SYSTEM_PATHS-/usr/bin/sqlite3 /usr/local/bin/sqlite3}
 BUNDLED_SQLITE="$ADDON_DIR/sqlite3-armv7"
 LOG="$ADDON_DIR/last-error.log"
 DEBUG_LOG="$ADDON_DIR/debug.txt"
@@ -54,8 +55,7 @@ find_readers() {
         HAVE_READER=1
         return
     fi
-    for candidate in sqlite3 /usr/bin/sqlite3 /usr/local/bin/sqlite3 \
-        python2 python python3; do
+    for candidate in sqlite3 $SYSTEM_SQLITE_PATHS python2 python python3; do
         if command_exists "$candidate"; then
             HAVE_READER=1
             return
@@ -102,7 +102,7 @@ query_current_book() {
             [ "$status" -eq 126 ] || [ "$status" -eq 127 ] || return "$status"
         fi
     fi
-    for candidate in sqlite3 /usr/bin/sqlite3 /usr/local/bin/sqlite3; do
+    for candidate in sqlite3 $SYSTEM_SQLITE_PATHS; do
         command_exists "$candidate" || continue
         if "$candidate" "$DB" "$QUERY"; then
             READER=$candidate
