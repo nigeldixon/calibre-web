@@ -1,5 +1,5 @@
 # Calibre-Web chapter marks for NickelMenu
-# Copy this file to: .adds/nm/config
+# Copy this file to: .adds/nm/calibre-web-chapters
 # Requires NickelMenu and NickelDBus (qndb). Reboot after copying.
 
 # Reader overflow menu: mark the book currently open.

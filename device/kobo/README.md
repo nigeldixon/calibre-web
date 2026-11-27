@@ -32,13 +32,13 @@ Copy the files with the device mounted over USB:
 KOBOeReader/
 ├── .adds/
 │   ├── nm/
-│   │   └── config                      <- device/kobo/nickelmenu-config
+│   │   └── calibre-web-chapters        <- device/kobo/nickelmenu-config
 │   └── calibre-web-chapters/
 │       ├── add_chapter.sh              <- device/kobo/add_chapter.sh
 │       └── sqlite3-armv7               <- device/kobo/sqlite3-armv7
 ```
 
-Then safely eject and reboot the device. You should see **Add chapter mark** in the reader overflow menu and in the main menu.
+NickelMenu accepts any filename in `.adds/nm/`; `calibre-web-chapters` is used here so it does not overwrite an existing `config` file. Then safely eject and reboot the device. You should see **Add chapter mark** in the reader overflow menu and in the main menu.
 
 Make sure both files stay executable:
 
