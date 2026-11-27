@@ -4,7 +4,8 @@
 
 # Reader overflow menu: mark the book currently open. The page tracker is
 # started at boot by /etc/init.d/calibre-web-chapters, so this single entry
-# works for whichever book is open.
+# works for whichever book is open. Unserved books show a toast instead of a
+# browser error.
 menu_item :reader :Add chapter mark :cmd_spawn :quiet:/mnt/onboard/.adds/calibre-web-chapters/add_chapter.sh
 
 # Firmware 4.23+ cannot leave the full-screen browser otherwise.

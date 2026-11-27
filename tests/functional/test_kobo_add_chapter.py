@@ -287,6 +287,38 @@ def test_chapter_form_requires_valid_token(monkeypatch, tmp_path):
     assert response.status_code == 401
 
 
+def test_chapter_check_reports_served_book(monkeypatch, tmp_path):
+    application, token, _, _, _ = _prepare(monkeypatch, tmp_path)
+    client = application.test_client()
+
+    response = client.get(
+        f"/kobo/{token}/chapters/chapter-book-uuid?check=1"
+        "&name=Chapter+Book&location=chapter1.xhtml")
+
+    assert response.status_code == 200
+    assert json.loads(response.get_data(as_text=True)) == {
+        "book_uuid": "chapter-book-uuid",
+        "served": True,
+        "title": "Chapter Book",
+    }
+
+
+def test_chapter_check_reports_missing_book_without_html(monkeypatch, tmp_path):
+    application, token, _, _, _ = _prepare(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        kobo.calibre_db, "get_book_by_uuid", lambda book_uuid: None)
+    client = application.test_client()
+
+    response = client.get(
+        f"/kobo/{token}/chapters/missing-book?check=1&name=Test+Chapters")
+
+    assert response.status_code == 200
+    payload = json.loads(response.get_data(as_text=True))
+    assert payload["served"] is False
+    assert payload["title"] == "Test Chapters"
+    assert payload["error"] == "Book not found in this library."
+
+
 def test_chapter_form_get_prefills_detected_location(monkeypatch, tmp_path):
     application, token, _, _, _ = _prepare(monkeypatch, tmp_path)
     client = application.test_client()

@@ -6,8 +6,9 @@ The launcher does **not** call any hypothesis-specific server code. It only:
 
 1. Reads `api_endpoint=` from `.kobo/Kobo/Kobo eReader.conf` to get the calibre-web host and Kobo auth token.
 2. Reads the current book from `.kobo/KoboReader.sqlite` (`ContentID` = Calibre UUID, `Title`, `ChapterIDBookmarked`).
-3. If the page tracker has a fresh reading position, uses that instead of Kobo's stale bookmark.
-4. Opens a **modal** Nickel browser at:
+3. Reads the fresh book UUID and page state recorded by the page tracker, instead of relying on Kobo's stale current-book/bookmark fields.
+4. Checks with calibre-web that the UUID is served by this library.
+5. Opens a **modal** Nickel browser at:
 
    ```
    /kobo/<token>/chapters/<uuid>?name=<title>&location=<current chapter>
@@ -24,6 +25,7 @@ The form is prefilled, so you normally just type the chapter name (e.g. `Page 12
 | Bundled `sqlite3-armv7` | Statically linked SQLite CLI used to read the current book. Stock Kobo firmware has no `sqlite3` command; no extra install is needed. |
 | calibre-web Kobo sync | The `api_endpoint=` line must already point at calibre-web. Generate it from **Profile → Kobo Sync Token → Create/View**. |
 | Book must be synced from calibre-web | Synced books have `ContentID` equal to the Calibre UUID. USB-sideloaded books have a path there and cannot be used with this endpoint. |
+| `wget` (optional) | Used for the server-side allow-list check. If unavailable, the launcher opens the form directly, as before. |
 
 ## Install the complete package
 
@@ -57,6 +59,8 @@ The default config keeps the menu minimal:
 
 - Reader overflow menu → **Add chapter mark**
 - Browser menu → **Quit** (needed on firmware 4.23+ to leave the browser)
+
+NickelMenu configuration is static, so an item cannot be hidden per book. Instead, **Add chapter mark** asks calibre-web whether the current UUID is served. If it is not, the launcher shows a toast and does not open the browser, which is the practical equivalent of hiding the action for unserved books.
 
 Diagnostic entries are present but commented out in `.adds/nm/calibre-web-chapters`. Uncomment and reboot to use them:
 
@@ -113,13 +117,15 @@ While reading, it should contain something like:
 ```text
 view=ReadingView
 page=14
+uuid=0872dd2d-b2a8-40ed-b5a1-c79936259829
+title=Test Chapters
 last_page=14
 max_page=14
 resets=1
 updated=1764223800
 ```
 
-A page change updates `page`. A KEPUB chapter change normally resets the page number, which increments `resets`. The launcher combines that with `KoboReader.sqlite` to choose the chapter file.
+The UUID and title are captured when Nickel opens the reader, so the launcher does not have to guess the current book from `ReadStatus`/`DateLastRead`. A page change updates `page`. A KEPUB chapter change normally resets the page number, which increments `resets`. The launcher combines that with `KoboReader.sqlite` to choose the chapter file.
 
 For more detail, uncomment one of the debug menu entries, reboot, and run it. **Add chapter (debug)** writes `/mnt/onboard/.adds/calibre-web-chapters/debug.txt` containing the device architecture, selected SQLite reader, parsed endpoint, UUID, title, final URL, and tracker state. Copy that file off the device when reporting an issue.
 
@@ -162,7 +168,8 @@ The script downloads the pinned SQLite amalgamation, patches out static-glibc `p
 
 - Nickel does not write the reading position to `KoboReader.sqlite` on page turns. The page tracker fills that gap using NickelDBus `rvPageChanged`.
 - On firmware 4.46, `___NumPages` is `-1`; the tracker therefore uses page-number resets for KEPUB chapter detection. Backwards jumps or very short chapters can leave the estimate wrong. The form's dropdown and free-text location are there to correct it.
-- If no fresh tracker state exists, the launcher falls back to `ChapterIDBookmarked`, which may be stale until the book is closed.
+- If no fresh tracker state exists, the launcher falls back to its old `ReadStatus`/`DateLastRead` query and to `ChapterIDBookmarked`, both of which may be stale.
+- The launcher's server check uses `GET /kobo/<token>/chapters/<uuid>?check=1`, which returns `{"served": true}` or `{"served": false}` without opening the form. If the check says the book is not served, sync that book from calibre-web first.
 - `ChapterIDBookmarked` is Kobo-generated and often looks like `chapter1.xhtml#kobo.1.1`. The server strips `#kobo.*` / `#point(...)` fragments, so the chapter target is the clean path.
 - The title used as `name` prefill is the device's book title; it is only a starting value, not a TOC label.
 - The modal browser needs Wi-Fi. Opening a URL normally makes Nickel connect automatically.

@@ -140,6 +140,42 @@ END {
 }'
 }
 
+# Ask the server whether this book is served from this library. This is the
+# device-side allow-list: it avoids opening a browser page that would only
+# report "Book not found". Returns 0 served, 1 not served, 2 unreachable.
+book_is_served() {
+    check_url="$1"
+    case "$check_url" in
+        *\?*) check_url="$check_url&check=1" ;;
+        *) check_url="$check_url?check=1" ;;
+    esac
+
+    response=
+    status=0
+    if command_exists wget; then
+        response=$(wget -q -O - "$check_url" 2>>"$LOG")
+        status=$?
+    elif command_exists /usr/bin/wget; then
+        response=$(/usr/bin/wget -q -O - "$check_url" 2>>"$LOG")
+        status=$?
+    elif command_exists /bin/wget; then
+        response=$(/bin/wget -q -O - "$check_url" 2>>"$LOG")
+        status=$?
+    elif command_exists busybox; then
+        response=$(busybox wget -q -O - "$check_url" 2>>"$LOG")
+        status=$?
+    else
+        # No usable HTTP client: fall back to opening the form directly.
+        return 0
+    fi
+
+    [ "$status" -eq 0 ] || return 2
+    case "$response" in
+        *'"served":true'*|*'"served": true'*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 query_current_book() {
     READER=
     # A valid reader that fails on the query should not be silently replaced
@@ -212,9 +248,38 @@ endpoint=$(sed -n 's/^api_endpoint=//p' "$CONF" 2>/dev/null | head -n 1 | tr -d 
 base=$(printf '%s\n' "$endpoint" | sed -n 's|\(.*/kobo/[^/?]*\).*|\1|p')
 [ -n "$base" ] || fail "api_endpoint is not a calibre-web Kobo URL: $endpoint"
 
+# A fresh tracker state records the book UUID when the reader opened. That is
+# more reliable than ReadStatus/DateLastRead, which can point at an old book.
+tracker_view=$(state_value view)
+tracker_page=$(state_value page)
+tracker_uuid=$(state_value uuid)
+tracker_resets=$(state_value resets)
+tracker_updated=$(state_value updated)
+case "$tracker_page" in ''|*[!0-9]*) tracker_page= ;; esac
+case "$tracker_resets" in ''|*[!0-9]*) tracker_resets=0 ;; esac
+case "$tracker_updated" in ''|*[!0-9]*) tracker_updated= ;; esac
+
+TRACKER_FRESH=
+if [ "$tracker_view" = "ReadingView" ] && [ -n "$tracker_updated" ]; then
+    case "$tracker_uuid" in
+        ????????-????-????-????-????????????)
+            now=$(date '+%s' 2>/dev/null || printf 0)
+            case "$now" in ''|*[!0-9]*) now=0 ;; esac
+            age=$((now - tracker_updated))
+            if [ "$age" -ge 0 ] && [ "$age" -le 300 ]; then
+                TRACKER_FRESH=1
+            fi
+            ;;
+    esac
+fi
+
 # Kobo stores the book title in Title on the ContentType=6 row; BookTitle is
-# populated on chapter rows. Prefer the book being read, then the most recent.
-QUERY="SELECT ContentID || char(10) || COALESCE(NULLIF(Title,''),NULLIF(BookTitle,''),'') || char(10) || COALESCE(ChapterIDBookmarked,'') FROM content WHERE ContentType=6 ORDER BY CASE WHEN ReadStatus=1 THEN 0 ELSE 1 END, COALESCE(DateLastRead,'') DESC LIMIT 1;"
+# populated on chapter rows. Query the tracked UUID when it is fresh.
+if [ -n "$TRACKER_FRESH" ]; then
+    QUERY="SELECT ContentID || char(10) || COALESCE(NULLIF(Title,''),NULLIF(BookTitle,''),'') || char(10) || COALESCE(ChapterIDBookmarked,'') FROM content WHERE ContentType=6 AND ContentID LIKE '$tracker_uuid%' ORDER BY COALESCE(DateLastRead,'') DESC LIMIT 1;"
+else
+    QUERY="SELECT ContentID || char(10) || COALESCE(NULLIF(Title,''),NULLIF(BookTitle,''),'') || char(10) || COALESCE(ChapterIDBookmarked,'') FROM content WHERE ContentType=6 ORDER BY CASE WHEN ReadStatus=1 THEN 0 ELSE 1 END, COALESCE(DateLastRead,'') DESC LIMIT 1;"
+fi
 
 QUERY_OUT="$ADDON_DIR/current-book.txt"
 : > "$QUERY_OUT" 2>/dev/null || fail "Could not write $QUERY_OUT"
@@ -226,32 +291,17 @@ uuid=$(printf '%s\n' "$info" | sed -n '1p' | tr -d '\r')
 title=$(printf '%s\n' "$info" | sed -n '2p' | tr -d '\r')
 location=$(printf '%s\n' "$info" | sed -n '3p' | tr -d '\r')
 [ -n "$uuid" ] || fail "No book found in KoboReader.sqlite."
-
-# Prefer a live page-tracker result over Kobo's stale bookmark. Only use a
-# reading-session state that is recent, which avoids inheriting a position
-# from the last time the device was used.
-tracker_view=$(state_value view)
-tracker_page=$(state_value page)
-tracker_resets=$(state_value resets)
-tracker_updated=$(state_value updated)
-case "$tracker_page" in ''|*[!0-9]*) tracker_page= ;; esac
-case "$tracker_resets" in ''|*[!0-9]*) tracker_resets=0 ;; esac
-case "$tracker_updated" in ''|*[!0-9]*) tracker_updated= ;; esac
-if [ "$tracker_view" = "ReadingView" ] && [ -n "$tracker_page" ] \
-        && [ "$tracker_page" -gt 0 ] && [ -n "$tracker_updated" ]; then
-    now=$(date '+%s' 2>/dev/null || printf 0)
-    case "$now" in
-        ''|*[!0-9]*) now=0 ;;
+if [ -n "$TRACKER_FRESH" ]; then
+    case "$uuid" in
+        "$tracker_uuid"|"$tracker_uuid"*) ;;
+        *) fail "Tracked book $tracker_uuid was not found in KoboReader.sqlite." ;;
     esac
-    age=$((now - tracker_updated))
-    if [ "$age" -ge 0 ] && [ "$age" -le 300 ]; then
-        case "$uuid" in
-            ????????-????-????-????-????????????)
-                tracked=$(resolve_tracked_chapter "$uuid" "$location" "$tracker_resets")
-                [ -n "$tracked" ] && location=$tracked
-                ;;
-        esac
-    fi
+fi
+
+# Prefer the tracker's chapter count over Kobo's stale bookmark.
+if [ -n "$TRACKER_FRESH" ]; then
+    tracked=$(resolve_tracked_chapter "$uuid" "$location" "$tracker_resets")
+    [ -n "$tracked" ] && location=$tracked
 fi
 
 url="$base/chapters/$uuid?name=$(urlencode "$title")&location=$(urlencode "$location")"
@@ -267,8 +317,8 @@ if [ "$MODE" = "--debug" ]; then
         printf 'title:    %s\n' "$title"
         printf 'location: %s\n' "$location"
         printf 'url:      %s\n' "$url"
-        printf 'tracker:  view=%s page=%s resets=%s updated=%s\n' \
-            "$tracker_view" "$tracker_page" "$tracker_resets" "$tracker_updated"
+        printf 'tracker:  view=%s page=%s uuid=%s resets=%s updated=%s\n' \
+            "$tracker_view" "$tracker_page" "$tracker_uuid" "$tracker_resets" "$tracker_updated"
     } > "$DEBUG_LOG" 2>/dev/null || fail "Could not write $DEBUG_LOG"
 
     DIAG_QUERY=$(cat <<SQL
@@ -299,6 +349,16 @@ fi
 case "$uuid" in
     ????????-????-????-????-????????????) ;;
     *) fail "Current book '$title' was not synced from calibre-web (ContentID=$uuid)." ;;
+esac
+
+# Ask calibre-web whether this UUID is served by this library before opening
+# the browser. A missing HTTP client falls back to opening the form directly.
+check_status=0
+book_is_served "$url" || check_status=$?
+case "$check_status" in
+    0) ;;
+    1) fail "Current book '$title' is not in this calibre-web library; sync it from calibre-web first." ;;
+    2) fail "Could not contact calibre-web; check Wi-Fi and the sync token." ;;
 esac
 
 [ -n "$QNDB" ] || fail "qndb not found; install NickelDBus."

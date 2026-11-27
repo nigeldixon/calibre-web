@@ -57,6 +57,7 @@ def device(tmp_path):
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     qndb_log = tmp_path / "qndb.log"
+    wget_log = tmp_path / "wget.log"
     sqlite_log = tmp_path / "sqlite.log"
     python_log = tmp_path / "python.log"
 
@@ -101,6 +102,18 @@ def device(tmp_path):
         )
         + "\n",
     )
+    write_stub(
+        bin_dir / "wget",
+        "\n".join(
+            [
+                'for last do :; done',
+                'printf "%s\\n" "$last" >> "$KOBO_WGET_LOG"',
+                'if [ -n "${KOBO_WGET_RESPONSE:-}" ]; then printf "%s\\n" "$KOBO_WGET_RESPONSE"; else printf \'{"served":true}\\n\'; fi',
+                'exit "${WGET_EXIT_CODE:-0}"',
+            ]
+        )
+        + "\n",
+    )
 
     env = os.environ.copy()
     env.update(
@@ -110,6 +123,9 @@ def device(tmp_path):
             "KOBO_EREADER_CONF": str(conf),
             "KOBO_READER_DB": str(db),
             "KOBO_QNDB_LOG": str(qndb_log),
+            "KOBO_WGET_LOG": str(wget_log),
+            "KOBO_WGET_RESPONSE": "",
+            "WGET_EXIT_CODE": "0",
             "KOBO_SQLITE_LOG": str(sqlite_log),
             "KOBO_PYTHON_LOG": str(python_log),
             "KOBO_SQLITE_SYSTEM_PATHS": "",
@@ -129,6 +145,7 @@ def device(tmp_path):
         db=db,
         bin_dir=bin_dir,
         qndb_log=qndb_log,
+        wget_log=wget_log,
         sqlite_log=sqlite_log,
         python_log=python_log,
     )
@@ -170,6 +187,12 @@ def qndb_calls(device):
         for block in text.split("-- call --")
         if block.strip()
     ]
+
+
+def wget_urls(device):
+    if not device.wget_log.exists():
+        return []
+    return device.wget_log.read_text(encoding="utf-8").splitlines()
 
 
 def sqlite_calls(device):
@@ -473,6 +496,8 @@ def test_launcher_uses_tracker_chapter_when_state_is_fresh(device):
             [
                 "view=ReadingView",
                 "page=14",
+                f"uuid={DEFAULT_UUID}",
+                "title=Dracula",
                 "last_page=14",
                 "max_page=14",
                 "resets=1",
@@ -496,6 +521,7 @@ def test_launcher_uses_tracker_chapter_when_state_is_fresh(device):
     assert result.returncode == 0, result.stderr
     calls = sqlite_calls(device)
     assert len(calls) == 2
+    assert f"ContentID LIKE '{DEFAULT_UUID}%'" in calls[0][1]
     assert "ContentType=9" in calls[1][1]
     expected_url = (
         f"{DEFAULT_BASE}/chapters/{DEFAULT_UUID}"
@@ -511,6 +537,8 @@ def test_launcher_ignores_stale_tracker_state(device):
             [
                 "view=ReadingView",
                 "page=99",
+                f"uuid={DEFAULT_UUID}",
+                "title=Dracula",
                 "last_page=99",
                 "max_page=99",
                 "resets=9",
@@ -571,6 +599,58 @@ def test_tracker_records_page_events_and_chapter_resets(device):
     assert state["max_page"] == "13"
     assert state["resets"] == "1"
     assert state["updated"].isdigit()
+
+
+def test_tracker_captures_current_book_when_reader_opens(device):
+    write_stub(
+        device.bin_dir / "qndb",
+        "\n".join(
+            [
+                'if [ "$1" = "-m" ]; then',
+                '    printf "ReadingView\\n"',
+                "    exit 0",
+                "fi",
+                "printf 'rvPageChanged 3\\n'",
+            ]
+        )
+        + "\n",
+    )
+
+    with pytest.raises(subprocess.TimeoutExpired):
+        run_tracker(device)
+
+    state = {}
+    for line in (device.addon / "page-state.txt").read_text(encoding="utf-8").splitlines():
+        key, _, value = line.partition("=")
+        state[key] = value
+    assert state["view"] == "ReadingView"
+    assert state["uuid"] == DEFAULT_UUID
+    assert state["title"] == "Dracula"
+    assert state["page"] == "3"
+    assert any("ContentType=6" in call[1] for call in sqlite_calls(device))
+
+
+def test_launcher_stops_when_server_does_not_serve_book(device):
+    device.env["KOBO_WGET_RESPONSE"] = '{"served":false,"error":"missing"}'
+
+    result = run_launcher(device)
+
+    assert result.returncode == 1
+    assert "not in this calibre-web library" in error_log(device)
+    assert_no_browser_call(device)
+    urls = wget_urls(device)
+    assert len(urls) == 1
+    assert urls[0].endswith("&check=1")
+
+
+def test_launcher_reports_when_server_is_unreachable(device):
+    device.env["WGET_EXIT_CODE"] = "1"
+
+    result = run_launcher(device)
+
+    assert result.returncode == 1
+    assert "Could not contact calibre-web" in error_log(device)
+    assert_no_browser_call(device)
 
 
 @pytest.mark.parametrize(

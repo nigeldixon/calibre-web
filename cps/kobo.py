@@ -504,6 +504,16 @@ def _chapter_target_exists(structure, target):
     return any(item["path"] == target_path for item in structure.candidates)
 
 
+def _chapter_check_response(book_uuid, served, book_title="", error=None):
+    """Minimal JSON response used by the device launcher as an allow-list."""
+    payload = {"book_uuid": book_uuid, "served": bool(served)}
+    if book_title:
+        payload["title"] = book_title
+    if error:
+        payload["error"] = error
+    return make_response(jsonify(payload), 200)
+
+
 @csrf.exempt
 @kobo.route("/chapters/<book_uuid>", methods=["GET", "POST"])
 @requires_kobo_auth
@@ -513,13 +523,30 @@ def HandleChapterForm(book_uuid):
     if not (current_user.role_edit() or current_user.role_admin()):
         abort(403)
 
+    check_only = request.method == "GET" and request.args.get("check") == "1"
+    device_title = request.args.get("name", "").strip()
+
     book = calibre_db.get_book_by_uuid(book_uuid)
     if not book:
-        return _chapter_result_response(
-            book_uuid, False, "Book not found in this library.", 404)
+        log.info("Kobo chapter form: book %s not found in this library", book_uuid)
+        if check_only:
+            return _chapter_check_response(
+                book_uuid, False, device_title, "Book not found in this library.")
+        message = "Book not found in this library."
+        if device_title:
+            message = "'{}' is not in this calibre-web library. Sync it from calibre-web first.".format(
+                device_title)
+        return _chapter_result_response(book_uuid, False, message, 404)
 
     book_formats = [
         data for data in book.data if data.format in ("EPUB", "KEPUB")]
+    if check_only:
+        if book_formats:
+            return _chapter_check_response(
+                book_uuid, True, getattr(book, "title", "") or device_title)
+        return _chapter_check_response(
+            book_uuid, False, getattr(book, "title", "") or device_title,
+            "This book has no EPUB or KEPUB format.")
     if not book_formats:
         return _chapter_result_response(
             book_uuid, False, "This book has no EPUB or KEPUB format.", 400)
