@@ -16,6 +16,18 @@ SYSTEM_SQLITE_PATHS=${KOBO_SQLITE_SYSTEM_PATHS-/usr/bin/sqlite3 /usr/local/bin/s
 BUNDLED_SQLITE="$ADDON_DIR/sqlite3-armv7"
 LOG="$ADDON_DIR/last-error.log"
 DEBUG_LOG="$ADDON_DIR/debug.txt"
+STATE_FILE="$ADDON_DIR/page-state.txt"
+SQLITE_BIN=
+SQLITE_PYTHON=
+PYTHON_SQLITE_CODE='import sqlite3, sys
+connection = sqlite3.connect(sys.argv[1])
+for row in connection.execute(sys.argv[2]):
+    values = [u"" if value is None else value for value in row]
+    text = u"\n".join(values) + u"\n"
+    if sys.version_info[0] < 3:
+        text = text.encode("utf-8")
+    sys.stdout.write(text)
+'
 
 mkdir -p "$ADDON_DIR" 2>/dev/null || true
 
@@ -79,6 +91,55 @@ urlencode() {
     printf '%s' "$1" | od -An -v -tx1 | tr -d ' \n' | sed 's/../%&/g' | tr 'abcdef' 'ABCDEF'
 }
 
+state_value() {
+    [ -f "$STATE_FILE" ] || return 0
+    sed -n "s/^$1=//p" "$STATE_FILE" 2>/dev/null | tail -n 1
+}
+
+# The tracker records KEPUB page-number resets. Each reset means Nickel moved
+# into the next chapter file, so count forward from the saved bookmark.
+resolve_tracked_chapter() {
+    bookmark=$(printf '%s' "$2" | sed 's/#.*//')
+    chapter_query="SELECT Title || char(10) || COALESCE(CAST(\"___FileOffset\" AS REAL),0) || char(10) || COALESCE(CAST(\"___FileSize\" AS REAL),0) || char(10) || COALESCE(WordCount,0) FROM content WHERE ContentID LIKE '$1%' AND ContentType=9 ORDER BY CAST(\"___FileOffset\" AS REAL), Title;"
+    TRACK_BOOKMARK=$bookmark
+    TRACK_RESETS=$3
+    export TRACK_BOOKMARK TRACK_RESETS
+    execute_sql "$chapter_query" 2>/dev/null | awk '
+function norm(s) {
+    sub(/^OEBPS\//, "", s)
+    return s
+}
+{
+    line[NR] = $0
+}
+END {
+    count = 0
+    for (i = 1; i <= NR; i += 4) {
+        if (line[i] != "") {
+            count++
+            title[count] = line[i]
+        }
+    }
+    if (count == 0) exit
+
+    target = norm(ENVIRON["TRACK_BOOKMARK"])
+    base = 0
+    for (i = 1; i <= count; i++) {
+        candidate = norm(title[i])
+        if (candidate == target || (candidate != "" && index(target, candidate) > 0)) {
+            base = i
+            break
+        }
+    }
+    if (base == 0) exit
+
+    idx = base + (ENVIRON["TRACK_RESETS"] + 0)
+    if (idx < 1) idx = 1
+    if (idx > count) idx = count
+    print title[idx]
+}'
+}
+
 query_current_book() {
     READER=
     # A valid reader that fails on the query should not be silently replaced
@@ -87,6 +148,7 @@ query_current_book() {
     if [ -n "${KOBO_SQLITE:-}" ] && command_exists "$KOBO_SQLITE"; then
         if "$KOBO_SQLITE" "$DB" "$QUERY"; then
             READER=$KOBO_SQLITE
+            SQLITE_BIN=$KOBO_SQLITE
             return 0
         else
             status=$?
@@ -96,6 +158,7 @@ query_current_book() {
     if command_exists "$BUNDLED_SQLITE"; then
         if "$BUNDLED_SQLITE" "$DB" "$QUERY"; then
             READER=$BUNDLED_SQLITE
+            SQLITE_BIN=$BUNDLED_SQLITE
             return 0
         else
             status=$?
@@ -106,6 +169,7 @@ query_current_book() {
         command_exists "$candidate" || continue
         if "$candidate" "$DB" "$QUERY"; then
             READER=$candidate
+            SQLITE_BIN=$candidate
             return 0
         else
             status=$?
@@ -114,20 +178,22 @@ query_current_book() {
     done
     for candidate in python2 python python3; do
         command_exists "$candidate" || continue
-        if "$candidate" -c 'import sqlite3, sys
-connection = sqlite3.connect(sys.argv[1])
-for row in connection.execute(sys.argv[2]):
-    values = [u"" if value is None else value for value in row]
-    text = u"\n".join(values) + u"\n"
-    if sys.version_info[0] < 3:
-        text = text.encode("utf-8")
-    sys.stdout.write(text)
-' "$DB" "$QUERY"; then
+        if "$candidate" -c "$PYTHON_SQLITE_CODE" "$DB" "$QUERY"; then
             READER="$candidate (python)"
+            SQLITE_PYTHON=$candidate
             return 0
         fi
     done
     return 1
+}
+
+# Run a diagnostic query using the reader that successfully read the book.
+execute_sql() {
+    if [ -n "$SQLITE_PYTHON" ]; then
+        "$SQLITE_PYTHON" -c "$PYTHON_SQLITE_CODE" "$DB" "$1"
+    else
+        "$SQLITE_BIN" "$DB" "$1"
+    fi
 }
 
 MODE=${1:-}
@@ -161,6 +227,33 @@ title=$(printf '%s\n' "$info" | sed -n '2p' | tr -d '\r')
 location=$(printf '%s\n' "$info" | sed -n '3p' | tr -d '\r')
 [ -n "$uuid" ] || fail "No book found in KoboReader.sqlite."
 
+# Prefer a live page-tracker result over Kobo's stale bookmark. Only use a
+# reading-session state that is recent, which avoids inheriting a position
+# from the last time the device was used.
+tracker_view=$(state_value view)
+tracker_page=$(state_value page)
+tracker_resets=$(state_value resets)
+tracker_updated=$(state_value updated)
+case "$tracker_page" in ''|*[!0-9]*) tracker_page= ;; esac
+case "$tracker_resets" in ''|*[!0-9]*) tracker_resets=0 ;; esac
+case "$tracker_updated" in ''|*[!0-9]*) tracker_updated= ;; esac
+if [ "$tracker_view" = "ReadingView" ] && [ -n "$tracker_page" ] \
+        && [ "$tracker_page" -gt 0 ] && [ -n "$tracker_updated" ]; then
+    now=$(date '+%s' 2>/dev/null || printf 0)
+    case "$now" in
+        ''|*[!0-9]*) now=0 ;;
+    esac
+    age=$((now - tracker_updated))
+    if [ "$age" -ge 0 ] && [ "$age" -le 300 ]; then
+        case "$uuid" in
+            ????????-????-????-????-????????????)
+                tracked=$(resolve_tracked_chapter "$uuid" "$location" "$tracker_resets")
+                [ -n "$tracked" ] && location=$tracked
+                ;;
+        esac
+    fi
+fi
+
 url="$base/chapters/$uuid?name=$(urlencode "$title")&location=$(urlencode "$location")"
 
 # Debug first, so it also reports books whose ContentID is not a UUID.
@@ -174,7 +267,31 @@ if [ "$MODE" = "--debug" ]; then
         printf 'title:    %s\n' "$title"
         printf 'location: %s\n' "$location"
         printf 'url:      %s\n' "$url"
+        printf 'tracker:  view=%s page=%s resets=%s updated=%s\n' \
+            "$tracker_view" "$tracker_page" "$tracker_resets" "$tracker_updated"
     } > "$DEBUG_LOG" 2>/dev/null || fail "Could not write $DEBUG_LOG"
+
+    DIAG_QUERY=$(cat <<SQL
+SELECT ContentID, ContentType, Title, BookTitle, ChapterIDBookmarked,
+       "___NumPages" AS NumPages, WordCount,
+       "___FileOffset" AS FileOffset, "___FileSize" AS FileSize,
+       "___PercentRead" AS PercentRead, CurrentChapterProgress AS ChapterProgress
+FROM content
+WHERE ContentID LIKE '$uuid%'
+ORDER BY ContentType, "___FileOffset";
+SQL
+)
+    {
+        if [ -n "$QNDB" ]; then
+            printf 'firmware: %s\n' "$("$QNDB" -m ndbFirmwareVersion 2>/dev/null | head -n 1)"
+        fi
+        printf '\n=== content columns ===\n'
+        execute_sql "PRAGMA table_info(content);" 2>/dev/null |
+            grep -Ei 'NumPages|WordCount|FileOffset|FileSize|PercentRead|ChapterProgress|ChapterIDBookmarked|ContentID|ContentType' || true
+        printf '\n=== book/chapter rows ===\n'
+        execute_sql "$DIAG_QUERY" 2>/dev/null || true
+    } >> "$DEBUG_LOG" 2>/dev/null || true
+
     toast "Chapter debug written to debug.txt"
     exit 0
 fi

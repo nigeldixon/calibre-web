@@ -12,6 +12,8 @@ import sqlite3
 import struct
 import subprocess
 import sys
+import tarfile
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -19,6 +21,9 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 LAUNCHER = REPO_ROOT / "device" / "kobo" / "add_chapter.sh"
+TRACKER = REPO_ROOT / "device" / "kobo" / "track_page.sh"
+INIT_SCRIPT = REPO_ROOT / "device" / "kobo" / "init.d-calibre-web-chapters"
+BUILD_PACKAGE = REPO_ROOT / "device" / "kobo" / "build-kobo-root.sh"
 NICKELMENU_CONFIG = REPO_ROOT / "device" / "kobo" / "nickelmenu-config"
 BUNDLED_SQLITE = REPO_ROOT / "device" / "kobo" / "sqlite3-armv7"
 
@@ -61,7 +66,10 @@ def device(tmp_path):
             [
                 'printf "%s\\n" "$1" >> "$KOBO_SQLITE_LOG"',
                 'printf "%s\\n" "$2" >> "$KOBO_SQLITE_LOG"',
-                'printf "%s\\n%s\\n%s\\n" "$FAKE_UUID" "$FAKE_TITLE" "$FAKE_LOCATION"',
+                'case "$2" in',
+                '    *ContentType=9*) printf "%s\\n" "$KOBO_SQLITE_CHAPTER_ROWS" ;;',
+                '    *) printf "%s\\n%s\\n%s\\n" "$FAKE_UUID" "$FAKE_TITLE" "$FAKE_LOCATION" ;;',
+                "esac",
                 'exit "${SQLITE_EXIT_CODE:-0}"',
             ]
         )
@@ -106,6 +114,9 @@ def device(tmp_path):
             "KOBO_PYTHON_LOG": str(python_log),
             "KOBO_SQLITE_SYSTEM_PATHS": "",
             "KOBO_TEST_DB": str(db),
+            "KOBO_SQLITE_CHAPTER_ROWS": "",
+            "KOBO_TRACKER_EVENT_COUNTER": str(tmp_path / "tracker-event-counter"),
+            "KOBO_TRACKER_SLEEP": "0",
             "FAKE_UUID": DEFAULT_UUID,
             "FAKE_TITLE": "Dracula",
             "FAKE_LOCATION": "chapter1.xhtml#kobo.1.1",
@@ -130,6 +141,17 @@ def run_launcher(device, *args):
         capture_output=True,
         text=True,
         timeout=30,
+        check=False,
+    )
+
+
+def run_tracker(device, *args, timeout=2):
+    return subprocess.run(
+        ["sh", str(TRACKER), *args],
+        env=device.env,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
         check=False,
     )
 
@@ -412,12 +434,184 @@ def test_qndb_failure_is_reported(device):
     assert "qndb bwmOpenBrowser failed" in error_log(device)
 
 
-def test_nickelmenu_config_uses_dynamic_launcher():
+def test_nickelmenu_config_has_minimal_visible_entries():
     config = NICKELMENU_CONFIG.read_text(encoding="utf-8")
     script = "/mnt/onboard/.adds/calibre-web-chapters/add_chapter.sh"
+    visible = [
+        line.strip()
+        for line in config.splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
 
-    assert f":reader :Add chapter mark :cmd_spawn :quiet:{script}" in config
-    assert f":main :Add chapter mark :cmd_spawn :quiet:{script}" in config
-    assert f":main :Add chapter (debug) :cmd_spawn :quiet:{script} --debug" in config
-    assert ":browser :Quit :nickel_misc :home" in config
+    assert f"menu_item :reader :Add chapter mark :cmd_spawn :quiet:{script}" in visible
+    assert "menu_item :browser :Quit :nickel_misc :home" in visible
+    assert not any(":main :" in line for line in visible)
     assert "http://" not in config
+
+
+def test_diagnostic_menu_entries_are_commented_out():
+    config = NICKELMENU_CONFIG.read_text(encoding="utf-8")
+    script = "/mnt/onboard/.adds/calibre-web-chapters"
+
+    assert (
+        f"# menu_item :main :Add chapter mark :cmd_spawn :quiet:{script}/add_chapter.sh"
+        in config
+    )
+    assert (
+        f"# menu_item :reader :Add chapter (debug reader) :cmd_spawn :quiet:"
+        f"{script}/add_chapter.sh --debug" in config
+    )
+    assert (
+        f"# menu_item :main :Reload page tracker :cmd_spawn :quiet:"
+        f"{script}/track_page.sh --restart" in config
+    )
+
+
+def test_launcher_uses_tracker_chapter_when_state_is_fresh(device):
+    (device.addon / "page-state.txt").write_text(
+        "\n".join(
+            [
+                "view=ReadingView",
+                "page=14",
+                "last_page=14",
+                "max_page=14",
+                "resets=1",
+                f"updated={int(time.time())}",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    device.env["KOBO_SQLITE_CHAPTER_ROWS"] = "\n".join(
+        [
+            "chapter1.xhtml", "0", "10", "100",
+            "chapter2.xhtml", "10", "10", "100",
+            "chapter3.xhtml", "20", "10", "100",
+        ]
+    )
+    device.env["FAKE_LOCATION"] = "OEBPS/chapter1.xhtml#kobo.1.1"
+
+    result = run_launcher(device)
+
+    assert result.returncode == 0, result.stderr
+    calls = sqlite_calls(device)
+    assert len(calls) == 2
+    assert "ContentType=9" in calls[1][1]
+    expected_url = (
+        f"{DEFAULT_BASE}/chapters/{DEFAULT_UUID}"
+        f"?name={encode('Dracula')}"
+        f"&location={encode('chapter2.xhtml')}"
+    )
+    assert qndb_calls(device)[0][3] == expected_url
+
+
+def test_launcher_ignores_stale_tracker_state(device):
+    (device.addon / "page-state.txt").write_text(
+        "\n".join(
+            [
+                "view=ReadingView",
+                "page=99",
+                "last_page=99",
+                "max_page=99",
+                "resets=9",
+                "updated=0",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = run_launcher(device)
+
+    assert result.returncode == 0, result.stderr
+    assert len(sqlite_calls(device)) == 1
+    expected_url = (
+        f"{DEFAULT_BASE}/chapters/{DEFAULT_UUID}"
+        f"?name={encode('Dracula')}"
+        f"&location={encode('chapter1.xhtml#kobo.1.1')}"
+    )
+    assert qndb_calls(device)[0][3] == expected_url
+
+
+def test_tracker_records_page_events_and_chapter_resets(device):
+    write_stub(
+        device.bin_dir / "qndb",
+        "\n".join(
+            [
+                'if [ "$1" = "-m" ]; then',
+                '    printf "HomePageView\\n"',
+                "    exit 0",
+                "fi",
+                'counter=${KOBO_TRACKER_EVENT_COUNTER}',
+                'n=$(cat "$counter" 2>/dev/null || printf 0)',
+                'n=$((n + 1))',
+                'printf "%s" "$n" > "$counter"',
+                'case "$n" in',
+                "    1) printf 'rvPageChanged 12\\n' ;;",
+                "    2) printf 'rvPageChanged 13\\n' ;;",
+                "    3) printf 'rvPageChanged 1\\n' ;;",
+                "    4) printf 'ndbViewChanged HomePageView\\n' ;;",
+                "esac",
+                "exit 0",
+            ]
+        )
+        + "\n",
+    )
+
+    with pytest.raises(subprocess.TimeoutExpired):
+        run_tracker(device)
+
+    state = {}
+    for line in (device.addon / "page-state.txt").read_text(encoding="utf-8").splitlines():
+        key, _, value = line.partition("=")
+        state[key] = value
+    assert state["view"] == "HomePageView"
+    assert state["page"] == "1"
+    assert state["last_page"] == "1"
+    assert state["max_page"] == "13"
+    assert state["resets"] == "1"
+    assert state["updated"].isdigit()
+
+
+@pytest.mark.parametrize(
+    "script",
+    [LAUNCHER, TRACKER, INIT_SCRIPT, BUILD_PACKAGE],
+)
+def test_device_shell_scripts_have_valid_syntax(script):
+    result = subprocess.run(
+        ["sh", "-n", str(script)], capture_output=True, text=True, check=False
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_build_package_contains_runtime_files_and_init_script(tmp_path):
+    output = tmp_path / "KoboRoot.tgz"
+    env = os.environ.copy()
+    env["KOBO_PACKAGE_OUTPUT"] = str(output)
+
+    result = subprocess.run(
+        ["sh", str(BUILD_PACKAGE)],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    with tarfile.open(output, "r:gz") as archive:
+        members = {member.name: member for member in archive.getmembers()}
+
+    addon = "./mnt/onboard/.adds/calibre-web-chapters"
+    expected_modes = {
+        "./etc/init.d/calibre-web-chapters": 0o755,
+        f"{addon}/add_chapter.sh": 0o755,
+        f"{addon}/track_page.sh": 0o755,
+        f"{addon}/sqlite3-armv7": 0o755,
+        "./mnt/onboard/.adds/nm/calibre-web-chapters": 0o644,
+    }
+    assert expected_modes.keys() <= members.keys()
+    for name, mode in expected_modes.items():
+        assert members[name].mode & 0o777 == mode
+    assert not any("page-state" in name or "debug.txt" in name for name in members)

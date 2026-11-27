@@ -2,14 +2,17 @@
 # Copy this file to: .adds/nm/calibre-web-chapters
 # Requires NickelMenu and NickelDBus (qndb). Reboot after copying.
 
-# Reader overflow menu: mark the book currently open.
+# Reader overflow menu: mark the book currently open. The page tracker is
+# started at boot by /etc/init.d/calibre-web-chapters, so this single entry
+# works for whichever book is open.
 menu_item :reader :Add chapter mark :cmd_spawn :quiet:/mnt/onboard/.adds/calibre-web-chapters/add_chapter.sh
-
-# Main menu: uses the most recently read book.
-menu_item :main :Add chapter mark :cmd_spawn :quiet:/mnt/onboard/.adds/calibre-web-chapters/add_chapter.sh
-
-# Diagnostic entry: writes debug.txt instead of opening the browser.
-menu_item :main :Add chapter (debug) :cmd_spawn :quiet:/mnt/onboard/.adds/calibre-web-chapters/add_chapter.sh --debug
 
 # Firmware 4.23+ cannot leave the full-screen browser otherwise.
 menu_item :browser :Quit :nickel_misc :home
+
+# Diagnostic entries, disabled by default. Uncomment and reboot to use them.
+# menu_item :main :Add chapter mark :cmd_spawn :quiet:/mnt/onboard/.adds/calibre-web-chapters/add_chapter.sh
+# menu_item :main :Add chapter (debug) :cmd_spawn :quiet:/mnt/onboard/.adds/calibre-web-chapters/add_chapter.sh --debug
+# menu_item :reader :Add chapter (debug reader) :cmd_spawn :quiet:/mnt/onboard/.adds/calibre-web-chapters/add_chapter.sh --debug
+# menu_item :main :Start chapter tracker :cmd_spawn :quiet:/mnt/onboard/.adds/calibre-web-chapters/track_page.sh
+# menu_item :main :Reload page tracker :cmd_spawn :quiet:/mnt/onboard/.adds/calibre-web-chapters/track_page.sh --restart
