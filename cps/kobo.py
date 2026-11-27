@@ -19,6 +19,7 @@
 
 import base64
 from contextlib import contextmanager
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 import os
 import shutil
@@ -308,6 +309,11 @@ def HandleSyncRequest():
 
             if is_new:
                 sync_results.append({"NewEntitlement": entitlement})
+            elif binary_changed and not book.is_archived:
+                # The TOC rewrite changes the file, so the Kobo must fetch it
+                # again. Use the Preview/Full pair that makes it re-download
+                # in place; a bare ChangedEntitlement only removes the book.
+                sync_results.extend(_binary_update_entitlements(entitlement))
             else:
                 sync_results.append({"ChangedEntitlement": entitlement})
 
@@ -816,10 +822,14 @@ def get_download_url_for_book(book_id, book_format, version=None):
 def create_book_entitlement(book, archived):
     book_uuid = str(book.uuid)
     last_modified = book.last_modified or book.timestamp
+    created = convert_to_kobo_timestamp_string(book.timestamp)
     return {
         "Accessibility": "Full",
-        "ActivePeriod": {"From": convert_to_kobo_timestamp_string(datetime.now(timezone.utc))},
-        "Created": convert_to_kobo_timestamp_string(book.timestamp),
+        # Kobo treats a new ActivePeriod as a newly activated entitlement,
+        # which clears the downloaded copy. Keep it tied to the book's
+        # creation time so updates stay under the same entitlement.
+        "ActivePeriod": {"From": created},
+        "Created": created,
         "CrossRevisionId": book_uuid,
         "Id": book_uuid,
         "IsRemoved": archived,
@@ -830,6 +840,32 @@ def create_book_entitlement(book, archived):
         "RevisionId": book_uuid,
         "Status": "Active",
     }
+
+
+def _binary_update_entitlements(entitlement):
+    """Build sync items that re-download a rewritten book under the same id.
+
+    A bare ``ChangedEntitlement`` clears the Kobo's downloaded copy but does
+    not fetch the new file. Kobo does auto-download when a ``NewEntitlement``
+    arrives with a changed ``Accessibility``. The Preview entitlement clears
+    the old file, and the immediately following Full entitlement makes the
+    device fetch the rewritten file without adding a second book.
+    """
+    preview = deepcopy(entitlement)
+    preview_entitlement = preview.setdefault("BookEntitlement", {})
+    preview_entitlement["Accessibility"] = "Preview"
+    preview_entitlement["IsRemoved"] = False
+    preview.pop("ReadingState", None)
+
+    full = deepcopy(entitlement)
+    full_entitlement = full.setdefault("BookEntitlement", {})
+    full_entitlement["Accessibility"] = "Full"
+    full_entitlement["IsRemoved"] = False
+
+    return [
+        {"ChangedEntitlement": preview},
+        {"NewEntitlement": full},
+    ]
 
 
 def current_time():

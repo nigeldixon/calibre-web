@@ -552,3 +552,164 @@ def test_kobo_sync_payload_refreshes_metadata_without_entitlement(monkeypatch, t
     version = f"{book_file_mtime_ns}-{book_file_size}"
     expected_url = f"http://localhost:8081/kobo/{token}/download/9/epub?v={version}"
     assert metadata["DownloadUrls"][0]["Url"] == expected_url
+
+
+def test_kobo_sync_payload_redownloads_rewritten_book_in_place(monkeypatch, tmp_path):
+    library = tmp_path / "library"
+    book_file = library / "Author" / "Book" / "book.epub"
+    _, _ = _write_epub(book_file)
+    os.utime(book_file, (1705000000, 1705000000))
+    stat = book_file.stat()
+    version = f"{stat.st_mtime_ns}-{stat.st_size}"
+
+    book = _make_book()
+    book.last_modified = datetime(2024, 1, 11, tzinfo=timezone.utc)
+    changed_row = SimpleNamespace(
+        Books=book,
+        is_archived=False,
+        last_modified=None,
+        date_added=datetime(2023, 1, 1),
+    )
+
+    store = TokenStore()
+    rendered = {}
+    _install_auth_fakes(monkeypatch, store, rendered)
+    monkeypatch.setattr(
+        kobo_auth,
+        "calibre_db",
+        SimpleNamespace(session=SimpleNamespace(query=lambda *args, **kwargs: SyncQuery())),
+    )
+    monkeypatch.setattr(kobo.config, "get_book_path", lambda: str(library), raising=False)
+    monkeypatch.setattr(kobo.config, "config_external_port", "8081", raising=False)
+    monkeypatch.setattr(kobo.config, "config_kobo_proxy", False, raising=False)
+    monkeypatch.setattr(kobo.config, "config_kepubifypath", False, raising=False)
+    monkeypatch.setattr(kobo.config, "config_use_google_drive", False, raising=False)
+
+    application = _make_kobo_app()
+    token = _generate_token(application)
+
+    fake_db = SimpleNamespace(
+        Books=SimpleNamespace(
+            id=column("books.id"),
+            last_modified=column("books.last_modified"),
+            timestamp=column("books.timestamp"),
+        ),
+        Data=SimpleNamespace(format=column("books.format")),
+    )
+    fake_kobo_ub = SimpleNamespace(
+        app_DB_path="app.db",
+        session=SimpleNamespace(),
+        KoboSyncedBooks=SimpleNamespace(
+            user_id=column("synced.user_id"), book_id=column("synced.book_id")
+        ),
+        ArchivedBook=SimpleNamespace(
+            book_id=column("archived.book_id"),
+            user_id=column("archived.user_id"),
+            last_modified=column("archived.last_modified"),
+            is_archived=column("archived.is_archived"),
+        ),
+        BookShelf=SimpleNamespace(
+            book_id=column("shelf.book_id"), date_added=column("shelf.date_added")
+        ),
+        Shelf=SimpleNamespace(
+            user_id=column("user_shelf.user_id"), kobo_sync=column("user_shelf.kobo_sync")
+        ),
+        KoboReadingState=SimpleNamespace(
+            book_id=column("reading.book_id"),
+            user_id=column("reading.user_id"),
+            last_modified=column("reading.last_modified"),
+        ),
+    )
+
+    def user_query(model):
+        if model is fake_kobo_ub.KoboSyncedBooks:
+            return SyncQuery(count=1)
+        return SyncQuery()
+
+    fake_kobo_ub.session.query = user_query
+    changed_query = SyncQuery(rows=[changed_row])
+
+    class CalibreSession:
+        def query(self, *models):
+            if models and models[0] is fake_kobo_ub.KoboSyncedBooks.book_id:
+                return SyncQuery()
+            if len(models) == 1 and models[0] is fake_db.Books:
+                return SyncQuery()
+            return changed_query
+
+    monkeypatch.setattr(kobo, "db", fake_db)
+    monkeypatch.setattr(kobo, "ub", fake_kobo_ub)
+    monkeypatch.setattr(
+        kobo,
+        "calibre_db",
+        SimpleNamespace(
+            reconnect_db=lambda *args, **kwargs: None,
+            common_filters=lambda **kwargs: column("common_filter"),
+            session=CalibreSession(),
+        ),
+    )
+    monkeypatch.setattr(
+        kobo,
+        "current_user",
+        SimpleNamespace(
+            id=7,
+            name="tester",
+            kobo_only_shelves_sync=True,
+            role_download=lambda: True,
+        ),
+    )
+
+    sync_token = SimpleNamespace(
+        books_last_modified=datetime(2024, 1, 1),
+        books_last_created=datetime(2024, 1, 1),
+        books_last_id=-1,
+        reading_state_last_modified=datetime(2024, 1, 1),
+        to_headers=lambda headers: None,
+    )
+    monkeypatch.setattr(
+        kobo,
+        "SyncToken",
+        SimpleNamespace(
+            SyncToken=SimpleNamespace(from_headers=lambda headers: sync_token)
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        kobo,
+        "get_or_create_reading_state",
+        lambda book_id: SimpleNamespace(last_modified=datetime.min),
+    )
+    monkeypatch.setattr(kobo, "sync_shelves", lambda *args, **kwargs: None)
+    monkeypatch.setattr(kobo.kobo_sync_status, "add_synced_books", lambda book_id: None)
+    removed = []
+    monkeypatch.setattr(
+        kobo.kobo_sync_status,
+        "remove_synced_book",
+        lambda book_id: removed.append(book_id),
+    )
+
+    response = application.test_client().get(f"/kobo/{token}/v1/library/sync")
+
+    assert response.status_code == 200
+    payload = json.loads(response.get_data(as_text=True))
+    assert len(payload) == 2
+    assert "ChangedEntitlement" in payload[0]
+    assert "NewEntitlement" in payload[1]
+
+    preview = payload[0]["ChangedEntitlement"]
+    full = payload[1]["NewEntitlement"]
+    assert preview["BookEntitlement"]["Accessibility"] == "Preview"
+    assert full["BookEntitlement"]["Accessibility"] == "Full"
+    for item in (preview, full):
+        entitlement = item["BookEntitlement"]
+        assert entitlement["Id"] == "book-uuid"
+        assert entitlement["RevisionId"] == "book-uuid"
+        assert entitlement["IsRemoved"] is False
+        assert entitlement["ActivePeriod"]["From"] == entitlement["Created"]
+        item_metadata = item["BookMetadata"]
+        assert item_metadata["Title"] == "A Book"
+        assert item_metadata["DownloadUrls"][0]["Url"] == (
+            f"http://localhost:8081/kobo/{token}/download/9/epub?v={version}"
+        )
+
+    assert removed == []
