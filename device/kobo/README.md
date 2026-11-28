@@ -11,8 +11,11 @@ The launcher does **not** call any hypothesis-specific server code. It only:
 5. Opens a **modal** Nickel browser at:
 
    ```
-   /kobo/<token>/chapters/<uuid>?name=<title>&location=<current chapter>
+   /kobo/<token>/chapters/<uuid>?name=<title>&location=<current chapter>&client=<session>
    ```
+6. Waits for the form to report a successful save, then adds an additive
+   `ContentType=899` TOC row to `KoboReader.sqlite` so the new chapter is
+   visible in Nickel immediately. The downloaded book file is not changed.
 
 The form is prefilled, so you normally just type the chapter name (e.g. `Page 12`) and press **Save chapter**.
 
@@ -25,7 +28,7 @@ The form is prefilled, so you normally just type the chapter name (e.g. `Page 12
 | Bundled `sqlite3-armv7` | Statically linked SQLite CLI used to read the current book. Stock Kobo firmware has no `sqlite3` command; no extra install is needed. |
 | calibre-web Kobo sync | The `api_endpoint=` line must already point at calibre-web. Generate it from **Profile → Kobo Sync Token → Create/View**. |
 | Book must be synced from calibre-web | Synced books have `ContentID` equal to the Calibre UUID. USB-sideloaded books have a path there and cannot be used with this endpoint. |
-| `wget` (optional) | Used for the server-side allow-list check. If unavailable, the launcher opens the form directly, as before. |
+| `wget` | Used for the server-side allow-list check and for polling the save result. If unavailable, the launcher opens the form directly, but the local TOC row cannot be added until the next sync. |
 
 ## Install the complete package
 
@@ -101,8 +104,8 @@ Then safely eject and reboot so NickelMenu and the init script pick up any confi
 3. Tap the reader menu → **Add chapter mark**.
 4. The modal browser opens with the chapter list and a free-text location prefilled from the tracker (or from Kobo's bookmark when no tracker state is available).
 5. Enter the chapter name and, if the listed page is not right, adjust the free-text location.
-6. Press **Save chapter**, then close the modal.
-7. Run **Sync** on the device. The rewritten EPUB/KEPUB is downloaded via the normal `ChangedEntitlement` flow.
+6. Press **Save chapter**. The launcher detects the save and adds the chapter to the reader's table of contents immediately; close the modal with **Quit** when finished.
+7. Run **Sync** on the device. The rewritten EPUB/KEPUB is downloaded via the normal `ChangedEntitlement` flow and becomes the durable copy of the same chapter mark.
 
 ## Verify device-side detection
 
@@ -149,6 +152,8 @@ The launcher and tracker logic can be exercised on a development machine with st
 | `KOBO_READER_DB` | `/mnt/onboard/.kobo/KoboReader.sqlite` |
 | `KOBO_SQLITE` | bundled `sqlite3-armv7`, then any system `sqlite3` |
 | `KOBO_SQLITE_SYSTEM_PATHS` | `/usr/bin/sqlite3 /usr/local/bin/sqlite3` |
+| `KOBO_RESULT_ATTEMPTS` | `150` polls for a successful form save |
+| `KOBO_RESULT_INTERVAL` | `2` seconds between result polls |
 | `KOBO_TRACKER_SLEEP` | `2` seconds between signal subscriptions |
 | `KOBO_PACKAGE_OUTPUT` | `device/kobo/KoboRoot.tgz` |
 
@@ -170,6 +175,8 @@ The script downloads the pinned SQLite amalgamation, patches out static-glibc `p
 - On firmware 4.46, `___NumPages` is `-1`; the tracker therefore uses page-number resets for KEPUB chapter detection. Backwards jumps or very short chapters can leave the estimate wrong. The form's dropdown and free-text location are there to correct it.
 - If no fresh tracker state exists, the launcher falls back to its old `ReadStatus`/`DateLastRead` query and to `ChapterIDBookmarked`, both of which may be stale.
 - The launcher's server check uses `GET /kobo/<token>/chapters/<uuid>?check=1`, which returns `{"served": true}` or `{"served": false}` without opening the form. If the check says the book is not served, sync that book from calibre-web first.
+- A successful form save writes a one-shot, session-scoped marker on the server. The launcher reads it from `GET /kobo/<token>/chapters/<uuid>/result?client=<session>` and then removes it, so a later launch cannot replay a stale mark.
+- The local TOC row is additive: it points at the existing chapter row via `ChapterIDBookmarked` and never rewrites or replaces the downloaded EPUB/KEPUB. If the local insert fails, the server-side TOC rewrite still converges on the next sync.
 - `ChapterIDBookmarked` is Kobo-generated and often looks like `chapter1.xhtml#kobo.1.1`. The server strips `#kobo.*` / `#point(...)` fragments, so the chapter target is the clean path.
 - The title used as `name` prefill is the device's book title; it is only a starting value, not a TOC label.
 - The modal browser needs Wi-Fi. Opening a URL normally makes Nickel connect automatically.

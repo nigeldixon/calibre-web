@@ -20,6 +20,7 @@
 import base64
 from contextlib import contextmanager
 from copy import deepcopy
+import hashlib
 from datetime import datetime, timedelta, timezone
 import os
 import posixpath
@@ -29,6 +30,7 @@ import uuid
 import zipfile
 from time import gmtime, strftime
 import json
+import time
 from urllib.parse import unquote
 import requests
 
@@ -462,7 +464,8 @@ def _chapter_form_url(book_uuid):
 
 def _chapter_form_response(book_uuid, candidates, name, selected_location,
                            custom_location, book_title="", error=None, status=200,
-                           initial_location="", initial_custom_location=""):
+                           initial_location="", initial_custom_location="",
+                           client=""):
     if _wants_chapter_json():
         payload = {
             "success": error is None,
@@ -488,6 +491,7 @@ def _chapter_form_response(book_uuid, candidates, name, selected_location,
         form_action=_chapter_form_url(book_uuid),
         initial_location=initial_location or "",
         initial_custom_location=initial_custom_location or "",
+        client=client or "",
     ), status)
 
 
@@ -556,6 +560,113 @@ def _chapter_check_response(book_uuid, served, book_title="", error=None):
     if error:
         payload["error"] = error
     return make_response(jsonify(payload), 200)
+
+
+def _valid_chapter_client(client):
+    """Device-generated session ids are short, opaque and shell-safe."""
+    if not client or len(client) > 80:
+        return False
+    return all(char.isalnum() or char in "-_" for char in client)
+
+
+def _chapter_marker_dir():
+    override = os.environ.get('CALIBRE_WEB_CHAPTER_MARKER_DIR')
+    directory = override or os.path.join(
+        tempfile.gettempdir(), 'calibre-web-kobo-chapters')
+    os.makedirs(directory, mode=0o700, exist_ok=True)
+    cutoff = time.time() - 86400
+    for name in os.listdir(directory):
+        path = os.path.join(directory, name)
+        try:
+            if os.path.getmtime(path) < cutoff:
+                os.unlink(path)
+        except OSError:
+            pass
+    return directory
+
+
+def _chapter_marker_path(client, book_uuid):
+    token = get_auth_token() or ''
+    digest = hashlib.sha256(
+        '{}|{}|{}'.format(token, client, book_uuid).encode('utf-8')).hexdigest()
+    return os.path.join(_chapter_marker_dir(), digest + '.json')
+
+
+def _record_chapter_save(client, book_uuid, name, location):
+    """Record a successful save so the device can add a local TOC row."""
+    if not _valid_chapter_client(client):
+        return
+    # The launcher parses line-oriented output; keep values on one line.
+    def one_line(value):
+        return str(value).replace('\r', ' ').replace('\n', ' ').replace('\0', ' ')
+
+    directory = _chapter_marker_dir()
+    handle, temporary = tempfile.mkstemp(
+        prefix='.chapter-save-', suffix='.json', dir=directory)
+    try:
+        with os.fdopen(handle, 'w', encoding='utf-8') as marker:
+            json.dump({
+                'saved': True,
+                'name': one_line(name),
+                'location': one_line(location),
+                'saved_at': datetime.now(timezone.utc).isoformat(),
+            }, marker)
+        os.replace(temporary, _chapter_marker_path(client, book_uuid))
+    except Exception:
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
+        raise
+
+
+def _read_chapter_save(client, book_uuid):
+    if not _valid_chapter_client(client):
+        return {}
+    try:
+        with open(_chapter_marker_path(client, book_uuid), encoding='utf-8') as marker:
+            data = json.load(marker)
+        if not isinstance(data, dict) or not data.get('saved'):
+            return {}
+        return data
+    except (OSError, ValueError):
+        return {}
+
+
+def _chapter_device_result_response(data):
+    """Line format the Kobo shell launcher can parse without a JSON parser."""
+    lines = ['saved=1' if data.get('saved') else 'saved=0']
+    if data.get('saved'):
+        lines.append('name=' + str(data.get('name', '')))
+        lines.append('location=' + str(data.get('location', '')))
+    response = make_response('\n'.join(lines) + '\n')
+    response.headers['Content-Type'] = 'text/plain; charset=utf-8'
+    return response
+
+
+@csrf.exempt
+@kobo.route("/chapters/<book_uuid>/result", methods=["GET"])
+@requires_kobo_auth
+@download_required
+def HandleChapterResult(book_uuid):
+    """Report a completed save to the device launcher."""
+    if not (current_user.role_edit() or current_user.role_admin()):
+        abort(403)
+
+    client = request.args.get("client", "").strip()
+    data = _read_chapter_save(client, book_uuid)
+    if data:
+        # A launch owns one save marker; consuming it prevents stale retries.
+        try:
+            os.unlink(_chapter_marker_path(client, book_uuid))
+        except OSError:
+            pass
+    if _wants_chapter_json():
+        payload = {"book_uuid": book_uuid, "saved": bool(data)}
+        payload.update({
+            key: data[key] for key in ("name", "location") if key in data})
+        return make_response(jsonify(payload), 200)
+    return _chapter_device_result_response(data)
 
 
 @csrf.exempt
@@ -638,8 +749,10 @@ def HandleChapterForm(book_uuid):
             book_uuid, candidates, name, selected_location, custom_location,
             book_title=book.title,
             initial_location=selected_location,
-            initial_custom_location=custom_location)
+            initial_custom_location=custom_location,
+            client=request.args.get("client", "").strip())
 
+    client = request.form.get("client", "").strip()
     name = request.form.get("name", "").strip()
     selected_location = request.form.get("location", "").strip()
     custom_location = request.form.get("location_custom", "").strip()
@@ -652,7 +765,8 @@ def HandleChapterForm(book_uuid):
             error="Enter a chapter name (200 characters or fewer).",
             status=400,
             initial_location=initial_location,
-            initial_custom_location=initial_custom_location)
+            initial_custom_location=initial_custom_location,
+            client=client)
 
     # A prefilled free-text value must not beat a dropdown selection the user
     # actually changed. Compare normalized paths: Kobo may send an OPF-prefixed
@@ -674,7 +788,8 @@ def HandleChapterForm(book_uuid):
             error="Choose or enter a chapter location.",
             status=400,
             initial_location=initial_location,
-            initial_custom_location=initial_custom_location)
+            initial_custom_location=initial_custom_location,
+            client=client)
 
     try:
         target = epub_chapters.normalize_location(
@@ -686,7 +801,8 @@ def HandleChapterForm(book_uuid):
             error="That location is not a valid relative chapter path.",
             status=400,
             initial_location=initial_location,
-            initial_custom_location=initial_custom_location)
+            initial_custom_location=initial_custom_location,
+            client=client)
 
     format_targets = []
     for entry in format_entries:
@@ -700,7 +816,8 @@ def HandleChapterForm(book_uuid):
                 book_uuid, candidates, name, "", raw_location[:1000],
                 book_title=book.title, error=error, status=400,
                 initial_location=initial_location,
-                initial_custom_location=initial_custom_location)
+                initial_custom_location=initial_custom_location,
+                client=client)
         format_targets.append(format_target)
 
     rewritten = []
@@ -740,6 +857,11 @@ def HandleChapterForm(book_uuid):
     location = epub_chapters.target_to_string(target)
     log.info(
         "Kobo chapter %r added to book %s at %s", name, book_uuid, location)
+    try:
+        _record_chapter_save(client, book_uuid, name, location)
+    except Exception as exc:
+        # The server rewrite is durable; device-side feedback is best-effort.
+        log.warning("Could not record chapter save for device: %s", exc)
     return _chapter_result_response(
         book_uuid,
         True,

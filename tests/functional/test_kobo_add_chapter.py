@@ -257,6 +257,8 @@ def _install_fakes(monkeypatch, store, library, book, db_state):
 
 
 def _prepare(monkeypatch, tmp_path):
+    monkeypatch.setenv(
+        "CALIBRE_WEB_CHAPTER_MARKER_DIR", str(tmp_path / "chapter-markers"))
     library = tmp_path / "library"
     path = library / "Author" / "Book" / "book.epub"
     _write_epub(path)
@@ -336,6 +338,18 @@ def test_chapter_form_get_prefills_detected_location(monkeypatch, tmp_path):
     assert 'value="chapter1.xhtml"' in body
     assert 'name="initial_location" value="chapter1.xhtml"' in body
     assert 'name="initial_location_custom" value="chapter1.xhtml"' in body
+
+
+def test_chapter_form_passes_device_session_id_to_hidden_field(monkeypatch, tmp_path):
+    application, token, _, _, _ = _prepare(monkeypatch, tmp_path)
+    client = application.test_client()
+
+    response = client.get(
+        f"/kobo/{token}/chapters/chapter-book-uuid"
+        "?client=device-session-1")
+
+    assert response.status_code == 200
+    assert 'name="client" value="device-session-1"' in response.get_data(as_text=True)
 
 
 def test_prefixed_prefilled_location_does_not_override_changed_dropdown(monkeypatch, tmp_path):
@@ -784,3 +798,64 @@ def test_chapter_post_restores_formats_after_later_failure(monkeypatch, tmp_path
     assert all(path.read_bytes() == data for path, data in originals.items())
     assert db_state["commits"] == 0
     assert list(tmp_path.glob("**/.kobo-chapter-backup-*")) == []
+
+
+def test_successful_post_records_consumable_device_marker(monkeypatch, tmp_path):
+    application, token, _, _, _ = _prepare(monkeypatch, tmp_path)
+    client = application.test_client()
+
+    response = client.post(
+        f"/kobo/{token}/chapters/chapter-book-uuid",
+        data={
+            "name": "Page 12",
+            "location": "chapter1.xhtml",
+            "client": "device-session-1",
+        },
+    )
+    assert response.status_code == 200
+
+    result = client.get(
+        f"/kobo/{token}/chapters/chapter-book-uuid/result"
+        "?client=device-session-1")
+
+    assert result.status_code == 200
+    assert result.headers["Content-Type"].startswith("text/plain")
+    assert result.get_data(as_text=True) == (
+        "saved=1\nname=Page 12\nlocation=chapter1.xhtml\n")
+
+    again = client.get(
+        f"/kobo/{token}/chapters/chapter-book-uuid/result"
+        "?client=device-session-1")
+    assert again.get_data(as_text=True) == "saved=0\n"
+
+
+def test_device_result_json_and_invalid_client(monkeypatch, tmp_path):
+    application, token, _, _, _ = _prepare(monkeypatch, tmp_path)
+    client = application.test_client()
+
+    client.post(
+        f"/kobo/{token}/chapters/chapter-book-uuid",
+        data={
+            "name": "JSON mark",
+            "location": "chapter1.xhtml",
+            "client": "device-session-2",
+        },
+    )
+    response = client.get(
+        f"/kobo/{token}/chapters/chapter-book-uuid/result"
+        "?client=device-session-2",
+        headers={"Accept": "application/json"},
+    )
+
+    assert response.status_code == 200
+    assert json.loads(response.get_data(as_text=True)) == {
+        "book_uuid": "chapter-book-uuid",
+        "saved": True,
+        "name": "JSON mark",
+        "location": "chapter1.xhtml",
+    }
+
+    invalid = client.get(
+        f"/kobo/{token}/chapters/chapter-book-uuid/result"
+        "?client=bad%2Fclient")
+    assert invalid.get_data(as_text=True) == "saved=0\n"

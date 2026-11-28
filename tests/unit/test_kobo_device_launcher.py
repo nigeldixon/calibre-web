@@ -18,6 +18,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import re
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 LAUNCHER = REPO_ROOT / "device" / "kobo" / "add_chapter.sh"
@@ -69,6 +70,7 @@ def device(tmp_path):
                 'printf "%s\\n" "$2" >> "$KOBO_SQLITE_LOG"',
                 'case "$2" in',
                 '    *ContentType=9*) printf "%s\\n" "$KOBO_SQLITE_CHAPTER_ROWS" ;;',
+                '    *"FROM content WHERE ContentID LIKE"*) printf "%s\\n" "$KOBO_SQLITE_CHAPTER_ROWS" ;;',
                 '    *) printf "%s\\n%s\\n%s\\n" "$FAKE_UUID" "$FAKE_TITLE" "$FAKE_LOCATION" ;;',
                 "esac",
                 'exit "${SQLITE_EXIT_CODE:-0}"',
@@ -84,7 +86,13 @@ def device(tmp_path):
                 'for arg in "$@"; do',
                 '    printf "%s\\n" "$arg" >> "$KOBO_PYTHON_LOG"',
                 "done",
-                'printf "%s\\n%s\\n%s\\n" "$FAKE_UUID" "$FAKE_TITLE" "$FAKE_LOCATION"',
+                'case "$2" in',
+                '    *executescript*) exit 0 ;;',
+                '    *) case "$4" in',
+                '           *"FROM content WHERE ContentID LIKE"*) printf "%s\\n" "$KOBO_SQLITE_CHAPTER_ROWS" ;;',
+                '           *) printf "%s\\n%s\\n%s\\n" "$FAKE_UUID" "$FAKE_TITLE" "$FAKE_LOCATION" ;;',
+                '       esac ;;',
+                'esac',
             ]
         )
         + "\n",
@@ -108,7 +116,14 @@ def device(tmp_path):
             [
                 'for last do :; done',
                 'printf "%s\\n" "$last" >> "$KOBO_WGET_LOG"',
-                'if [ -n "${KOBO_WGET_RESPONSE:-}" ]; then printf "%s\\n" "$KOBO_WGET_RESPONSE"; else printf \'{"served":true}\\n\'; fi',
+                'case "$last" in',
+                '    */result?*)',
+                '        if [ -n "${KOBO_RESULT_RESPONSE:-}" ]; then printf "%s\\n" "$KOBO_RESULT_RESPONSE"; else printf "saved=0\\n"; fi',
+                '        ;;',
+                '    *)',
+                '        if [ -n "${KOBO_WGET_RESPONSE:-}" ]; then printf "%s\\n" "$KOBO_WGET_RESPONSE"; else printf \'{"served":true}\\n\'; fi',
+                '        ;;',
+                'esac',
                 'exit "${WGET_EXIT_CODE:-0}"',
             ]
         )
@@ -125,7 +140,10 @@ def device(tmp_path):
             "KOBO_QNDB_LOG": str(qndb_log),
             "KOBO_WGET_LOG": str(wget_log),
             "KOBO_WGET_RESPONSE": "",
+            "KOBO_RESULT_RESPONSE": "",
             "WGET_EXIT_CODE": "0",
+            "KOBO_RESULT_ATTEMPTS": "0",
+            "KOBO_RESULT_INTERVAL": "0",
             "KOBO_SQLITE_LOG": str(sqlite_log),
             "KOBO_PYTHON_LOG": str(python_log),
             "KOBO_SQLITE_SYSTEM_PATHS": "",
@@ -198,14 +216,27 @@ def wget_urls(device):
 def sqlite_calls(device):
     if not device.sqlite_log.exists():
         return []
-    lines = device.sqlite_log.read_text(encoding="utf-8").splitlines()
-    return [lines[index : index + 2] for index in range(0, len(lines), 2)]
+    calls = []
+    for line in device.sqlite_log.read_text(encoding="utf-8").splitlines():
+        if line == str(device.db):
+            calls.append([line])
+        elif calls:
+            calls[-1].append(line)
+    return calls
 
 
 def assert_no_browser_call(device):
     assert not any(
         call[:3] == ["-m", "bwmOpenBrowser", "true"] for call in qndb_calls(device)
     )
+
+
+def assert_browser_url(device, expected_url):
+    url = qndb_calls(device)[0][3]
+    prefix, separator, client = url.rpartition("&client=")
+    assert separator
+    assert re.fullmatch(r"[A-Za-z0-9_-]+", client)
+    assert prefix == expected_url
 
 
 def test_launcher_parses_config_and_opens_modal_browser(device):
@@ -227,7 +258,7 @@ def test_launcher_parses_config_and_opens_modal_browser(device):
     )
     calls = qndb_calls(device)
     assert calls[0][:3] == ["-m", "bwmOpenBrowser", "true"]
-    assert calls[0][3] == expected_url
+    assert_browser_url(device, expected_url)
     assert calls[1][:3] == ["-m", "mwcToast", "4000"]
     assert calls[1][3] == "Chapter form opened"
 
@@ -528,7 +559,7 @@ def test_launcher_uses_tracker_chapter_when_state_is_fresh(device):
         f"?name={encode('Dracula')}"
         f"&location={encode('chapter2.xhtml')}"
     )
-    assert qndb_calls(device)[0][3] == expected_url
+    assert_browser_url(device, expected_url)
 
 
 def test_launcher_ignores_stale_tracker_state(device):
@@ -558,7 +589,7 @@ def test_launcher_ignores_stale_tracker_state(device):
         f"?name={encode('Dracula')}"
         f"&location={encode('chapter1.xhtml#kobo.1.1')}"
     )
-    assert qndb_calls(device)[0][3] == expected_url
+    assert_browser_url(device, expected_url)
 
 
 def test_tracker_records_page_events_and_chapter_resets(device):
@@ -651,6 +682,146 @@ def test_launcher_reports_when_server_is_unreachable(device):
     assert result.returncode == 1
     assert "Could not contact calibre-web" in error_log(device)
     assert_no_browser_call(device)
+
+
+def kepub_sqlite_rows():
+    return "\n".join(
+        [
+            f"{DEFAULT_UUID}!OEBPS!chapter1.xhtml-0", "899",
+            "application/x-kobo-epub+zip", DEFAULT_UUID, "Dracula",
+            "0", "1", "", "",
+            f"{DEFAULT_UUID}!OEBPS!chapter1.xhtml", "9",
+            "application/xhtml+xml", DEFAULT_UUID, "Dracula",
+            "0", "1", "", "chapter1.xhtml",
+        ]
+    )
+
+
+def test_launcher_adds_local_toc_row_after_successful_save(device):
+    device.db.write_bytes(b"")
+    with sqlite3.connect(device.db) as connection:
+        connection.execute(
+            """
+            CREATE TABLE content (
+                ContentID TEXT PRIMARY KEY,
+                ContentType TEXT,
+                MimeType TEXT,
+                BookID TEXT,
+                BookTitle TEXT,
+                Title TEXT,
+                Attribution TEXT,
+                adobe_location TEXT,
+                IsEncrypted BOOL,
+                FirstTimeReading BOOL,
+                ParagraphBookmarked INTEGER,
+                BookmarkWordOffset INTEGER,
+                VolumeIndex INTEGER,
+                ___NumPages INTEGER,
+                ReadStatus INTEGER,
+                ___UserID TEXT NOT NULL,
+                ___FileOffset INTEGER,
+                ___FileSize INTEGER,
+                ___PercentRead INTEGER,
+                Depth INTEGER,
+                ChapterIDBookmarked TEXT,
+                NumShortcovers INTEGER
+            )
+            """
+        )
+        connection.execute(
+            "INSERT INTO content (ContentID, ContentType, ___UserID, NumShortcovers) "
+            "VALUES (?, '6', '', 2)", (DEFAULT_UUID,))
+        connection.execute(
+            "INSERT INTO content (ContentID, ContentType, ___UserID, VolumeIndex) "
+            "VALUES (?, '899', '', 0)",
+            (f"{DEFAULT_UUID}!OEBPS!chapter1.xhtml-0",))
+        connection.execute(
+            "INSERT INTO content (ContentID, ContentType, ___UserID, VolumeIndex) "
+            "VALUES (?, '9', '', 0)",
+            (f"{DEFAULT_UUID}!OEBPS!chapter1.xhtml",))
+    device.env["KOBO_SQLITE_CHAPTER_ROWS"] = kepub_sqlite_rows()
+    device.env["KOBO_RESULT_ATTEMPTS"] = "2"
+    device.env["KOBO_RESULT_INTERVAL"] = "0"
+    device.env["KOBO_RESULT_RESPONSE"] = (
+        "saved=1\nname=Page 12\nlocation=OEBPS/chapter1.xhtml")
+
+    result = run_launcher(device)
+
+    assert result.returncode == 0, result.stderr
+    urls = wget_urls(device)
+    assert any(url.endswith("&check=1") for url in urls)
+    assert any("/result?client=" in url for url in urls)
+
+    toasts = [call[3] for call in qndb_calls(device)
+              if call[:3] == ["-m", "mwcToast", "4000"]]
+    assert toasts[-1] == "Chapter mark added to reader"
+
+    writes = [call for call in sqlite_calls(device)
+              if any("INSERT INTO content" in line for line in call)]
+    assert len(writes) == 1
+    sql = "\n".join(writes[0][1:])
+    assert f"'{DEFAULT_UUID}!OEBPS!chapter1.xhtml-1'" in sql
+    assert "899" in sql
+    assert "'Page 12'" in sql
+    assert "NULLIF('" + DEFAULT_UUID + "!OEBPS!chapter1.xhtml','')" in sql
+    assert "adobe_location, IsEncrypted" in sql
+    assert "NULL, 'false', 'true'" in sql
+    assert "NumShortcovers = COALESCE(NumShortcovers, 0) + 1" in sql
+
+    with sqlite3.connect(device.db) as connection:
+        connection.executescript(sql)
+        row = connection.execute(
+            "SELECT ContentType, MimeType, BookID, Title, adobe_location, "
+            "ChapterIDBookmarked FROM content WHERE ContentID = ?",
+            (f"{DEFAULT_UUID}!OEBPS!chapter1.xhtml-1",),
+        ).fetchone()
+        shortcovers = connection.execute(
+            "SELECT NumShortcovers FROM content WHERE ContentID = ?",
+            (DEFAULT_UUID,),
+        ).fetchone()[0]
+    assert row == (
+        "899", "application/x-kobo-epub+zip", DEFAULT_UUID, "Page 12", None,
+        f"{DEFAULT_UUID}!OEBPS!chapter1.xhtml",
+    )
+    assert shortcovers == 3
+
+
+def test_launcher_does_not_write_database_when_save_incomplete(device):
+    device.env["KOBO_RESULT_ATTEMPTS"] = "1"
+    device.env["KOBO_RESULT_INTERVAL"] = "0"
+    device.env["KOBO_RESULT_RESPONSE"] = "saved=0"
+
+    result = run_launcher(device)
+
+    assert result.returncode == 0, result.stderr
+    assert not any("INSERT INTO content" in line
+                   for call in sqlite_calls(device) for line in call)
+    assert not any(call[3] == "Chapter mark added to reader"
+                   for call in qndb_calls(device))
+
+
+def test_launcher_writes_local_row_with_python_sqlite_fallback(device):
+    (device.bin_dir / "sqlite3").unlink()
+    for name in (
+        "sh", "date", "mkdir", "sed", "head", "tail", "tr", "od", "rm", "awk",
+    ):
+        source = shutil.which(name, path="/usr/bin:/bin")
+        assert source is not None, f"missing host command: {name}"
+        (device.bin_dir / name).symlink_to(source)
+    device.env["PATH"] = str(device.bin_dir)
+    device.env["KOBO_SQLITE_CHAPTER_ROWS"] = kepub_sqlite_rows()
+    device.env["KOBO_RESULT_ATTEMPTS"] = "1"
+    device.env["KOBO_RESULT_INTERVAL"] = "0"
+    device.env["KOBO_RESULT_RESPONSE"] = (
+        "saved=1\nname=Python mark\nlocation=OEBPS/chapter1.xhtml")
+
+    result = run_launcher(device)
+
+    assert result.returncode == 0, error_log(device) or result.stderr
+    python_log = device.python_log.read_text(encoding="utf-8")
+    assert "executescript" in python_log
+    assert "INSERT INTO content" in python_log
+    assert "'Python mark'" in python_log
 
 
 @pytest.mark.parametrize(

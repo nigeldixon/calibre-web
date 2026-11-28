@@ -121,6 +121,9 @@
       <form method="post" action="{{ form_action }}">
         <input type="hidden" name="initial_location" value="{{ initial_location }}">
         <input type="hidden" name="initial_location_custom" value="{{ initial_custom_location }}">
+        {% if client %}
+          <input type="hidden" name="client" value="{{ client }}">
+        {% endif %}
 
         <label for="name">Chapter name</label>
         <input id="name" name="name" type="text" maxlength="200"
@@ -151,7 +154,7 @@
         </div>
       </form>
 
-      <p class="note">This adds a table-of-contents entry only. The book does not change until the device syncs again.</p>
+      <p class="note">This adds a table-of-contents entry only. The reader's chapter list updates immediately; the book file changes on the next sync.</p>
     </div>
   </div>
 </body>

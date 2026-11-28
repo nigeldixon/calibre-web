@@ -28,6 +28,10 @@ for row in connection.execute(sys.argv[2]):
         text = text.encode("utf-8")
     sys.stdout.write(text)
 '
+PYTHON_SQLITE_EXEC_CODE='import sqlite3, sys
+connection = sqlite3.connect(sys.argv[1])
+connection.executescript(sys.argv[2])
+'
 
 mkdir -p "$ADDON_DIR" 2>/dev/null || true
 
@@ -140,6 +144,22 @@ END {
 }'
 }
 
+# Small HTTP GET helper for the launcher's two server calls.
+http_get() {
+    url=$1
+    if command_exists wget; then
+        wget -q -O - "$url" 2>>"$LOG"
+    elif command_exists /usr/bin/wget; then
+        /usr/bin/wget -q -O - "$url" 2>>"$LOG"
+    elif command_exists /bin/wget; then
+        /bin/wget -q -O - "$url" 2>>"$LOG"
+    elif command_exists busybox; then
+        busybox wget -q -O - "$url" 2>>"$LOG"
+    else
+        return 127
+    fi
+}
+
 # Ask the server whether this book is served from this library. This is the
 # device-side allow-list: it avoids opening a browser page that would only
 # report "Book not found". Returns 0 served, 1 not served, 2 unreachable.
@@ -150,25 +170,12 @@ book_is_served() {
         *) check_url="$check_url?check=1" ;;
     esac
 
-    response=
-    status=0
-    if command_exists wget; then
-        response=$(wget -q -O - "$check_url" 2>>"$LOG")
-        status=$?
-    elif command_exists /usr/bin/wget; then
-        response=$(/usr/bin/wget -q -O - "$check_url" 2>>"$LOG")
-        status=$?
-    elif command_exists /bin/wget; then
-        response=$(/bin/wget -q -O - "$check_url" 2>>"$LOG")
-        status=$?
-    elif command_exists busybox; then
-        response=$(busybox wget -q -O - "$check_url" 2>>"$LOG")
-        status=$?
-    else
+    response=$(http_get "$check_url")
+    status=$?
+    if [ "$status" -eq 127 ]; then
         # No usable HTTP client: fall back to opening the form directly.
         return 0
     fi
-
     [ "$status" -eq 0 ] || return 2
     case "$response" in
         *'"served":true'*|*'"served": true'*) return 0 ;;
@@ -230,6 +237,226 @@ execute_sql() {
     else
         "$SQLITE_BIN" "$DB" "$1"
     fi
+}
+
+execute_sql_write() {
+    if [ -n "$SQLITE_PYTHON" ]; then
+        "$SQLITE_PYTHON" -c "$PYTHON_SQLITE_EXEC_CODE" "$DB" "$1"
+    else
+        "$SQLITE_BIN" "$DB" "$1"
+    fi
+}
+
+sql_quote() {
+    printf '%s' "$1" | sed "s/'/''/g"
+}
+
+new_client_id() {
+    now=$(date '+%s' 2>/dev/null || printf 0)
+    case "$now" in ''|*[!0-9]*) now=0 ;; esac
+    random=$(od -An -N4 -tx4 /dev/urandom 2>/dev/null | tr -d ' \n')
+    case "$random" in ''|*[!0-9A-Fa-f]*) random=$$ ;; esac
+    printf 'cw%s-%s-%s' "$now" "$$" "$random"
+}
+
+# Poll the one-shot result marker written by a successful form POST. The
+# launcher stays alive in the background while the modal browser is open.
+poll_chapter_result() {
+    result_url=$1
+    attempts=${KOBO_RESULT_ATTEMPTS-150}
+    interval=${KOBO_RESULT_INTERVAL-2}
+    case "$attempts" in ''|*[!0-9]*) attempts=150 ;; esac
+    case "$interval" in ''|*[!0-9]*) interval=2 ;; esac
+
+    attempt=0
+    while [ "$attempt" -lt "$attempts" ]; do
+        response=$(http_get "$result_url")
+        status=$?
+        if [ "$status" -eq 0 ]; then
+            saved=$(printf '%s\n' "$response" | sed -n 's/^saved=//p' | tail -n 1)
+            if [ "$saved" = "1" ]; then
+                CHAPTER_SAVE_NAME=$(
+                    printf '%s\n' "$response" | sed -n 's/^name=//p' | tail -n 1)
+                CHAPTER_SAVE_LOCATION=$(
+                    printf '%s\n' "$response" | sed -n 's/^location=//p' | tail -n 1)
+                return 0
+            fi
+        fi
+        attempt=$((attempt + 1))
+        if [ "$attempt" -lt "$attempts" ]; then
+            sleep "$interval" >/dev/null 2>&1 || true
+        fi
+    done
+    return 1
+}
+
+# Add a TOC row to the copied device database. The downloaded book file is
+# deliberately untouched: the server rewrite remains the durable source of
+# truth, and the next sync converges with this additive local row.
+insert_local_chapter() {
+    book_uuid=$1
+    book_title=$2
+    chapter_name=$3
+    chapter_location=$4
+
+    uuid_sql=$(sql_quote "$book_uuid")
+    title_sql=$(sql_quote "$book_title")
+    name_sql=$(sql_quote "$chapter_name")
+    location_sql=$(sql_quote "$chapter_location")
+
+    chapter_query="SELECT COALESCE(ContentID,'') || char(10) || COALESCE(CAST(ContentType AS TEXT),'') || char(10) || COALESCE(MimeType,'') || char(10) || COALESCE(BookID,'') || char(10) || COALESCE(BookTitle,'') || char(10) || COALESCE(CAST(VolumeIndex AS TEXT),'0') || char(10) || COALESCE(CAST(Depth AS TEXT),'0') || char(10) || COALESCE(ChapterIDBookmarked,'') || char(10) || COALESCE(adobe_location,'') FROM content WHERE ContentID LIKE '$uuid_sql%' ORDER BY CAST(VolumeIndex AS INTEGER), ContentID;"
+    rows=$(execute_sql "$chapter_query" 2>>"$LOG") || return 1
+    [ -n "$rows" ] || return 1
+
+    LOCAL_TARGET=$chapter_location
+    export LOCAL_TARGET
+    match=$(printf '%s\n' "$rows" | awk '
+function norm(s) {
+    sub(/^file:\/\//, "", s)
+    sub(/^OEBPS\//, "", s)
+    sub(/^.*!/, "", s)
+    sub(/^.*\)/, "", s)
+    sub(/#.*$/, "", s)
+    sub(/-[0-9]+$/, "", s)
+    return s
+}
+function baseid(s) {
+    sub(/-[0-9]+$/, "", s)
+    return s
+}
+function newid(id, idx, out) {
+    if (match(id, /#\([0-9]+\)/)) {
+        out = substr(id, 1, RSTART - 1) "#(" idx ")" substr(id, RSTART + RLENGTH)
+    } else if (match(id, /-[0-9]+$/)) {
+        out = substr(id, 1, RSTART - 1) "-" idx
+    } else {
+        out = id "-" idx
+    }
+    return out
+}
+BEGIN { target = norm(ENVIRON["LOCAL_TARGET"]); bestscore = -1 }
+{
+    line[NR] = $0
+}
+END {
+    count = int(NR / 9)
+    if (count < 1) exit 1
+
+    preferred = 9
+    for (i = 1; i <= count; i++) {
+        if (line[(i - 1) * 9 + 2] + 0 == 899) {
+            preferred = 899
+            break
+        }
+    }
+
+    maxvol = 0
+    for (i = 1; i <= count; i++) {
+        if (line[(i - 1) * 9 + 2] + 0 == preferred) {
+            vol = line[(i - 1) * 9 + 6] + 0
+            if (vol > maxvol) maxvol = vol
+        }
+    }
+    idx = maxvol + 1
+
+    bookmark = ""
+    for (i = 1; i <= count; i++) {
+        id = line[(i - 1) * 9 + 1]
+        if (line[(i - 1) * 9 + 2] + 0 == 9 && norm(id) == target) {
+            bookmark = id
+            break
+        }
+    }
+
+    for (i = 1; i <= count; i++) {
+        offset = (i - 1) * 9
+        id = line[offset + 1]
+        type = line[offset + 2] + 0
+        nid = norm(id)
+        score = 0
+        if (nid == target) score = 100
+        else if (target != "" && index(nid, target) > 0) score = 50
+        else if (nid != "" && index(target, nid) > 0) score = 40
+        if (type == 899) score += 20
+        if (score > bestscore && score > 0) {
+            bestscore = score
+            bestid = id
+            bestmime = line[offset + 3]
+            bestdepth = line[offset + 7] + 0
+            bestbm = line[offset + 8]
+        }
+    }
+
+    if (bestid == "") {
+        for (i = 1; i <= count; i++) {
+            offset = (i - 1) * 9
+            if (line[offset + 2] + 0 == preferred) {
+                bestid = line[offset + 1]
+                bestmime = line[offset + 3]
+                bestdepth = line[offset + 7] + 0
+                bestbm = line[offset + 8]
+                break
+            }
+        }
+    }
+    if (bestid == "") exit 1
+
+    if (bestbm != "") bookmark = bestbm
+    else if (bookmark == "") bookmark = baseid(bestid)
+
+    kepub = (index(bestid, "!") > 0) ? 1 : 0
+    if (bestmime == "")
+        bestmime = kepub ? "application/x-kobo-epub+zip" : "application/epub+zip"
+    if (bestdepth < 1) bestdepth = 1
+
+    if (norm(bestid) == target || (target != "" && index(norm(bestid), target) > 0)) {
+        new = newid(bestid, idx)
+    } else if (kepub) {
+        bang1 = index(bestid, "!")
+        rest = substr(bestid, bang1 + 1)
+        bang2 = index(rest, "!")
+        prefix = substr(bestid, 1, bang1 + bang2)
+        new = prefix ENVIRON["LOCAL_TARGET"]
+    } else if (match(bestid, /#\([0-9]+\)/)) {
+        prefix = substr(bestid, 1, RSTART - 1)
+        new = prefix "#(" idx ")" ENVIRON["LOCAL_TARGET"]
+    } else {
+        new = baseid(bestid) "-" idx
+    }
+
+    print new
+    print bestmime
+    print idx
+    print bestdepth
+    print bookmark
+    print kepub
+}') || return 1
+
+    new_id=$(printf '%s\n' "$match" | sed -n '1p')
+    mime=$(printf '%s\n' "$match" | sed -n '2p')
+    index_value=$(printf '%s\n' "$match" | sed -n '3p')
+    depth=$(printf '%s\n' "$match" | sed -n '4p')
+    bookmark=$(printf '%s\n' "$match" | sed -n '5p')
+    kepub=$(printf '%s\n' "$match" | sed -n '6p')
+    [ -n "$new_id" ] || return 1
+    case "$index_value" in ''|*[!0-9]*) index_value=1 ;; esac
+    case "$depth" in ''|*[!0-9]*) depth=1 ;; esac
+
+    new_id_sql=$(sql_quote "$new_id")
+    mime_sql=$(sql_quote "$mime")
+    bookmark_sql=$(sql_quote "$bookmark")
+    if [ "$kepub" = "1" ]; then
+        adobe_sql=NULL
+    else
+        adobe_sql="'$location_sql'"
+    fi
+
+    insert_sql="BEGIN;
+INSERT INTO content (ContentID, ContentType, MimeType, BookID, BookTitle, Title, Attribution, adobe_location, IsEncrypted, FirstTimeReading, ParagraphBookmarked, BookmarkWordOffset, VolumeIndex, ___NumPages, ReadStatus, ___UserID, ___FileOffset, ___FileSize, ___PercentRead, Depth, ChapterIDBookmarked)
+VALUES ('$new_id_sql', 899, '$mime_sql', '$uuid_sql', '$title_sql', '$name_sql', NULL, $adobe_sql, 'false', 'true', 0, 0, $index_value, -1, 0, '', 0, 0, 0, $depth, NULLIF('$bookmark_sql',''));
+UPDATE content SET NumShortcovers = COALESCE(NumShortcovers, 0) + 1 WHERE ContentID = '$uuid_sql' AND ContentType = 6;
+COMMIT;"
+    execute_sql_write "$insert_sql" 2>>"$LOG"
 }
 
 MODE=${1:-}
@@ -304,7 +531,9 @@ if [ -n "$TRACKER_FRESH" ]; then
     [ -n "$tracked" ] && location=$tracked
 fi
 
-url="$base/chapters/$uuid?name=$(urlencode "$title")&location=$(urlencode "$location")"
+client=$(new_client_id)
+url="$base/chapters/$uuid?name=$(urlencode "$title")&location=$(urlencode "$location")&client=$client"
+result_url="$base/chapters/$uuid/result?client=$client"
 
 # Debug first, so it also reports books whose ContentID is not a UUID.
 if [ "$MODE" = "--debug" ]; then
@@ -316,6 +545,7 @@ if [ "$MODE" = "--debug" ]; then
         printf 'uuid:     %s\n' "$uuid"
         printf 'title:    %s\n' "$title"
         printf 'location: %s\n' "$location"
+        printf 'client:   %s\n' "$client"
         printf 'url:      %s\n' "$url"
         printf 'tracker:  view=%s page=%s uuid=%s resets=%s updated=%s\n' \
             "$tracker_view" "$tracker_page" "$tracker_uuid" "$tracker_resets" "$tracker_updated"
@@ -365,4 +595,17 @@ esac
 
 "$QNDB" -m bwmOpenBrowser true "$url" >/dev/null 2>&1 || fail "qndb bwmOpenBrowser failed (is NickelDBus running?)."
 toast "Chapter form opened"
+
+# Stay alive long enough for the form to be submitted. A successful save is
+# reported through a one-shot marker and added to the device database here,
+# so Nickel sees the new chapter without waiting for a sync.
+if poll_chapter_result "$result_url"; then
+    if insert_local_chapter "$uuid" "$title" \
+            "$CHAPTER_SAVE_NAME" "$CHAPTER_SAVE_LOCATION"; then
+        toast "Chapter mark added to reader"
+    else
+        log "Chapter was saved, but the local KoboReader.sqlite update failed"
+        toast "Saved, but reader chapter list could not be updated"
+    fi
+fi
 exit 0
