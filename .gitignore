@@ -50,6 +50,9 @@ vendor/
 *.log
 cps/cache
 
+# Generated Kobo deployment package
+/device/kobo/KoboRoot.tgz
+
 .idea/
 *.bak
 *.log.*

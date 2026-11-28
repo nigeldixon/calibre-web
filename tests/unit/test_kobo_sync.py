@@ -479,6 +479,137 @@ def test_metadata_only_edit_sends_changed_product_metadata_without_entitlement(m
     assert token.books_last_modified == datetime(2024, 1, 2)
 
 
+def test_binary_rewrite_sync_reloads_in_place_without_removing_book(monkeypatch, app, tmp_path):
+    library = tmp_path / "library"
+    book_file = library / "Author" / "Book" / "book.epub"
+    book_file.parent.mkdir(parents=True)
+    book_file.write_bytes(b"12345")
+    os.utime(book_file, (1705000000, 1705000000))
+
+    app.wsgi_app.is_proxied = True
+    token = SimpleNamespace(
+        books_last_modified=datetime(2024, 1, 1),
+        books_last_created=datetime(2024, 1, 1),
+        books_last_id=-1,
+        reading_state_last_modified=datetime(2024, 1, 1),
+    )
+    monkeypatch.setattr(
+        kobo,
+        "SyncToken",
+        SimpleNamespace(SyncToken=SimpleNamespace(from_headers=lambda headers: token)),
+    )
+    monkeypatch.setattr(kobo, "current_user", SimpleNamespace(
+        role_download=lambda: True,
+        id=7,
+        kobo_only_shelves_sync=False,
+        name="tester",
+    ))
+    monkeypatch.setattr(kobo.config, "get_book_path", lambda: str(library))
+    monkeypatch.setattr(kobo.config, "config_kepubifypath", False, raising=False)
+    monkeypatch.setattr(kobo, "get_download_url_for_book", lambda *args, **kwargs: "download-url")
+    monkeypatch.setattr(kobo, "get_or_create_reading_state",
+                        lambda book_id: SimpleNamespace(last_modified=datetime.min))
+    monkeypatch.setattr(kobo, "get_metadata", lambda book: {
+        "Title": "Rewritten Book",
+        "RevisionId": book.uuid,
+        "DownloadUrls": [{
+            "Url": "download?v={}".format(
+                kobo.get_book_format_binary_version(book, book.data[0]))
+        }],
+    })
+    monkeypatch.setattr(kobo, "sync_shelves", lambda *args, **kwargs: None)
+    monkeypatch.setattr(kobo.kobo_sync_status, "add_synced_books", lambda book_id: None)
+    removed = []
+    monkeypatch.setattr(
+        kobo.kobo_sync_status,
+        "remove_synced_book",
+        lambda book_id: removed.append(book_id),
+    )
+
+    sync_results = []
+    monkeypatch.setattr(
+        kobo,
+        "generate_sync_response",
+        lambda sync_token, results, set_cont=False: sync_results.extend(results) or "sync-response",
+    )
+
+    book = SimpleNamespace(
+        id=42,
+        uuid="binary-uuid",
+        timestamp=datetime(2020, 1, 1),
+        last_modified=datetime(2024, 1, 11),
+        path="Author/Book",
+        data=[SimpleNamespace(name="book", format="EPUB", uncompressed_size=5)],
+    )
+    row = SimpleNamespace(
+        Books=book,
+        is_archived=False,
+        last_modified=None,
+        date_added=datetime(2020, 1, 1),
+    )
+    query = RecordingQuery(rows=[row], count=0)
+    reading_state_model = SimpleNamespace(
+        book_id=column("reading.book_id"),
+        user_id=column("reading.user_id"),
+        last_modified=column("reading.last_modified"),
+    )
+
+    def session_query(*args, **kwargs):
+        if args and args[0] is reading_state_model:
+            return RecordingQuery()
+        return query
+
+    monkeypatch.setattr(kobo, "calibre_db", SimpleNamespace(
+        reconnect_db=lambda *args, **kwargs: None,
+        session=SimpleNamespace(query=session_query),
+        common_filters=lambda **kwargs: column("common_filter"),
+    ))
+    monkeypatch.setattr(kobo, "db", SimpleNamespace(
+        Books=SimpleNamespace(
+            id=column("books.id"),
+            timestamp=column("books.timestamp"),
+            last_modified=column("books.last_modified"),
+        ),
+        Data=SimpleNamespace(format=column("books.format")),
+    ))
+    monkeypatch.setattr(kobo, "ub", SimpleNamespace(
+        app_DB_path="app.db",
+        session=SimpleNamespace(query=lambda *args, **kwargs: RecordingQuery()),
+        ArchivedBook=SimpleNamespace(
+            book_id=column("archived.book_id"),
+            user_id=column("archived.user_id"),
+            last_modified=column("archived.last_modified"),
+            is_archived=column("archived.is_archived"),
+        ),
+        KoboReadingState=reading_state_model,
+    ))
+
+    with app.test_request_context("/kobo/token/v1/library/sync"):
+        result = _unwrap(kobo.HandleSyncRequest)()
+
+    assert result == "sync-response"
+    assert len(sync_results) == 2
+    assert "ChangedEntitlement" in sync_results[0]
+    assert "NewEntitlement" in sync_results[1]
+
+    preview = sync_results[0]["ChangedEntitlement"]
+    full = sync_results[1]["NewEntitlement"]
+    assert preview["BookEntitlement"]["Accessibility"] == "Preview"
+    assert full["BookEntitlement"]["Accessibility"] == "Full"
+    for item in (preview, full):
+        entitlement = item["BookEntitlement"]
+        assert entitlement["Id"] == "binary-uuid"
+        assert entitlement["RevisionId"] == "binary-uuid"
+        assert entitlement["IsRemoved"] is False
+        assert entitlement["ActivePeriod"]["From"] == entitlement["Created"]
+        assert item["BookMetadata"]["Title"] == "Rewritten Book"
+
+    version = "{}-{}".format(book_file.stat().st_mtime_ns, book_file.stat().st_size)
+    assert full["BookMetadata"]["DownloadUrls"][0]["Url"] == "download?v={}".format(version)
+    assert removed == []
+    assert token.books_last_modified == datetime(2024, 1, 11)
+
+
 def test_archive_change_is_selected_from_archive_timestamp(monkeypatch, app):
     app.wsgi_app.is_proxied = True
     token = SimpleNamespace(
@@ -607,6 +738,7 @@ def test_changed_entitlement_includes_reading_state_once(monkeypatch, app):
     )
     monkeypatch.setattr(kobo, "create_book_entitlement", lambda book, archived: {})
     monkeypatch.setattr(kobo, "get_metadata", lambda book: {})
+    monkeypatch.setattr(kobo, "book_binary_changed_with_edit", lambda book: False)
     monkeypatch.setattr(kobo, "sync_shelves", lambda *args, **kwargs: None)
     monkeypatch.setattr(kobo.kobo_sync_status, "add_synced_books", lambda book_id: None)
 
@@ -627,7 +759,7 @@ def test_changed_entitlement_includes_reading_state_once(monkeypatch, app):
     row = SimpleNamespace(
         Books=book,
         is_archived=False,
-        last_modified=None,
+        last_modified=datetime(2024, 1, 3, tzinfo=timezone.utc),
         date_added=datetime(2020, 1, 1),
     )
     query = RecordingQuery(rows=[row], count=0)
@@ -791,6 +923,7 @@ def test_create_book_entitlement_uses_timestamp_when_last_modified_missing():
 
     assert entitlement["LastModified"] == "2020-01-02T03:04:05Z"
     assert entitlement["Created"] == "2020-01-02T03:04:05Z"
+    assert entitlement["ActivePeriod"]["From"] == "2020-01-02T03:04:05Z"
 
 
 def test_book_change_filter_uses_id_as_timestamp_tie_breaker():

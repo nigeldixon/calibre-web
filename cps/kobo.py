@@ -18,12 +18,19 @@
 #  along with this program. If not, see <http://www.gnu.org/licenses/>.
 
 import base64
+from contextlib import contextmanager
+from copy import deepcopy
+import hashlib
 from datetime import datetime, timedelta, timezone
 import os
+import posixpath
+import shutil
+import tempfile
 import uuid
 import zipfile
 from time import gmtime, strftime
 import json
+import time
 from urllib.parse import unquote
 import requests
 
@@ -35,17 +42,20 @@ from flask import (
     current_app,
     url_for,
     redirect,
+    render_template,
     abort
 )
 from .cw_login import current_user
 from werkzeug.datastructures import Headers
 from sqlalchemy import func
 from sqlalchemy.sql.expression import and_, or_
-from sqlalchemy.exc import StatementError
+from sqlalchemy.exc import IntegrityError, OperationalError, StatementError
+from sqlalchemy.orm.exc import StaleDataError
 
 from . import config, logger, kobo_auth, db, calibre_db, helper, shelf as shelf_lib, ub, csrf, kobo_sync_status
 from . import isoLanguages, limiter
 from .epub import get_epub_layout
+from . import epub_chapters
 from .constants import COVER_THUMBNAIL_SMALL, COVER_THUMBNAIL_MEDIUM, COVER_THUMBNAIL_LARGE, BASE_DIR
 from .helper import get_download_link
 from .services import SyncToken as SyncToken
@@ -63,6 +73,43 @@ kobo_auth.disable_failed_auth_redirect_for_blueprint(kobo)
 kobo_auth.register_url_value_preprocessor(kobo)
 
 log = logger.create()
+
+
+class ChapterDatabaseError(Exception):
+    """The chapter files changed but the database update failed."""
+
+
+@contextmanager
+def _restorable_files(paths):
+    """Restore ``paths`` from copies if the caller raises before success."""
+    created = []
+    restorable = []
+    try:
+        for path in paths:
+            directory = os.path.dirname(os.path.abspath(path)) or '.'
+            handle, backup_path = tempfile.mkstemp(
+                prefix='.kobo-chapter-backup-',
+                suffix=os.path.splitext(path)[1],
+                dir=directory)
+            os.close(handle)
+            created.append(backup_path)
+            shutil.copy2(path, backup_path)
+            restorable.append((path, backup_path))
+        yield
+    except Exception:
+        for path, backup_path in restorable:
+            try:
+                if os.path.exists(backup_path):
+                    os.replace(backup_path, path)
+            except OSError as exc:
+                log.error("Kobo chapter restore failed for %s: %s", path, exc)
+        raise
+    finally:
+        for backup_path in created:
+            try:
+                os.unlink(backup_path)
+            except OSError:
+                pass
 
 
 def get_store_url_for_current_request():
@@ -265,6 +312,11 @@ def HandleSyncRequest():
 
             if is_new:
                 sync_results.append({"NewEntitlement": entitlement})
+            elif binary_changed and not book.is_archived:
+                # The TOC rewrite changes the file, so the Kobo must fetch it
+                # again. Use the Preview/Full pair that makes it re-download
+                # in place; a bare ChangedEntitlement only removes the book.
+                sync_results.extend(_binary_update_entitlements(entitlement))
             else:
                 sync_results.append({"ChangedEntitlement": entitlement})
 
@@ -398,6 +450,429 @@ def _book_format_path(book, book_data):
                         book_data.name + "." + book_data.format.lower())
 
 
+def _wants_chapter_json():
+    return 'application/json' in request.headers.get('Accept', '').lower()
+
+
+def _chapter_form_url(book_uuid):
+    return url_for(
+        "kobo.HandleChapterForm",
+        auth_token=get_auth_token(),
+        book_uuid=book_uuid,
+    )
+
+
+def _chapter_form_response(book_uuid, candidates, name, selected_location,
+                           custom_location, book_title="", error=None, status=200,
+                           initial_location="", initial_custom_location="",
+                           client=""):
+    if _wants_chapter_json():
+        payload = {
+            "success": error is None,
+            "book_uuid": book_uuid,
+            "candidates": candidates,
+        }
+        if error:
+            payload["error"] = error
+        else:
+            payload["name"] = name
+            payload["location"] = selected_location or custom_location
+        return make_response(jsonify(payload), status)
+
+    return make_response(render_template(
+        "kobo_chapter_form.html",
+        book_uuid=book_uuid,
+        candidates=candidates,
+        name=name or "",
+        selected_location=selected_location or "",
+        custom_location=custom_location or "",
+        book_title=book_title,
+        error=error,
+        form_action=_chapter_form_url(book_uuid),
+        initial_location=initial_location or "",
+        initial_custom_location=initial_custom_location or "",
+        client=client or "",
+    ), status)
+
+
+def _chapter_result_response(book_uuid, ok, message, status=200, **extra):
+    if _wants_chapter_json():
+        payload = {"success": ok, "message": message, "book_uuid": book_uuid}
+        payload.update(extra)
+        return make_response(jsonify(payload), status)
+
+    return make_response(render_template(
+        "kobo_chapter_result.html",
+        ok=ok,
+        message=message,
+        back_url=_chapter_form_url(book_uuid),
+        **extra
+    ), status)
+
+
+def _chapter_target_exists(structure, target):
+    target_path = epub_chapters.archive_target_path(structure.opf_dir, target)
+    return any(item["path"] == target_path for item in structure.candidates)
+
+
+def _normalized_location_text(raw_location, opf_dir):
+    """Return a canonical string for comparing prefilled and submitted values."""
+    try:
+        target = epub_chapters.normalize_location(raw_location, opf_dir)
+    except epub_chapters.ChapterLocationError:
+        return (raw_location or "").strip()
+    return epub_chapters.target_to_string(target)
+
+
+def _chapter_target_for_structure(target, structure):
+    """Resolve one location against a format's manifest.
+
+    Kobo records chapter files by name, while EPUB/KEPUB manifests may place
+    them in different folders. Accept an unambiguous filename match so a
+    device-supplied location can still address both rewritten formats.
+    """
+    if _chapter_target_exists(structure, target):
+        return target
+
+    wanted = posixpath.basename(target.href).lower()
+    matches = [
+        item for item in structure.candidates
+        if posixpath.basename(item["href"].partition('#')[0]).lower() == wanted
+    ]
+    if len(matches) != 1:
+        return None
+
+    try:
+        resolved = epub_chapters.normalize_location(
+            matches[0]["href"], structure.opf_dir)
+    except epub_chapters.ChapterLocationError:
+        return None
+    if target.fragment:
+        resolved = resolved._replace(fragment=target.fragment)
+    return resolved
+
+
+def _chapter_check_response(book_uuid, served, book_title="", error=None):
+    """Minimal JSON response used by the device launcher as an allow-list."""
+    payload = {"book_uuid": book_uuid, "served": bool(served)}
+    if book_title:
+        payload["title"] = book_title
+    if error:
+        payload["error"] = error
+    return make_response(jsonify(payload), 200)
+
+
+def _valid_chapter_client(client):
+    """Device-generated session ids are short, opaque and shell-safe."""
+    if not client or len(client) > 80:
+        return False
+    return all(char.isalnum() or char in "-_" for char in client)
+
+
+def _chapter_marker_dir():
+    override = os.environ.get('CALIBRE_WEB_CHAPTER_MARKER_DIR')
+    directory = override or os.path.join(
+        tempfile.gettempdir(), 'calibre-web-kobo-chapters')
+    os.makedirs(directory, mode=0o700, exist_ok=True)
+    cutoff = time.time() - 86400
+    for name in os.listdir(directory):
+        path = os.path.join(directory, name)
+        try:
+            if os.path.getmtime(path) < cutoff:
+                os.unlink(path)
+        except OSError:
+            pass
+    return directory
+
+
+def _chapter_marker_path(client, book_uuid):
+    token = get_auth_token() or ''
+    digest = hashlib.sha256(
+        '{}|{}|{}'.format(token, client, book_uuid).encode('utf-8')).hexdigest()
+    return os.path.join(_chapter_marker_dir(), digest + '.json')
+
+
+def _record_chapter_save(client, book_uuid, name, location):
+    """Record a successful save so the device can add a local TOC row."""
+    if not _valid_chapter_client(client):
+        return
+    # The launcher parses line-oriented output; keep values on one line.
+    def one_line(value):
+        return str(value).replace('\r', ' ').replace('\n', ' ').replace('\0', ' ')
+
+    directory = _chapter_marker_dir()
+    handle, temporary = tempfile.mkstemp(
+        prefix='.chapter-save-', suffix='.json', dir=directory)
+    try:
+        with os.fdopen(handle, 'w', encoding='utf-8') as marker:
+            json.dump({
+                'saved': True,
+                'name': one_line(name),
+                'location': one_line(location),
+                'saved_at': datetime.now(timezone.utc).isoformat(),
+            }, marker)
+        os.replace(temporary, _chapter_marker_path(client, book_uuid))
+    except Exception:
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
+        raise
+
+
+def _read_chapter_save(client, book_uuid):
+    if not _valid_chapter_client(client):
+        return {}
+    try:
+        with open(_chapter_marker_path(client, book_uuid), encoding='utf-8') as marker:
+            data = json.load(marker)
+        if not isinstance(data, dict) or not data.get('saved'):
+            return {}
+        return data
+    except (OSError, ValueError):
+        return {}
+
+
+def _chapter_device_result_response(data):
+    """Line format the Kobo shell launcher can parse without a JSON parser."""
+    lines = ['saved=1' if data.get('saved') else 'saved=0']
+    if data.get('saved'):
+        lines.append('name=' + str(data.get('name', '')))
+        lines.append('location=' + str(data.get('location', '')))
+    response = make_response('\n'.join(lines) + '\n')
+    response.headers['Content-Type'] = 'text/plain; charset=utf-8'
+    return response
+
+
+@csrf.exempt
+@kobo.route("/chapters/<book_uuid>/result", methods=["GET"])
+@requires_kobo_auth
+@download_required
+def HandleChapterResult(book_uuid):
+    """Report a completed save to the device launcher."""
+    if not (current_user.role_edit() or current_user.role_admin()):
+        abort(403)
+
+    client = request.args.get("client", "").strip()
+    data = _read_chapter_save(client, book_uuid)
+    if data:
+        # A launch owns one save marker; consuming it prevents stale retries.
+        try:
+            os.unlink(_chapter_marker_path(client, book_uuid))
+        except OSError:
+            pass
+    if _wants_chapter_json():
+        payload = {"book_uuid": book_uuid, "saved": bool(data)}
+        payload.update({
+            key: data[key] for key in ("name", "location") if key in data})
+        return make_response(jsonify(payload), 200)
+    return _chapter_device_result_response(data)
+
+
+@csrf.exempt
+@kobo.route("/chapters/<book_uuid>", methods=["GET", "POST"])
+@requires_kobo_auth
+@download_required
+def HandleChapterForm(book_uuid):
+    """Show and process the Kobo chapter-mark form for one Calibre book."""
+    if not (current_user.role_edit() or current_user.role_admin()):
+        abort(403)
+
+    check_only = request.method == "GET" and request.args.get("check") == "1"
+    device_title = request.args.get("name", "").strip()
+
+    book = calibre_db.get_book_by_uuid(book_uuid)
+    if not book:
+        log.info("Kobo chapter form: book %s not found in this library", book_uuid)
+        if check_only:
+            return _chapter_check_response(
+                book_uuid, False, device_title, "Book not found in this library.")
+        message = "Book not found in this library."
+        if device_title:
+            message = "'{}' is not in this calibre-web library. Sync it from calibre-web first.".format(
+                device_title)
+        return _chapter_result_response(book_uuid, False, message, 404)
+
+    book_formats = [
+        data for data in book.data if data.format in ("EPUB", "KEPUB")]
+    if check_only:
+        if book_formats:
+            return _chapter_check_response(
+                book_uuid, True, getattr(book, "title", "") or device_title)
+        return _chapter_check_response(
+            book_uuid, False, getattr(book, "title", "") or device_title,
+            "This book has no EPUB or KEPUB format.")
+    if not book_formats:
+        return _chapter_result_response(
+            book_uuid, False, "This book has no EPUB or KEPUB format.", 400)
+
+    format_entries = []
+    for book_format in book_formats:
+        path = _book_format_path(book, book_format)
+        try:
+            structure = epub_chapters.read_epub_structure(path)
+        except Exception as exc:
+            log.error("Kobo chapter form: cannot inspect %s: %s", path, exc)
+            return _chapter_result_response(
+                book_uuid, False, "The book file could not be read.", 400)
+        format_entries.append({
+            "data": book_format,
+            "format": book_format.format,
+            "path": path,
+            "structure": structure,
+        })
+
+    reference = next(
+        (entry for entry in format_entries if entry["format"] == "KEPUB"),
+        format_entries[0])
+    structure = reference["structure"]
+    candidates = [{
+        "value": candidate["href"],
+        "label": candidate["label"],
+    } for candidate in structure.candidates]
+
+    if request.method == "GET":
+        name = request.args.get("name", "").strip()
+        raw_location = request.args.get("location", "").strip()
+        selected_location = ""
+        custom_location = ""
+        if raw_location:
+            try:
+                target = epub_chapters.normalize_location(
+                    raw_location, structure.opf_dir)
+                custom_location = epub_chapters.target_to_string(target)
+                if _chapter_target_exists(structure, target):
+                    selected_location = target.href
+            except epub_chapters.ChapterLocationError:
+                custom_location = raw_location[:1000]
+        return _chapter_form_response(
+            book_uuid, candidates, name, selected_location, custom_location,
+            book_title=book.title,
+            initial_location=selected_location,
+            initial_custom_location=custom_location,
+            client=request.args.get("client", "").strip())
+
+    client = request.form.get("client", "").strip()
+    name = request.form.get("name", "").strip()
+    selected_location = request.form.get("location", "").strip()
+    custom_location = request.form.get("location_custom", "").strip()
+    initial_location = request.form.get("initial_location", "").strip()
+    initial_custom_location = request.form.get("initial_location_custom", "").strip()
+    if not name or len(name) > 200:
+        return _chapter_form_response(
+            book_uuid, candidates, name[:200], "", "",
+            book_title=book.title,
+            error="Enter a chapter name (200 characters or fewer).",
+            status=400,
+            initial_location=initial_location,
+            initial_custom_location=initial_custom_location,
+            client=client)
+
+    # A prefilled free-text value must not beat a dropdown selection the user
+    # actually changed. Compare normalized paths: Kobo may send an OPF-prefixed
+    # location while the form stores the path relative to the OPF folder.
+    custom_changed = (
+        _normalized_location_text(custom_location, structure.opf_dir)
+        != _normalized_location_text(initial_custom_location, structure.opf_dir)
+    )
+    if custom_location and custom_changed:
+        raw_location = custom_location
+    elif selected_location and selected_location != initial_location:
+        raw_location = selected_location
+    else:
+        raw_location = custom_location or selected_location
+    if not raw_location or len(raw_location) > 1000:
+        return _chapter_form_response(
+            book_uuid, candidates, name, "", raw_location[:1000],
+            book_title=book.title,
+            error="Choose or enter a chapter location.",
+            status=400,
+            initial_location=initial_location,
+            initial_custom_location=initial_custom_location,
+            client=client)
+
+    try:
+        target = epub_chapters.normalize_location(
+            raw_location, structure.opf_dir)
+    except epub_chapters.ChapterLocationError:
+        return _chapter_form_response(
+            book_uuid, candidates, name, "", raw_location[:1000],
+            book_title=book.title,
+            error="That location is not a valid relative chapter path.",
+            status=400,
+            initial_location=initial_location,
+            initial_custom_location=initial_custom_location,
+            client=client)
+
+    format_targets = []
+    for entry in format_entries:
+        format_target = _chapter_target_for_structure(target, entry["structure"])
+        if format_target is None:
+            error = "That location is not a chapter in this book."
+            if len(format_entries) > 1:
+                error = "That location is not a chapter in the {} format.".format(
+                    entry["format"])
+            return _chapter_form_response(
+                book_uuid, candidates, name, "", raw_location[:1000],
+                book_title=book.title, error=error, status=400,
+                initial_location=initial_location,
+                initial_custom_location=initial_custom_location,
+                client=client)
+        format_targets.append(format_target)
+
+    rewritten = []
+    try:
+        with _restorable_files([entry["path"] for entry in format_entries]):
+            for entry, format_target in zip(format_entries, format_targets):
+                members = epub_chapters.rewrite_epub_toc(
+                    entry["path"], name, format_target,
+                    structure=entry["structure"])
+                entry["data"].uncompressed_size = os.path.getsize(entry["path"])
+                rewritten.append({
+                    "format": entry["format"],
+                    "members": members,
+                })
+
+            try:
+                # Register Calibre's SQLite helpers before flushing the book
+                # update; otherwise a fresh process can fail with
+                # "no such function: title_sort".
+                calibre_db.create_functions(config)
+                book.last_modified = datetime.now(timezone.utc)
+                calibre_db.set_metadata_dirty(book.id)
+                calibre_db.session.commit()
+            except (IntegrityError, OperationalError, StaleDataError) as exc:
+                calibre_db.session.rollback()
+                raise ChapterDatabaseError(str(exc)) from exc
+    except ChapterDatabaseError as exc:
+        log.error_or_exception("Database error while saving chapter: {}".format(exc))
+        return _chapter_result_response(
+            book_uuid, False,
+            "The book file changed but the database could not be updated.", 500)
+    except Exception as exc:
+        log.error("Kobo chapter save failed for %s: %s", book_uuid, exc)
+        return _chapter_result_response(
+            book_uuid, False, "The book could not be updated.", 500)
+
+    location = epub_chapters.target_to_string(target)
+    log.info(
+        "Kobo chapter %r added to book %s at %s", name, book_uuid, location)
+    try:
+        _record_chapter_save(client, book_uuid, name, location)
+    except Exception as exc:
+        # The server rewrite is durable; device-side feedback is best-effort.
+        log.warning("Could not record chapter save for device: %s", exc)
+    return _chapter_result_response(
+        book_uuid,
+        True,
+        "Chapter mark saved. The book will update on your next device sync.",
+        name=name,
+        location=location,
+        formats=[item["format"] for item in rewritten],
+        rewritten=rewritten,
+    )
+
+
 def get_book_format_binary_version(book, book_data):
     try:
         st = os.stat(_book_format_path(book, book_data))
@@ -516,10 +991,14 @@ def get_download_url_for_book(book_id, book_format, version=None):
 def create_book_entitlement(book, archived):
     book_uuid = str(book.uuid)
     last_modified = book.last_modified or book.timestamp
+    created = convert_to_kobo_timestamp_string(book.timestamp)
     return {
         "Accessibility": "Full",
-        "ActivePeriod": {"From": convert_to_kobo_timestamp_string(datetime.now(timezone.utc))},
-        "Created": convert_to_kobo_timestamp_string(book.timestamp),
+        # Kobo treats a new ActivePeriod as a newly activated entitlement,
+        # which clears the downloaded copy. Keep it tied to the book's
+        # creation time so updates stay under the same entitlement.
+        "ActivePeriod": {"From": created},
+        "Created": created,
         "CrossRevisionId": book_uuid,
         "Id": book_uuid,
         "IsRemoved": archived,
@@ -530,6 +1009,32 @@ def create_book_entitlement(book, archived):
         "RevisionId": book_uuid,
         "Status": "Active",
     }
+
+
+def _binary_update_entitlements(entitlement):
+    """Build sync items that re-download a rewritten book under the same id.
+
+    A bare ``ChangedEntitlement`` clears the Kobo's downloaded copy but does
+    not fetch the new file. Kobo does auto-download when a ``NewEntitlement``
+    arrives with a changed ``Accessibility``. The Preview entitlement clears
+    the old file, and the immediately following Full entitlement makes the
+    device fetch the rewritten file without adding a second book.
+    """
+    preview = deepcopy(entitlement)
+    preview_entitlement = preview.setdefault("BookEntitlement", {})
+    preview_entitlement["Accessibility"] = "Preview"
+    preview_entitlement["IsRemoved"] = False
+    preview.pop("ReadingState", None)
+
+    full = deepcopy(entitlement)
+    full_entitlement = full.setdefault("BookEntitlement", {})
+    full_entitlement["Accessibility"] = "Full"
+    full_entitlement["IsRemoved"] = False
+
+    return [
+        {"ChangedEntitlement": preview},
+        {"NewEntitlement": full},
+    ]
 
 
 def current_time():
