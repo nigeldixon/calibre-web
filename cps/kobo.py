@@ -22,6 +22,7 @@ from contextlib import contextmanager
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 import os
+import posixpath
 import shutil
 import tempfile
 import uuid
@@ -510,6 +511,43 @@ def _chapter_target_exists(structure, target):
     return any(item["path"] == target_path for item in structure.candidates)
 
 
+def _normalized_location_text(raw_location, opf_dir):
+    """Return a canonical string for comparing prefilled and submitted values."""
+    try:
+        target = epub_chapters.normalize_location(raw_location, opf_dir)
+    except epub_chapters.ChapterLocationError:
+        return (raw_location or "").strip()
+    return epub_chapters.target_to_string(target)
+
+
+def _chapter_target_for_structure(target, structure):
+    """Resolve one location against a format's manifest.
+
+    Kobo records chapter files by name, while EPUB/KEPUB manifests may place
+    them in different folders. Accept an unambiguous filename match so a
+    device-supplied location can still address both rewritten formats.
+    """
+    if _chapter_target_exists(structure, target):
+        return target
+
+    wanted = posixpath.basename(target.href).lower()
+    matches = [
+        item for item in structure.candidates
+        if posixpath.basename(item["href"].partition('#')[0]).lower() == wanted
+    ]
+    if len(matches) != 1:
+        return None
+
+    try:
+        resolved = epub_chapters.normalize_location(
+            matches[0]["href"], structure.opf_dir)
+    except epub_chapters.ChapterLocationError:
+        return None
+    if target.fragment:
+        resolved = resolved._replace(fragment=target.fragment)
+    return resolved
+
+
 def _chapter_check_response(book_uuid, served, book_title="", error=None):
     """Minimal JSON response used by the device launcher as an allow-list."""
     payload = {"book_uuid": book_uuid, "served": bool(served)}
@@ -617,8 +655,13 @@ def HandleChapterForm(book_uuid):
             initial_custom_location=initial_custom_location)
 
     # A prefilled free-text value must not beat a dropdown selection the user
-    # actually changed. Only an edited free-text value is an override.
-    if custom_location and custom_location != initial_custom_location:
+    # actually changed. Compare normalized paths: Kobo may send an OPF-prefixed
+    # location while the form stores the path relative to the OPF folder.
+    custom_changed = (
+        _normalized_location_text(custom_location, structure.opf_dir)
+        != _normalized_location_text(initial_custom_location, structure.opf_dir)
+    )
+    if custom_location and custom_changed:
         raw_location = custom_location
     elif selected_location and selected_location != initial_location:
         raw_location = selected_location
@@ -645,8 +688,10 @@ def HandleChapterForm(book_uuid):
             initial_location=initial_location,
             initial_custom_location=initial_custom_location)
 
+    format_targets = []
     for entry in format_entries:
-        if not _chapter_target_exists(entry["structure"], target):
+        format_target = _chapter_target_for_structure(target, entry["structure"])
+        if format_target is None:
             error = "That location is not a chapter in this book."
             if len(format_entries) > 1:
                 error = "That location is not a chapter in the {} format.".format(
@@ -656,13 +701,15 @@ def HandleChapterForm(book_uuid):
                 book_title=book.title, error=error, status=400,
                 initial_location=initial_location,
                 initial_custom_location=initial_custom_location)
+        format_targets.append(format_target)
 
     rewritten = []
     try:
         with _restorable_files([entry["path"] for entry in format_entries]):
-            for entry in format_entries:
+            for entry, format_target in zip(format_entries, format_targets):
                 members = epub_chapters.rewrite_epub_toc(
-                    entry["path"], name, target, structure=entry["structure"])
+                    entry["path"], name, format_target,
+                    structure=entry["structure"])
                 entry["data"].uncompressed_size = os.path.getsize(entry["path"])
                 rewritten.append({
                     "format": entry["format"],

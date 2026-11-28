@@ -338,6 +338,29 @@ def test_chapter_form_get_prefills_detected_location(monkeypatch, tmp_path):
     assert 'name="initial_location_custom" value="chapter1.xhtml"' in body
 
 
+def test_prefixed_prefilled_location_does_not_override_changed_dropdown(monkeypatch, tmp_path):
+    application, token, path, _, _ = _prepare(monkeypatch, tmp_path)
+    _add_second_chapter(path)
+    client = application.test_client()
+
+    # Nickel submits the visible free-text field as prefilled by the launcher.
+    # An OPF-prefixed path is equivalent to the normalized hidden value and
+    # must not beat a dropdown choice the user actually changed.
+    response = client.post(
+        f"/kobo/{token}/chapters/chapter-book-uuid",
+        data={
+            "name": "Selected chapter",
+            "location": "chapter2.xhtml",
+            "location_custom": "OEBPS/chapter1.xhtml",
+            "initial_location": "chapter1.xhtml",
+            "initial_location_custom": "chapter1.xhtml",
+        },
+    )
+
+    assert response.status_code == 200
+    assert _last_ncx_src(path) == "chapter2.xhtml"
+
+
 def test_changed_dropdown_overrides_prefilled_custom_location(monkeypatch, tmp_path):
     application, token, path, _, _ = _prepare(monkeypatch, tmp_path)
     _add_second_chapter(path)
@@ -382,6 +405,28 @@ def test_edited_custom_location_still_overrides_dropdown(monkeypatch, tmp_path):
 
     assert response.status_code == 200
     assert _last_ncx_src(path) == "chapter2.xhtml"
+
+
+def test_device_style_filename_matches_both_format_layouts(monkeypatch, tmp_path):
+    application, token, epub_path, book, _ = _prepare(monkeypatch, tmp_path)
+    kepub_path = epub_path.with_suffix(".kepub")
+    _write_epub(kepub_path, chapter_href="Text/chapter1.xhtml")
+    book.data.append(SimpleNamespace(
+        name="book", format="KEPUB", uncompressed_size=999))
+    client = application.test_client()
+
+    response = client.post(
+        f"/kobo/{token}/chapters/chapter-book-uuid",
+        data={
+            "name": "Device location",
+            "location_custom": "OEBPS/chapter1.xhtml#kobo.1.1",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "Chapter mark saved" in response.get_data(as_text=True)
+    assert _last_ncx_src(epub_path) == "chapter1.xhtml"
+    assert _last_ncx_src(kepub_path) == "Text/chapter1.xhtml"
 
 
 def test_chapter_post_rewrites_toc_and_marks_binary_change(monkeypatch, tmp_path):
